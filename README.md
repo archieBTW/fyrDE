@@ -1,6 +1,13 @@
 # Fyr Desktop Environment (fyrDE)
 
-This repository contains the core configuration and setup scripts for the Fyr Desktop Environment (fyrDE), an aesthetically focused Wayland setup based on Swayfx.
+![Desktop](screenshots/desktop.png)
+![Menu](screenshots/menu.png)
+![Quick Settings](screenshots/quick_settings.png)
+![Search](screenshots/search.png)
+![Tiled](screenshots/tiled.png)
+![Workspace](screenshots/workspace.png)
+
+This repository contains the core configuration and setup scripts for the fyr Desktop Environment (fyrDE)
 
 ## Installation on Arch Linux
 
