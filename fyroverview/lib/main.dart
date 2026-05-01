@@ -338,7 +338,7 @@ class _OverviewScreenState extends State<OverviewScreen>
       '${Platform.environment['HOME']}/.local/share/icons/$baseName.svg',
     );
 
-    const themes = ['hicolor', 'Adwaita', 'Yaru', 'Papirus', 'breeze', 'gnome'];
+    final themes = [FyrTheme.iconThemeName, 'hicolor', 'Adwaita', 'Yaru', 'Papirus', 'breeze', 'gnome'];
     const sizes = [
       'scalable',
       '512x512',

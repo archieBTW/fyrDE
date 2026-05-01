@@ -309,7 +309,8 @@ class _LauncherScreenState extends State<LauncherScreen>
         '${Platform.environment['HOME']}/.local/share/icons/$baseName.svg',
       );
 
-      const themes = [
+      final themes = [
+        FyrTheme.iconThemeName,
         'hicolor',
         'Adwaita',
         'Yaru',

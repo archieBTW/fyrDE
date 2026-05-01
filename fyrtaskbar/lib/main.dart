@@ -113,6 +113,12 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await windowManager.ensureInitialized();
   SystemState.init();
+  
+  FyrTheme.accentColorNotifier.addListener(() {
+    AppService.cachedApps = null;
+    AppService.getInstalledApps();
+  });
+  
   await AppService.getInstalledApps();
 
   final waylandLayerShellPlugin = WaylandLayerShell();
@@ -195,6 +201,10 @@ class AppService {
                   final possiblePaths = [
                     '/usr/share/pixmaps/$icon.png',
                     '/usr/share/pixmaps/$icon.svg',
+                    '/usr/share/icons/${FyrTheme.iconThemeName}/scalable/apps/$icon.svg',
+                    '/usr/share/icons/${FyrTheme.iconThemeName}/48/apps/$icon.svg',
+                    '${Platform.environment['HOME']}/.local/share/icons/${FyrTheme.iconThemeName}/scalable/apps/$icon.svg',
+                    '${Platform.environment['HOME']}/.local/share/icons/${FyrTheme.iconThemeName}/48/apps/$icon.svg',
                     '/usr/share/icons/hicolor/scalable/apps/$icon.svg',
                     '/usr/share/icons/hicolor/48x48/apps/$icon.png',
                     '/usr/share/icons/hicolor/128x128/apps/$icon.png',
@@ -448,7 +458,10 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                         bottom: 0,
                         child: GestureDetector(
                           onTap: () {},
-                          child: StartMenuPopup(onClose: _toggleStartMenu),
+                          child: StartMenuPopup(
+                            key: ValueKey(FyrTheme.iconThemeName),
+                            onClose: _toggleStartMenu,
+                          ),
                         ),
                       ),
                     if (_isQuickSettingsOpen)
@@ -701,7 +714,7 @@ class _StartMenuPopupState extends State<StartMenuPopup>
                                                     File(app.icon),
                                                     width: 24,
                                                     height: 24,
-                                                    fit: BoxFit.scaleDown,
+                                                    fit: BoxFit.contain,
                                                   )
                                                 : Image.file(
                                                     File(app.icon),

@@ -178,6 +178,10 @@ class _DockScreenState extends State<DockScreen> {
     final possiblePaths = [
       '/usr/share/pixmaps/$iconName.png',
       '/usr/share/pixmaps/$iconName.svg',
+      '/usr/share/icons/${FyrTheme.iconThemeName}/scalable/apps/$iconName.svg',
+      '/usr/share/icons/${FyrTheme.iconThemeName}/48/apps/$iconName.svg',
+      '${Platform.environment['HOME']}/.local/share/icons/${FyrTheme.iconThemeName}/scalable/apps/$iconName.svg',
+      '${Platform.environment['HOME']}/.local/share/icons/${FyrTheme.iconThemeName}/48/apps/$iconName.svg',
       '/usr/share/icons/hicolor/scalable/apps/$iconName.svg',
       '/usr/share/icons/hicolor/48x48/apps/$iconName.png',
       '/usr/share/icons/hicolor/128x128/apps/$iconName.png',
@@ -264,7 +268,7 @@ class _DockScreenState extends State<DockScreen> {
                               File(iconPath),
                               width: 48,
                               height: 48,
-                              fit: BoxFit.scaleDown,
+                              fit: BoxFit.contain,
                             );
                           } else {
                             iconWidget = Image.file(

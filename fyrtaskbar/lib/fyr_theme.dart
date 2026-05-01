@@ -66,14 +66,8 @@ class FyrTheme {
   static bool get isDark => themeMode == ThemeMode.dark;
   static Color get textColor => isDark ? Colors.white : Colors.black87;
   static Color get textColorMuted => isDark ? Colors.white70 : Colors.black54;
-
-  static Color get textColorOnAccent =>
-      accentColorNotifier.value.computeLuminance() > 0.5 ? Colors.black87 : Colors.white;
-  static Color get textColorMutedOnAccent =>
-      accentColorNotifier.value.computeLuminance() > 0.5 ? Colors.black54 : Colors.white70;
-
   static Color get bgColor =>
-      isDark ? Colors.black.withOpacity(0.85) : Colors.white.withOpacity(0.9);
+      isDark ? const Color(0xFF2A282C).withOpacity(0.8) : Colors.white.withOpacity(0.9);
   static Color get cardColor =>
       isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.05);
   static Color get hoverColor =>
@@ -90,13 +84,12 @@ class FyrTheme {
       final file = File('${dir.path}/theme.txt');
       await file.writeAsString(color.value.toRadixString(16).padLeft(8, '0'));
       accentColorNotifier.value = color;
+      
+      await _updateGtkSettings(themeModeNotifier.value, color: color);
 
-      final swayConfigFile = File(
-        '${Platform.environment['HOME']}/.config/sway/config',
-      );
+      final swayConfigFile = File('${Platform.environment['HOME']}/.config/sway/config');
       if (swayConfigFile.existsSync()) {
-        final hexColor =
-            '#${color.value.toRadixString(16).substring(2).padLeft(6, '0')}';
+        final hexColor = '#${color.value.toRadixString(16).substring(2).padLeft(6, '0')}';
         final lines = await swayConfigFile.readAsLines();
         final newLines = lines.map((line) {
           if (line.startsWith('client.focused ')) {
@@ -112,11 +105,30 @@ class FyrTheme {
     }
   }
 
-  static Future<void> _updateGtkSettings(ThemeMode mode) async {
+  static String get iconThemeName {
+    final currentColor = accentColorNotifier.value;
+    final mode = themeModeNotifier.value;
+    
+    final int val = currentColor.value;
+    String baseIconTheme = 'purple';
+    if (val == Colors.purpleAccent.value || val == Colors.purple.value || val == Colors.deepPurpleAccent.value) baseIconTheme = 'purple';
+    else if (val == Colors.indigoAccent.value || val == Colors.blueAccent.value || val == Colors.lightBlueAccent.value) baseIconTheme = 'blue';
+    else if (val == Colors.cyanAccent.value || val == Colors.tealAccent.value) baseIconTheme = 'standard';
+    else if (val == Colors.greenAccent.value || val == Colors.lightGreenAccent.value || val == Colors.limeAccent.value) baseIconTheme = 'green';
+    else if (val == Colors.yellowAccent.value || val == Colors.amberAccent.value) baseIconTheme = 'yellow';
+    else if (val == Colors.orangeAccent.value || val == Colors.deepOrangeAccent.value) baseIconTheme = 'orange';
+    else if (val == Colors.redAccent.value) baseIconTheme = 'red';
+    else if (val == Colors.pinkAccent.value) baseIconTheme = 'pink';
+    
+    return 'Tela-$baseIconTheme-dark';
+  }
+
+  static Future<void> _updateGtkSettings(ThemeMode mode, {Color? color}) async {
     try {
-      final themeName = mode == ThemeMode.light ? 'Fyr-Purple-Light' : 'Fyr-Purple-Dark';
+      final themeName = mode == ThemeMode.light ? 'Fyr-Light' : 'Fyr-Dark';
       final preferDark = mode == ThemeMode.dark ? '1' : '0';
-      final colorScheme = mode == ThemeMode.dark ? 'prefer-dark' : 'default';
+      
+      final currentIconTheme = iconThemeName;
       
       final gtk3Dir = Directory('${Platform.environment['HOME']}/.config/gtk-3.0');
       if (!gtk3Dir.existsSync()) gtk3Dir.createSync(recursive: true);
@@ -124,6 +136,7 @@ class FyrTheme {
       final gtk3File = File('${gtk3Dir.path}/settings.ini');
       String content = '[Settings]\n';
       content += 'gtk-theme-name=$themeName\n';
+      content += 'gtk-icon-theme-name=$currentIconTheme\n';
       content += 'gtk-application-prefer-dark-theme=$preferDark\n';
       content += 'gtk-decoration-layout=close,minimize,maximize:\n';
       
@@ -134,24 +147,18 @@ class FyrTheme {
       
       final gtk4File = File('${gtk4Dir.path}/settings.ini');
       await gtk4File.writeAsString(content);
-
-      try {
-        final targetCss = mode == ThemeMode.light ? 'gtk-light.css' : 'gtk-dark.css';
-        final cssSrc = File('${gtk4Dir.path}/$targetCss');
-        if (cssSrc.existsSync()) {
-          await cssSrc.copy('${gtk4Dir.path}/gtk.css');
-        }
-      } catch (e) {
-        // Ignore
+      
+      final gtk4CssFile = File('${gtk4Dir.path}/gtk.css');
+      final targetCssName = mode == ThemeMode.light ? 'gtk-light.css' : 'gtk-dark.css';
+      final targetCssFile = File('${gtk4Dir.path}/$targetCssName');
+      if (targetCssFile.existsSync()) {
+        if (gtk4CssFile.existsSync()) gtk4CssFile.deleteSync();
+        targetCssFile.copySync(gtk4CssFile.path);
       }
-
-      try {
-        Process.run('gsettings', ['set', 'org.gnome.desktop.interface', 'gtk-theme', themeName]);
-        Process.run('gsettings', ['set', 'org.gnome.desktop.interface', 'color-scheme', colorScheme]);
-        Process.run('gsettings', ['set', 'org.gnome.desktop.wm.preferences', 'button-layout', 'close,minimize,maximize:']);
-      } catch (e) {
-        // Ignore
-      }
+      
+      Process.run('gsettings', ['set', 'org.gnome.desktop.interface', 'gtk-theme', themeName]);
+      Process.run('gsettings', ['set', 'org.gnome.desktop.interface', 'icon-theme', currentIconTheme]);
+      Process.run('gsettings', ['set', 'org.gnome.desktop.interface', 'color-scheme', mode == ThemeMode.dark ? 'prefer-dark' : 'default']);
     } catch (e) {
       // Ignore
     }

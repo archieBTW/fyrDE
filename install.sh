@@ -120,6 +120,17 @@ else
     echo "Warning: ./sway/config not found. Make sure you are running this script from the 'de' directory."
 fi
 
+echo "Installing Tela Icon Theme..."
+if [ ! -d "$HOME/.local/share/icons/Tela-purple-dark" ]; then
+    git clone https://github.com/vinceliuice/Tela-icon-theme.git /tmp/Tela-icon-theme
+    cd /tmp/Tela-icon-theme
+    ./install.sh -a
+    cd -
+    rm -rf /tmp/Tela-icon-theme
+else
+    echo "Tela icons already installed, skipping..."
+fi
+
 echo "Installing Fyr themes..."
 if [ -d "./themes" ]; then
     # Install GTK 3.0 Theme
@@ -128,8 +139,8 @@ if [ -d "./themes" ]; then
     
     # Install GTK 4.0 / Libadwaita Themes
     mkdir -p ~/.config/gtk-4.0
-    cp ./themes/gtk-4.0/gtk-dark.css ~/.config/gtk-4.0/gtk-dark.css
-    cp ./themes/gtk-4.0/gtk-light.css ~/.config/gtk-4.0/gtk-light.css
+    cp ~/.themes/Fyr-Dark/gtk-4.0/gtk.css ~/.config/gtk-4.0/gtk-dark.css
+    cp ~/.themes/Fyr-Light/gtk-4.0/gtk.css ~/.config/gtk-4.0/gtk-light.css
     
     # By default apply the dark theme
     cp ~/.config/gtk-4.0/gtk-dark.css ~/.config/gtk-4.0/gtk.css
@@ -139,6 +150,7 @@ if [ -d "./themes" ]; then
     cat <<EOF > ~/.config/gtk-3.0/settings.ini
 [Settings]
 gtk-theme-name=Fyr-Dark
+gtk-icon-theme-name=Tela-purple-dark
 gtk-application-prefer-dark-theme=1
 gtk-decoration-layout=close,minimize,maximize:
 EOF
@@ -146,9 +158,15 @@ EOF
     cat <<EOF > ~/.config/gtk-4.0/settings.ini
 [Settings]
 gtk-theme-name=Fyr-Dark
+gtk-icon-theme-name=Tela-purple-dark
 gtk-application-prefer-dark-theme=1
 gtk-decoration-layout=close,minimize,maximize:
 EOF
+
+    # Enforce GTK settings using gsettings for libadwaita/gnome apps
+    gsettings set org.gnome.desktop.interface gtk-theme "Fyr-Dark" || true
+    gsettings set org.gnome.desktop.interface icon-theme "Tela-purple-dark" || true
+    gsettings set org.gnome.desktop.interface color-scheme "prefer-dark" || true
 
     echo "Installing Firefox theme..."
     for ff_path in "$HOME/.mozilla/firefox" "$HOME/.var/app/org.mozilla.firefox/.mozilla/firefox"; do

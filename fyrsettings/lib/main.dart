@@ -137,7 +137,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         Text(
                           'Settings',
                           style: TextStyle(
-                            color: FyrTheme.textColorOnAccent,
+                            color: Colors.white,
                             fontSize: 24,
                             fontWeight: FontWeight.bold,
                           ),
@@ -145,7 +145,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         IconButton(
                           icon: Icon(
                             Icons.menu_open,
-                            color: FyrTheme.textColorOnAccent,
+                            color: Colors.white,
                           ),
                           onPressed: () =>
                               setState(() => _isSidebarCollapsed = true),
@@ -159,7 +159,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   Padding(
                     padding: EdgeInsets.symmetric(vertical: 16.0),
                     child: IconButton(
-                      icon: Icon(Icons.menu, color: FyrTheme.textColorOnAccent),
+                      icon: Icon(Icons.menu, color: Colors.white),
                       onPressed: () =>
                           setState(() => _isSidebarCollapsed = false),
                     ),
@@ -193,8 +193,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 Icon(
                                   category.icon,
                                   color: isSelected
-                                      ? FyrTheme.textColorOnAccent
-                                      : FyrTheme.textColorMutedOnAccent,
+                                      ? Colors.white
+                                      : Colors.white70,
                                   size: 20,
                                 ),
                                 if (!_isSidebarCollapsed) ...[
@@ -203,8 +203,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     category.name,
                                     style: TextStyle(
                                       color: isSelected
-                                          ? FyrTheme.textColorOnAccent
-                                          : FyrTheme.textColorMutedOnAccent,
+                                          ? Colors.white
+                                          : Colors.white70,
                                       fontSize: 15,
                                       fontWeight: isSelected
                                           ? FontWeight.w600
