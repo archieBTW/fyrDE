@@ -120,10 +120,20 @@ else
     echo "Warning: ./sway/config not found. Make sure you are running this script from the 'de' directory."
 fi
 
-echo "Installing Fyr GTK theme..."
-if [ -d "./fyr-gtk-theme" ]; then
-    cd ./fyr-gtk-theme
-    ./install.sh -c dark --libadwaita fixed
+echo "Installing Fyr themes..."
+if [ -d "./themes" ]; then
+    # Install GTK 3.0 Theme
+    mkdir -p ~/.themes/Fyr-Dark/gtk-3.0
+    cp -r ./themes/gtk-3.0/* ~/.themes/Fyr-Dark/gtk-3.0/
+    
+    # Install GTK 4.0 / Libadwaita Themes
+    mkdir -p ~/.config/gtk-4.0
+    cp ./themes/gtk-4.0/gtk-dark.css ~/.config/gtk-4.0/gtk-dark.css
+    cp ./themes/gtk-4.0/gtk-light.css ~/.config/gtk-4.0/gtk-light.css
+    
+    # By default apply the dark theme
+    cp ~/.config/gtk-4.0/gtk-dark.css ~/.config/gtk-4.0/gtk.css
+
     # Apply initial GTK settings globally
     mkdir -p ~/.config/gtk-3.0
     cat <<EOF > ~/.config/gtk-3.0/settings.ini
@@ -133,7 +143,6 @@ gtk-application-prefer-dark-theme=1
 gtk-decoration-layout=close,minimize,maximize:
 EOF
 
-    mkdir -p ~/.config/gtk-4.0
     cat <<EOF > ~/.config/gtk-4.0/settings.ini
 [Settings]
 gtk-theme-name=Fyr-Dark
@@ -147,7 +156,7 @@ EOF
             for profile in "$ff_path"/*.default*; do
                 if [ -d "$profile" ]; then
                     mkdir -p "$profile/chrome"
-                    cp -r "$PWD/src/other/firefox/chrome/"* "$profile/chrome/"
+                    cp -r ./themes/firefox/chrome/* "$profile/chrome/"
                     if ! grep -q "toolkit.legacyUserProfileCustomizations.stylesheets" "$profile/user.js" 2>/dev/null; then
                         echo 'user_pref("toolkit.legacyUserProfileCustomizations.stylesheets", true);' >> "$profile/user.js"
                     fi
@@ -156,7 +165,7 @@ EOF
         fi
     done
 else
-    echo "Warning: ./fyr-gtk-theme not found!"
+    echo "Warning: ./themes directory not found!"
 fi
 
 echo "Installation complete!"

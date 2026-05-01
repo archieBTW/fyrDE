@@ -1,0 +1,83 @@
+/* Firefox Minimal Traffic Lights */
+
+/* Ensure the buttonbox container centers its items */
+.titlebar-buttonbox-container {
+    margin-left: 8px !important;
+    margin-right: 8px !important;
+    align-items: center !important;
+}
+
+/* Make the buttons circles and remove default backgrounds */
+.titlebar-button {
+    -moz-appearance: none !important;
+    appearance: none !important;
+    border: none !important;
+    border-radius: 50% !important;
+    width: 12px !important;
+    height: 12px !important;
+    padding: 0 !important;
+    margin: 0 4px !important;
+    box-shadow: none !important;
+    background-color: transparent !important;
+    transition: filter 0.2s ease !important;
+}
+
+/* Hide the default SVG icons entirely */
+.titlebar-button .toolbarbutton-icon {
+    display: none !important;
+}
+
+/* Close button (Red) */
+.titlebar-close {
+    background-color: #ff5f56 !important;
+}
+
+/* Minimize button (Yellow) */
+.titlebar-min {
+    background-color: #ffbd2e !important;
+}
+
+/* Maximize/Restore button (Green) */
+.titlebar-max,
+.titlebar-restore {
+    background-color: #27c93f !important;
+}
+
+/* Hover effects */
+.titlebar-button:hover {
+    filter: brightness(0.8) !important;
+}
+
+/* Unfocused window dimming */
+:root:-moz-window-inactive .titlebar-button {
+    filter: saturate(0.5) opacity(0.5) !important;
+}
+
+/* Force black backgrounds on all toolbars and browser areas */
+:root {
+    --toolbar-bgcolor: #000000 !important;
+    --lwt-accent-color: #000000 !important;
+    --lwt-frame: #000000 !important;
+    --tab-selected-bgcolor: #1c1c1c !important;
+    --toolbar-field-background-color: #1c1c1c !important;
+    --toolbar-field-focus-background-color: #2a2a2a !important;
+}
+
+#navigator-toolbox,
+#nav-bar,
+#TabsToolbar,
+#titlebar,
+#PersonalToolbar,
+#sidebar-box,
+#sidebar-header,
+#sidebar,
+.tab-background {
+    background-color: #000000 !important;
+    background-image: none !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+.tab-background[selected="true"] {
+    background-color: #1c1c1c !important;
+}
