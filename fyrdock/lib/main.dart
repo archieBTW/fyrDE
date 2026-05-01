@@ -8,8 +8,10 @@ import 'package:wayland_layer_shell/wayland_layer_shell.dart';
 import 'package:wayland_layer_shell/types.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:flutter/services.dart';
+import 'fyr_theme.dart';
 
 void main() async {
+  FyrTheme.initialize();
   WidgetsFlutterBinding.ensureInitialized();
   await windowManager.ensureInitialized();
 
@@ -52,16 +54,29 @@ class FyrDockApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+    return AnimatedBuilder(
+      animation: Listenable.merge([FyrTheme.accentColorNotifier, FyrTheme.themeModeNotifier]),
+      builder: (context, child) => MaterialApp(
       debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark().copyWith(
+      themeMode: FyrTheme.themeMode,
+      darkTheme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: Colors.transparent,
-        textTheme: const TextTheme(
-          bodyMedium: TextStyle(fontFamily: 'San Francisco'),
-          titleMedium: TextStyle(fontFamily: 'San Francisco'),
+        textTheme: ThemeData.dark().textTheme.apply(fontFamily: 'San Francisco'),
+        colorScheme: ColorScheme.dark(
+          primary: FyrTheme.accentColor,
+          secondary: FyrTheme.accentColor,
         ),
       ),
-      home: const DockScreen(),
+      theme: ThemeData.light().copyWith(
+        scaffoldBackgroundColor: Colors.transparent,
+        textTheme: ThemeData.light().textTheme.apply(fontFamily: 'San Francisco'),
+        colorScheme: ColorScheme.light(
+          primary: FyrTheme.accentColor,
+          secondary: FyrTheme.accentColor,
+        ),
+      ),
+      home: DockScreen(),
+    ),
     );
   }
 }
@@ -220,20 +235,20 @@ class _DockScreenState extends State<DockScreen> {
         child: Align(
           alignment: Alignment.bottomCenter,
           child: Container(
-            margin: const EdgeInsets.only(bottom: 8),
+            margin: EdgeInsets.only(bottom: 8),
             height: 64,
             decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.4),
+              color: FyrTheme.bgColor.withOpacity(0.4),
               borderRadius: BorderRadius.circular(24),
               border: Border.all(
-                color: Colors.white.withOpacity(0.05),
+                color: FyrTheme.cardColor,
                 width: 1,
               ),
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(24),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
+                padding: EdgeInsets.symmetric(horizontal: 16),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -259,7 +274,7 @@ class _DockScreenState extends State<DockScreen> {
                               errorBuilder: (context, error, stackTrace) =>
                                   Icon(
                                     Icons.widgets,
-                                    color: Colors.white.withOpacity(0.8),
+                                    color: FyrTheme.textColor.withOpacity(0.8),
                                     size: 32,
                                   ),
                             );
@@ -267,13 +282,13 @@ class _DockScreenState extends State<DockScreen> {
                         } else {
                           iconWidget = Icon(
                             Icons.widgets,
-                            color: Colors.white.withOpacity(0.8),
+                            color: FyrTheme.textColor.withOpacity(0.8),
                             size: 32,
                           );
                         }
 
                         return Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          padding: EdgeInsets.symmetric(horizontal: 4),
                           child: Tooltip(
                             message: app['name'] ?? '',
                             child: GestureDetector(
@@ -289,7 +304,7 @@ class _DockScreenState extends State<DockScreen> {
                                   items: [
                                     PopupMenuItem(
                                       value: 'unpin',
-                                      child: const Text('Unpin from Dock'),
+                                      child: Text('Unpin from Dock'),
                                       onTap: () => _unpinApp(app['exec']),
                                     ),
                                   ],
@@ -298,7 +313,7 @@ class _DockScreenState extends State<DockScreen> {
                               child: InkWell(
                                 onTap: () => _launchApp(app['exec']),
                                 borderRadius: BorderRadius.circular(16),
-                                hoverColor: Colors.white.withOpacity(0.1),
+                                hoverColor: FyrTheme.hoverColor,
                                 child: Container(
                                   width: 56,
                                   height: 56,

@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'search_providers.dart';
+import 'fyr_theme.dart';
 
 void main() {
+  FyrTheme.initialize();
   runApp(const LauncherApp());
 }
 
@@ -14,15 +16,30 @@ class LauncherApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+    return AnimatedBuilder(
+      animation: Listenable.merge([FyrTheme.accentColorNotifier, FyrTheme.themeModeNotifier]),
+      builder: (context, child) => MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Sway Launcher',
-      theme: ThemeData(
-        fontFamily: 'San Francisco',
+      themeMode: FyrTheme.themeMode,
+      darkTheme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: Colors.transparent,
-        brightness: Brightness.dark,
+        textTheme: ThemeData.dark().textTheme.apply(fontFamily: 'San Francisco'),
+        colorScheme: ColorScheme.dark(
+          primary: FyrTheme.accentColor,
+          secondary: FyrTheme.accentColor,
+        ),
       ),
-      home: const LauncherScreen(),
+      theme: ThemeData.light().copyWith(
+        scaffoldBackgroundColor: Colors.transparent,
+        textTheme: ThemeData.light().textTheme.apply(fontFamily: 'San Francisco'),
+        colorScheme: ColorScheme.light(
+          primary: FyrTheme.accentColor,
+          secondary: FyrTheme.accentColor,
+        ),
+      ),
+      home: LauncherScreen(),
+    ),
     );
   }
 }
@@ -270,7 +287,7 @@ class _LauncherScreenState extends State<LauncherScreen>
       }
     }
 
-    final defaultIcon = Icon(defaultIconData, color: Colors.white, size: size);
+    final defaultIcon = Icon(defaultIconData, color: FyrTheme.textColor, size: size);
 
     final iconName = app.icon;
     if (iconName == null || iconName.isEmpty) return defaultIcon;
@@ -499,9 +516,9 @@ class _LauncherScreenState extends State<LauncherScreen>
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const SizedBox(height: 180),
+                  SizedBox(height: 180),
                   Padding(
-                    padding: const EdgeInsets.only(
+                    padding: EdgeInsets.only(
                       bottom: 12,
                       top: 48.0,
                       left: 24,
@@ -511,10 +528,10 @@ class _LauncherScreenState extends State<LauncherScreen>
                       child: Container(
                         width: 700,
                         decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.15),
+                          color: FyrTheme.hoverColor,
                           borderRadius: BorderRadius.circular(50),
                           border: Border.all(
-                            color: Colors.white.withOpacity(0.1),
+                            color: FyrTheme.hoverColor,
                           ),
                           boxShadow: [
                             BoxShadow(
@@ -572,32 +589,32 @@ class _LauncherScreenState extends State<LauncherScreen>
                               }
                             },
                             textAlignVertical: TextAlignVertical.center,
-                            style: const TextStyle(
-                              color: Colors.white,
+                            style: TextStyle(
+                              color: FyrTheme.textColor,
                               fontSize: 22,
                             ),
                             decoration: InputDecoration(
                               hintText: 'Type to search...',
                               hintStyle: TextStyle(
-                                color: Colors.white.withOpacity(0.6),
+                                color: FyrTheme.textColor.withOpacity(0.6),
                               ),
                               filled: false,
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(50),
                                 borderSide: BorderSide.none,
                               ),
-                              prefixIcon: const Padding(
+                              prefixIcon: Padding(
                                 padding: EdgeInsets.only(
                                   left: 24.0,
                                   right: 16.0,
                                 ),
                                 child: Icon(
                                   Icons.search,
-                                  color: Colors.white,
+                                  color: FyrTheme.textColor,
                                   size: 28,
                                 ),
                               ),
-                              contentPadding: const EdgeInsets.symmetric(
+                              contentPadding: EdgeInsets.symmetric(
                                 vertical: 24,
                               ),
                             ),
@@ -673,7 +690,7 @@ class _LauncherScreenState extends State<LauncherScreen>
                                             shrinkWrap: true,
                                             physics:
                                                 const NeverScrollableScrollPhysics(),
-                                            padding: const EdgeInsets.symmetric(
+                                            padding: EdgeInsets.symmetric(
                                               horizontal: 88,
                                             ),
                                             itemCount: pageApps.length,
@@ -696,7 +713,7 @@ class _LauncherScreenState extends State<LauncherScreen>
                                                 builder: (context, setLocalState) {
                                                   return Padding(
                                                     padding:
-                                                        const EdgeInsets.all(
+                                                        EdgeInsets.all(
                                                           16.0,
                                                         ),
                                                     child: InkWell(
@@ -730,7 +747,7 @@ class _LauncherScreenState extends State<LauncherScreen>
                                                       child: Container(
                                                         decoration: BoxDecoration(
                                                           color: isSelected
-                                                              ? Colors.white
+                                                              ? FyrTheme.textColor
                                                                     .withOpacity(
                                                                       0.1,
                                                                     )
@@ -742,7 +759,7 @@ class _LauncherScreenState extends State<LauncherScreen>
                                                               ),
                                                           border: Border.all(
                                                             color: isSelected
-                                                                ? Colors.purple
+                                                                ? FyrTheme.accentColor
                                                                       .withOpacity(
                                                                         0.4,
                                                                       )
@@ -772,7 +789,7 @@ class _LauncherScreenState extends State<LauncherScreen>
                                                                     size: 96,
                                                                   ),
                                                             ),
-                                                            const SizedBox(
+                                                            SizedBox(
                                                               height: 16,
                                                             ),
                                                             Text(
@@ -784,7 +801,7 @@ class _LauncherScreenState extends State<LauncherScreen>
                                                               overflow:
                                                                   TextOverflow
                                                                       .ellipsis,
-                                                              style: const TextStyle(
+                                                              style: TextStyle(
                                                                 color: Colors
                                                                     .white,
                                                                 fontSize: 16,
@@ -823,12 +840,12 @@ class _LauncherScreenState extends State<LauncherScreen>
                                     Positioned(
                                       left: 0,
                                       child: IconButton(
-                                        icon: const Icon(
+                                        icon: Icon(
                                           Icons.chevron_left,
                                           size: 48,
                                         ),
-                                        color: Colors.white.withOpacity(0.5),
-                                        hoverColor: Colors.white.withOpacity(
+                                        color: FyrTheme.textColor.withOpacity(0.5),
+                                        hoverColor: FyrTheme.textColor.withOpacity(
                                           0.2,
                                         ),
                                         splashRadius: 32,
@@ -846,12 +863,12 @@ class _LauncherScreenState extends State<LauncherScreen>
                                     Positioned(
                                       right: 0,
                                       child: IconButton(
-                                        icon: const Icon(
+                                        icon: Icon(
                                           Icons.chevron_right,
                                           size: 48,
                                         ),
-                                        color: Colors.white.withOpacity(0.5),
-                                        hoverColor: Colors.white.withOpacity(
+                                        color: FyrTheme.textColor.withOpacity(0.5),
+                                        hoverColor: FyrTheme.textColor.withOpacity(
                                           0.2,
                                         ),
                                         splashRadius: 32,
@@ -867,11 +884,11 @@ class _LauncherScreenState extends State<LauncherScreen>
                                     ),
                                 ],
                               )
-                            : const Center(
+                            : Center(
                                 child: Text(
                                   "No apps found",
                                   style: TextStyle(
-                                    color: Colors.white70,
+                                    color: FyrTheme.textColorMuted,
                                     fontSize: 24,
                                   ),
                                 ),
@@ -879,7 +896,7 @@ class _LauncherScreenState extends State<LauncherScreen>
                       ),
                     ),
                   ),
-                  const SizedBox(height: 96),
+                  SizedBox(height: 96),
                 ],
               ),
             ),

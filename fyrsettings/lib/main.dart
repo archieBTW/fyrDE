@@ -6,8 +6,10 @@ import 'panes/wifi_pane.dart';
 import 'panes/bluetooth_pane.dart';
 import 'panes/display_pane.dart';
 import 'panes/power_pane.dart';
+import 'fyr_theme.dart';
 
 void main() async {
+  FyrTheme.initialize();
   WidgetsFlutterBinding.ensureInitialized();
   await windowManager.ensureInitialized();
 
@@ -32,19 +34,30 @@ class FyrSettingsApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+    return AnimatedBuilder(
+      animation: Listenable.merge([FyrTheme.accentColorNotifier, FyrTheme.themeModeNotifier]),
+      builder: (context, child) => MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'FyrSettings',
-      theme: ThemeData(
-        fontFamily: 'San Francisco',
+      themeMode: FyrTheme.themeMode,
+      darkTheme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: Colors.transparent,
-        brightness: Brightness.dark,
-        colorScheme: const ColorScheme.dark(
-          primary: Colors.purple,
-          secondary: Colors.purpleAccent,
+        textTheme: ThemeData.dark().textTheme.apply(fontFamily: 'San Francisco'),
+        colorScheme: ColorScheme.dark(
+          primary: FyrTheme.accentColor,
+          secondary: FyrTheme.accentColor,
         ),
       ),
-      home: const SettingsScreen(),
+      theme: ThemeData.light().copyWith(
+        scaffoldBackgroundColor: Colors.transparent,
+        textTheme: ThemeData.light().textTheme.apply(fontFamily: 'San Francisco'),
+        colorScheme: ColorScheme.light(
+          primary: FyrTheme.accentColor,
+          secondary: FyrTheme.accentColor,
+        ),
+      ),
+      home: SettingsScreen(),
+    ),
     );
   }
 }
@@ -68,15 +81,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   int _selectedIndex = 0;
   bool _isSidebarCollapsed = false;
 
-  final List<SettingsCategory> _categories = [
-    SettingsCategory('Wi-Fi', Icons.wifi, const WiFiPane()),
-    SettingsCategory('Bluetooth', Icons.bluetooth, const BluetoothPane()),
-    SettingsCategory('Displays', Icons.monitor, const DisplayPane()),
-    SettingsCategory('Power', Icons.battery_charging_full, const PowerPane()),
-  ];
-
   @override
   Widget build(BuildContext context) {
+    final List<SettingsCategory> _categories = [
+      SettingsCategory('Wi-Fi', Icons.wifi, WiFiPane()),
+      SettingsCategory('Bluetooth', Icons.bluetooth, BluetoothPane()),
+      SettingsCategory('Displays', Icons.monitor, DisplayPane()),
+      SettingsCategory('Power', Icons.battery_charging_full, PowerPane()),
+    ];
+
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: Row(
@@ -84,13 +97,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
           AnimatedContainer(
             duration: const Duration(milliseconds: 300),
             width: _isSidebarCollapsed ? 72 : 260,
-            color: Colors.purple.withOpacity(0.8),
+            color: FyrTheme.accentColor.withOpacity(0.8),
             child: Column(
               children: [
                 DragToMoveArea(
                   child: Container(
                     height: 48,
-                    padding: const EdgeInsets.only(left: 20),
+                    padding: EdgeInsets.only(left: 20),
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
@@ -98,12 +111,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           Colors.redAccent,
                           () => windowManager.close(),
                         ),
-                        const SizedBox(width: 8),
+                        SizedBox(width: 8),
                         _buildTrafficLight(
                           Colors.orangeAccent,
                           () => windowManager.minimize(),
                         ),
-                        const SizedBox(width: 8),
+                        SizedBox(width: 8),
                         _buildTrafficLight(Colors.greenAccent, () async {
                           if (await windowManager.isMaximized()) {
                             windowManager.unmaximize();
@@ -117,22 +130,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 if (!_isSidebarCollapsed)
                   Padding(
-                    padding: const EdgeInsets.only(left: 24.0, right: 16.0),
+                    padding: EdgeInsets.only(left: 24.0, right: 16.0),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Text(
+                        Text(
                           'Settings',
                           style: TextStyle(
-                            color: Colors.white,
+                            color: FyrTheme.textColorOnAccent,
                             fontSize: 24,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
                         IconButton(
-                          icon: const Icon(
+                          icon: Icon(
                             Icons.menu_open,
-                            color: Colors.white,
+                            color: FyrTheme.textColorOnAccent,
                           ),
                           onPressed: () =>
                               setState(() => _isSidebarCollapsed = true),
@@ -141,37 +154,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                 if (!_isSidebarCollapsed)
-                  const SizedBox(height: 32)
+                  SizedBox(height: 32)
                 else
                   Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 16.0),
+                    padding: EdgeInsets.symmetric(vertical: 16.0),
                     child: IconButton(
-                      icon: const Icon(Icons.menu, color: Colors.white),
+                      icon: Icon(Icons.menu, color: FyrTheme.textColorOnAccent),
                       onPressed: () =>
                           setState(() => _isSidebarCollapsed = false),
                     ),
                   ),
                 Expanded(
                   child: ListView.builder(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    padding: EdgeInsets.symmetric(horizontal: 16),
                     itemCount: _categories.length,
                     itemBuilder: (context, index) {
                       final category = _categories[index];
                       final isSelected = _selectedIndex == index;
                       return Padding(
-                        padding: const EdgeInsets.only(bottom: 8.0),
+                        padding: EdgeInsets.only(bottom: 8.0),
                         child: InkWell(
                           onTap: () => setState(() => _selectedIndex = index),
                           borderRadius: BorderRadius.circular(12),
                           child: AnimatedContainer(
                             duration: const Duration(milliseconds: 200),
-                            padding: const EdgeInsets.symmetric(
+                            padding: EdgeInsets.symmetric(
                               horizontal: 16,
                               vertical: 12,
                             ),
                             decoration: BoxDecoration(
                               color: isSelected
-                                  ? Colors.white.withOpacity(0.15)
+                                  ? FyrTheme.hoverColor
                                   : Colors.transparent,
                               borderRadius: BorderRadius.circular(12),
                             ),
@@ -180,18 +193,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 Icon(
                                   category.icon,
                                   color: isSelected
-                                      ? Colors.white
-                                      : Colors.white70,
+                                      ? FyrTheme.textColorOnAccent
+                                      : FyrTheme.textColorMutedOnAccent,
                                   size: 20,
                                 ),
                                 if (!_isSidebarCollapsed) ...[
-                                  const SizedBox(width: 16),
+                                  SizedBox(width: 16),
                                   Text(
                                     category.name,
                                     style: TextStyle(
                                       color: isSelected
-                                          ? Colors.white
-                                          : Colors.white70,
+                                          ? FyrTheme.textColorOnAccent
+                                          : FyrTheme.textColorMutedOnAccent,
                                       fontSize: 15,
                                       fontWeight: isSelected
                                           ? FontWeight.w600
@@ -213,7 +226,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           Expanded(
             child: Container(
-              color: const Color(0xFF1E1E1E).withOpacity(0.6),
+              color: FyrTheme.bgColor,
               child: Column(
                 children: [
                   DragToMoveArea(
@@ -221,7 +234,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   Expanded(
                     child: Padding(
-                      padding: const EdgeInsets.only(
+                      padding: EdgeInsets.only(
                         left: 48.0,
                         right: 48.0,
                         bottom: 48.0,

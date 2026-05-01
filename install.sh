@@ -120,4 +120,31 @@ else
     echo "Warning: ./sway/config not found. Make sure you are running this script from the 'de' directory."
 fi
 
+echo "Installing Fyr GTK theme..."
+if [ -d "./fyr-gtk-theme" ]; then
+    cd ./fyr-gtk-theme
+    ./install.sh -t purple -c dark --libadwaita fixed
+    cd ..
+    
+    # Apply initial GTK settings globally
+    mkdir -p ~/.config/gtk-3.0
+    cat <<EOF > ~/.config/gtk-3.0/settings.ini
+[Settings]
+gtk-theme-name=Fyr-Purple-Dark
+gtk-application-prefer-dark-theme=1
+gtk-decoration-layout=close,minimize,maximize:
+EOF
+
+    mkdir -p ~/.config/gtk-4.0
+    cat <<EOF > ~/.config/gtk-4.0/settings.ini
+[Settings]
+gtk-theme-name=Fyr-Purple-Dark
+gtk-application-prefer-dark-theme=1
+gtk-decoration-layout=close,minimize,maximize:
+EOF
+else
+    echo "Warning: ./fyr-gtk-theme not found!"
+fi
+
 echo "Installation complete!"
+

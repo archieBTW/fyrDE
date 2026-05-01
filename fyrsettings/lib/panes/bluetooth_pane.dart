@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import '../fyr_theme.dart';
 
 class BluetoothPane extends StatefulWidget {
   const BluetoothPane({super.key});
@@ -90,29 +91,29 @@ class _BluetoothPaneState extends State<BluetoothPane> {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            const Text(
+            Text(
               'Bluetooth',
               style: TextStyle(
                 fontSize: 28,
                 fontWeight: FontWeight.bold,
-                color: Colors.white,
+                color: FyrTheme.textColor,
               ),
             ),
             Switch(
               value: _btEnabled,
               onChanged: _toggleBluetooth,
-              activeColor: Colors.purpleAccent,
+              activeColor: FyrTheme.accentColor,
             ),
           ],
         ),
-        const SizedBox(height: 24),
+        SizedBox(height: 24),
         if (_scanning && _devices.isEmpty)
-          const Center(child: CircularProgressIndicator())
+          Center(child: CircularProgressIndicator())
         else if (!_btEnabled)
-          const Center(
+          Center(
             child: Text(
               'Bluetooth is turned off',
-              style: TextStyle(color: Colors.white70),
+              style: TextStyle(color: FyrTheme.textColorMuted),
             ),
           )
         else
@@ -125,20 +126,20 @@ class _BluetoothPaneState extends State<BluetoothPane> {
                 return ListTile(
                   leading: Icon(
                     Icons.bluetooth,
-                    color: connected ? Colors.purpleAccent : Colors.white,
+                    color: connected ? FyrTheme.accentColor : FyrTheme.textColor,
                   ),
                   title: Text(
                     dev['name']!,
-                    style: const TextStyle(color: Colors.white),
+                    style: TextStyle(color: FyrTheme.textColor),
                   ),
                   subtitle: Text(
                     dev['mac']!,
-                    style: const TextStyle(color: Colors.white54),
+                    style: TextStyle(color: FyrTheme.textColorMuted),
                   ),
                   trailing: connected
-                      ? const Text(
+                      ? Text(
                           'Connected',
-                          style: TextStyle(color: Colors.purpleAccent),
+                          style: TextStyle(color: FyrTheme.accentColor),
                         )
                       : null,
                   onTap: () {

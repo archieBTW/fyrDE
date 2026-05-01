@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../fyr_theme.dart';
 
 class DisplayPane extends StatefulWidget {
   const DisplayPane({super.key});
@@ -262,35 +263,35 @@ class _DisplayPaneState extends State<DisplayPane> {
       context: context,
       builder: (context) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF2E2E2E),
+          backgroundColor: FyrTheme.cardColor,
           title: Text(
             'Resolution for $outputName',
-            style: const TextStyle(color: Colors.white),
+            style: TextStyle(color: FyrTheme.textColor),
           ),
           content: Row(
             children: [
               Expanded(
                 child: TextField(
                   controller: wController,
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     labelText: 'Width',
-                    labelStyle: TextStyle(color: Colors.white70),
+                    labelStyle: TextStyle(color: FyrTheme.textColorMuted),
                   ),
-                  style: const TextStyle(color: Colors.white),
+                  style: TextStyle(color: FyrTheme.textColor),
                 ),
               ),
-              const Padding(
+              Padding(
                 padding: EdgeInsets.symmetric(horizontal: 8.0),
-                child: Text('x', style: TextStyle(color: Colors.white)),
+                child: Text('x', style: TextStyle(color: FyrTheme.textColor)),
               ),
               Expanded(
                 child: TextField(
                   controller: hController,
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     labelText: 'Height',
-                    labelStyle: TextStyle(color: Colors.white70),
+                    labelStyle: TextStyle(color: FyrTheme.textColorMuted),
                   ),
-                  style: const TextStyle(color: Colors.white),
+                  style: TextStyle(color: FyrTheme.textColor),
                 ),
               ),
             ],
@@ -298,9 +299,9 @@ class _DisplayPaneState extends State<DisplayPane> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text(
+              child: Text(
                 'Cancel',
-                style: TextStyle(color: Colors.white70),
+                style: TextStyle(color: FyrTheme.textColorMuted),
               ),
             ),
             TextButton(
@@ -312,9 +313,9 @@ class _DisplayPaneState extends State<DisplayPane> {
                 );
                 Navigator.pop(context);
               },
-              child: const Text(
+              child: Text(
                 'Apply',
-                style: TextStyle(color: Colors.purpleAccent),
+                style: TextStyle(color: FyrTheme.accentColor),
               ),
             ),
           ],
@@ -329,47 +330,190 @@ class _DisplayPaneState extends State<DisplayPane> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
+          Text(
             'Displays & Appearance',
             style: TextStyle(
               fontSize: 28,
               fontWeight: FontWeight.bold,
-              color: Colors.white,
+              color: FyrTheme.textColor,
             ),
           ),
-          const SizedBox(height: 24),
+          SizedBox(height: 24),
 
           Card(
-            color: Colors.white.withOpacity(0.05),
+            color: FyrTheme.cardColor,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16),
             ),
             child: Padding(
-              padding: const EdgeInsets.all(24.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              padding: EdgeInsets.all(24.0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text(
-                    'Desktop Background',
+                  Text(
+                    'Theme Mode',
                     style: TextStyle(
-                      color: Colors.white,
+                      color: FyrTheme.textColor,
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      GestureDetector(
+                        onTap: () => FyrTheme.setThemeMode(ThemeMode.light),
+                        child: Container(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: 24,
+                            vertical: 12,
+                          ),
+                          decoration: BoxDecoration(
+                            color: !FyrTheme.isDark
+                                ? FyrTheme.accentColor
+                                : FyrTheme.cardColor,
+                            borderRadius: BorderRadius.only(
+                              topLeft: Radius.circular(8),
+                              bottomLeft: Radius.circular(8),
+                            ),
+                            border: Border.all(color: FyrTheme.accentColor),
+                          ),
+                          child: Text(
+                            'Light',
+                            style: TextStyle(
+                              color: !FyrTheme.isDark
+                                  ? Colors.white
+                                  : FyrTheme.textColor,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                      GestureDetector(
+                        onTap: () => FyrTheme.setThemeMode(ThemeMode.dark),
+                        child: Container(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: 24,
+                            vertical: 12,
+                          ),
+                          decoration: BoxDecoration(
+                            color: FyrTheme.isDark
+                                ? FyrTheme.accentColor
+                                : FyrTheme.cardColor,
+                            borderRadius: BorderRadius.only(
+                              topRight: Radius.circular(8),
+                              bottomRight: Radius.circular(8),
+                            ),
+                            border: Border.all(color: FyrTheme.accentColor),
+                          ),
+                          child: Text(
+                            'Dark',
+                            style: TextStyle(
+                              color: FyrTheme.isDark
+                                  ? Colors.white
+                                  : FyrTheme.textColor,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          SizedBox(height: 24),
+
+          Card(
+            color: FyrTheme.cardColor,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Padding(
+              padding: EdgeInsets.all(24.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Accent Color',
+                    style: TextStyle(
+                      color: FyrTheme.textColor,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  SizedBox(height: 16),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: FyrTheme.customColors.map((color) {
+                      return GestureDetector(
+                        onTap: () {
+                          FyrTheme.setAccentColor(color);
+                        },
+                        child: Container(
+                          width: 48,
+                          height: 48,
+                          decoration: BoxDecoration(
+                            color: color,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: FyrTheme.accentColorNotifier.value == color
+                                  ? FyrTheme.textColor
+                                  : Colors.transparent,
+                              width: 3,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: color.withOpacity(0.4),
+                                blurRadius: 8,
+                                spreadRadius: 1,
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          SizedBox(height: 24),
+
+          Card(
+            color: FyrTheme.cardColor,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Padding(
+              padding: EdgeInsets.all(24.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Desktop Background',
+                    style: TextStyle(
+                      color: FyrTheme.textColor,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  SizedBox(height: 16),
                   if (_selectedBgPath.isNotEmpty)
                     Center(
                       child: Container(
                         constraints: const BoxConstraints(maxHeight: 360),
-                        margin: const EdgeInsets.only(bottom: 16),
+                        margin: EdgeInsets.only(bottom: 16),
                         child: AspectRatio(
                           aspectRatio: 16 / 9,
                           child: Container(
                             decoration: BoxDecoration(
                               borderRadius: BorderRadius.circular(12),
                               border: Border.all(
-                                color: Colors.purpleAccent,
+                                color: FyrTheme.accentColor,
                                 width: 2,
                               ),
                               image: DecorationImage(
@@ -382,20 +526,23 @@ class _DisplayPaneState extends State<DisplayPane> {
                       ),
                     ),
                   if (_defaultBackgrounds.isNotEmpty) ...[
-                    const SizedBox(height: 24),
-                    const Text(
+                    SizedBox(height: 24),
+                    Text(
                       'Default Backgrounds',
-                      style: TextStyle(color: Colors.white70, fontSize: 14),
+                      style: TextStyle(
+                        color: FyrTheme.textColorMuted,
+                        fontSize: 14,
+                      ),
                     ),
-                    const SizedBox(height: 12),
+                    SizedBox(height: 12),
                     SizedBox(
                       height: 320,
                       child: Row(
                         children: [
                           IconButton(
-                            icon: const Icon(
+                            icon: Icon(
                               Icons.chevron_left,
-                              color: Colors.white,
+                              color: FyrTheme.textColor,
                               size: 32,
                             ),
                             onPressed: () => _scrollBackgrounds(false),
@@ -422,7 +569,7 @@ class _DisplayPaneState extends State<DisplayPane> {
                                       borderRadius: BorderRadius.circular(8),
                                       border: Border.all(
                                         color: isSelected
-                                            ? Colors.purpleAccent
+                                            ? FyrTheme.accentColor
                                             : Colors.transparent,
                                         width: 3,
                                       ),
@@ -437,9 +584,9 @@ class _DisplayPaneState extends State<DisplayPane> {
                             ),
                           ),
                           IconButton(
-                            icon: const Icon(
+                            icon: Icon(
                               Icons.chevron_right,
-                              color: Colors.white,
+                              color: FyrTheme.textColor,
                               size: 32,
                             ),
                             onPressed: () => _scrollBackgrounds(true),
@@ -448,19 +595,19 @@ class _DisplayPaneState extends State<DisplayPane> {
                       ),
                     ),
                   ],
-                  const SizedBox(height: 16),
+                  SizedBox(height: 16),
                   Align(
                     alignment: Alignment.centerRight,
                     child: ElevatedButton.icon(
-                      icon: const Icon(Icons.folder_open, color: Colors.white),
-                      label: const Text(
+                      icon: Icon(Icons.folder_open, color: FyrTheme.textColor),
+                      label: Text(
                         'Browse Files...',
-                        style: TextStyle(color: Colors.white),
+                        style: TextStyle(color: FyrTheme.textColor),
                       ),
                       onPressed: _pickBackground,
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.white12,
-                        padding: const EdgeInsets.symmetric(
+                        backgroundColor: FyrTheme.cardColor,
+                        padding: EdgeInsets.symmetric(
                           horizontal: 24,
                           vertical: 16,
                         ),
@@ -472,24 +619,24 @@ class _DisplayPaneState extends State<DisplayPane> {
             ),
           ),
 
-          const SizedBox(height: 24),
-          const Text(
+          SizedBox(height: 24),
+          Text(
             'Monitors (Drag to Arrange)',
             style: TextStyle(
-              color: Colors.white,
+              color: FyrTheme.textColor,
               fontSize: 18,
               fontWeight: FontWeight.bold,
             ),
           ),
-          const SizedBox(height: 16),
+          SizedBox(height: 16),
 
           if (_loading && _outputs.isEmpty)
-            const Center(child: CircularProgressIndicator())
+            Center(child: CircularProgressIndicator())
           else if (_outputs.isEmpty)
-            const Center(
+            Center(
               child: Text(
                 'No displays found',
-                style: TextStyle(color: Colors.white70),
+                style: TextStyle(color: FyrTheme.textColorMuted),
               ),
             )
           else ...[
@@ -504,27 +651,27 @@ class _DisplayPaneState extends State<DisplayPane> {
                   final name = out['name'] ?? 'Unknown';
                   return Container(
                     key: ValueKey(name),
-                    margin: const EdgeInsets.only(right: 16),
+                    margin: EdgeInsets.only(right: 16),
                     width: 160,
                     decoration: BoxDecoration(
-                      color: Colors.purpleAccent.withOpacity(0.3),
+                      color: FyrTheme.accentColor.withOpacity(0.3),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.purpleAccent, width: 2),
+                      border: Border.all(color: FyrTheme.accentColor, width: 2),
                     ),
                     child: Center(
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          const Icon(
+                          Icon(
                             Icons.monitor,
-                            color: Colors.white,
+                            color: FyrTheme.textColor,
                             size: 32,
                           ),
-                          const SizedBox(height: 8),
+                          SizedBox(height: 8),
                           Text(
                             name,
-                            style: const TextStyle(
-                              color: Colors.white,
+                            style: TextStyle(
+                              color: FyrTheme.textColor,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
@@ -535,7 +682,7 @@ class _DisplayPaneState extends State<DisplayPane> {
                 },
               ),
             ),
-            const SizedBox(height: 24),
+            SizedBox(height: 24),
             ListView.builder(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
@@ -553,40 +700,40 @@ class _DisplayPaneState extends State<DisplayPane> {
                 final isPrimary = _primaryOutput == name;
 
                 return Card(
-                  color: Colors.white.withOpacity(0.05),
+                  color: FyrTheme.cardColor,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(16),
                   ),
-                  margin: const EdgeInsets.only(bottom: 16),
+                  margin: EdgeInsets.only(bottom: 16),
                   child: Padding(
-                    padding: const EdgeInsets.all(24.0),
+                    padding: EdgeInsets.all(24.0),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Row(
                           children: [
-                            const Icon(
+                            Icon(
                               Icons.monitor,
-                              color: Colors.purpleAccent,
+                              color: FyrTheme.accentColor,
                               size: 40,
                             ),
-                            const SizedBox(width: 16),
+                            SizedBox(width: 16),
                             Expanded(
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
                                     '$make $model',
-                                    style: const TextStyle(
-                                      color: Colors.white,
+                                    style: TextStyle(
+                                      color: FyrTheme.textColor,
                                       fontSize: 18,
                                       fontWeight: FontWeight.bold,
                                     ),
                                   ),
                                   Text(
                                     name,
-                                    style: const TextStyle(
-                                      color: Colors.white54,
+                                    style: TextStyle(
+                                      color: FyrTheme.textColorMuted,
                                       fontSize: 14,
                                     ),
                                   ),
@@ -595,7 +742,7 @@ class _DisplayPaneState extends State<DisplayPane> {
                             ),
                             if (active)
                               Container(
-                                padding: const EdgeInsets.symmetric(
+                                padding: EdgeInsets.symmetric(
                                   horizontal: 12,
                                   vertical: 6,
                                 ),
@@ -603,7 +750,7 @@ class _DisplayPaneState extends State<DisplayPane> {
                                   color: Colors.green.withOpacity(0.2),
                                   borderRadius: BorderRadius.circular(12),
                                 ),
-                                child: const Text(
+                                child: Text(
                                   'Active',
                                   style: TextStyle(
                                     color: Colors.greenAccent,
@@ -613,21 +760,21 @@ class _DisplayPaneState extends State<DisplayPane> {
                               ),
                           ],
                         ),
-                        const SizedBox(height: 24),
+                        SizedBox(height: 24),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            const Text(
+                            Text(
                               'Set as Primary (Fyr Stack)',
                               style: TextStyle(
-                                color: Colors.white70,
+                                color: FyrTheme.textColorMuted,
                                 fontSize: 16,
                               ),
                             ),
                             Radio<String>(
                               value: name,
                               groupValue: _primaryOutput,
-                              activeColor: Colors.purpleAccent,
+                              activeColor: FyrTheme.accentColor,
                               onChanged: (String? value) {
                                 if (value != null) _setPrimaryOutput(value);
                               },
@@ -635,38 +782,38 @@ class _DisplayPaneState extends State<DisplayPane> {
                           ],
                         ),
                         if (!isPrimary) ...[
-                          const SizedBox(height: 12),
+                          SizedBox(height: 12),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              const Text(
+                              Text(
                                 'Mirror Primary Display',
                                 style: TextStyle(
-                                  color: Colors.white70,
+                                  color: FyrTheme.textColorMuted,
                                   fontSize: 16,
                                 ),
                               ),
                               ElevatedButton(
                                 onPressed: () => _mirrorDisplay(name),
                                 style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.white12,
+                                  backgroundColor: FyrTheme.cardColor,
                                 ),
-                                child: const Text(
+                                child: Text(
                                   'Mirror',
-                                  style: TextStyle(color: Colors.white),
+                                  style: TextStyle(color: FyrTheme.textColor),
                                 ),
                               ),
                             ],
                           ),
                         ],
-                        const SizedBox(height: 12),
+                        SizedBox(height: 12),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            const Text(
+                            Text(
                               'Resolution',
                               style: TextStyle(
-                                color: Colors.white70,
+                                color: FyrTheme.textColorMuted,
                                 fontSize: 16,
                               ),
                             ),
@@ -674,17 +821,17 @@ class _DisplayPaneState extends State<DisplayPane> {
                               children: [
                                 Text(
                                   '${width}x$height',
-                                  style: const TextStyle(
-                                    color: Colors.white,
+                                  style: TextStyle(
+                                    color: FyrTheme.textColor,
                                     fontSize: 16,
                                     fontWeight: FontWeight.w500,
                                   ),
                                 ),
-                                const SizedBox(width: 16),
+                                SizedBox(width: 16),
                                 IconButton(
-                                  icon: const Icon(
+                                  icon: Icon(
                                     Icons.edit,
-                                    color: Colors.white54,
+                                    color: FyrTheme.textColorMuted,
                                     size: 20,
                                   ),
                                   onPressed: () => _showResolutionDialog(
@@ -697,7 +844,7 @@ class _DisplayPaneState extends State<DisplayPane> {
                             ),
                           ],
                         ),
-                        const SizedBox(height: 12),
+                        SizedBox(height: 12),
                         _buildProp('Scale', '${scale}x'),
                       ],
                     ),
@@ -717,12 +864,12 @@ class _DisplayPaneState extends State<DisplayPane> {
       children: [
         Text(
           label,
-          style: const TextStyle(color: Colors.white70, fontSize: 16),
+          style: TextStyle(color: FyrTheme.textColorMuted, fontSize: 16),
         ),
         Text(
           value,
-          style: const TextStyle(
-            color: Colors.white,
+          style: TextStyle(
+            color: FyrTheme.textColor,
             fontSize: 16,
             fontWeight: FontWeight.w500,
           ),

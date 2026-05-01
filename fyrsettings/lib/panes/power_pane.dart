@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../fyr_theme.dart';
 
 class PowerPane extends StatefulWidget {
   const PowerPane({super.key});
@@ -154,33 +155,33 @@ class _PowerPaneState extends State<PowerPane> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
+        Text(
           'Power Management',
           style: TextStyle(
             fontSize: 28,
             fontWeight: FontWeight.bold,
-            color: Colors.white,
+            color: FyrTheme.textColor,
           ),
         ),
-        const SizedBox(height: 24),
+        SizedBox(height: 24),
 
         // Auto-Sleep & Display Settings
-        const Text(
+        Text(
           'Auto-Sleep & Display',
           style: TextStyle(
-            color: Colors.white,
+            color: FyrTheme.textColor,
             fontSize: 18,
             fontWeight: FontWeight.bold,
           ),
         ),
-        const SizedBox(height: 16),
+        SizedBox(height: 16),
         Card(
-          color: Colors.white.withOpacity(0.05),
+          color: FyrTheme.cardColor,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
           ),
           child: Padding(
-            padding: const EdgeInsets.all(24.0),
+            padding: EdgeInsets.all(24.0),
             child: Column(
               children: [
                 _buildDropdown(
@@ -189,14 +190,14 @@ class _PowerPaneState extends State<PowerPane> {
                   [0, 1, 2, 5, 10, 15, 30],
                   (val) => _updateSettings(dim: val),
                 ),
-                const SizedBox(height: 16),
+                SizedBox(height: 16),
                 _buildDropdown(
                   'Turn off display after',
                   _offMinutes,
                   [0, 2, 5, 10, 15, 30, 60],
                   (val) => _updateSettings(off: val),
                 ),
-                const SizedBox(height: 16),
+                SizedBox(height: 16),
                 _buildDropdown(
                   'Put system to sleep after',
                   _sleepMinutes,
@@ -208,33 +209,33 @@ class _PowerPaneState extends State<PowerPane> {
           ),
         ),
 
-        const SizedBox(height: 24),
-        const Text(
+        SizedBox(height: 24),
+        Text(
           'Battery Status',
           style: TextStyle(
-            color: Colors.white,
+            color: FyrTheme.textColor,
             fontSize: 18,
             fontWeight: FontWeight.bold,
           ),
         ),
-        const SizedBox(height: 16),
+        SizedBox(height: 16),
         if (_loading)
-          const Center(child: CircularProgressIndicator())
+          Center(child: CircularProgressIndicator())
         else if (_powerInfo.isEmpty)
-          const Center(
+          Center(
             child: Text(
               'No battery information found',
-              style: TextStyle(color: Colors.white70),
+              style: TextStyle(color: FyrTheme.textColorMuted),
             ),
           )
         else
           Card(
-            color: Colors.white.withOpacity(0.05),
+            color: FyrTheme.cardColor,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16),
             ),
             child: Padding(
-              padding: const EdgeInsets.all(24.0),
+              padding: EdgeInsets.all(24.0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -244,25 +245,25 @@ class _PowerPaneState extends State<PowerPane> {
                         state.toLowerCase().contains('charging')
                             ? Icons.battery_charging_full
                             : Icons.battery_full,
-                        color: Colors.purpleAccent,
+                        color: FyrTheme.accentColor,
                         size: 40,
                       ),
-                      const SizedBox(width: 16),
+                      SizedBox(width: 16),
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
                             percentage,
-                            style: const TextStyle(
-                              color: Colors.white,
+                            style: TextStyle(
+                              color: FyrTheme.textColor,
                               fontSize: 24,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
                           Text(
                             state,
-                            style: const TextStyle(
-                              color: Colors.white54,
+                            style: TextStyle(
+                              color: FyrTheme.textColorMuted,
                               fontSize: 16,
                             ),
                           ),
@@ -270,17 +271,17 @@ class _PowerPaneState extends State<PowerPane> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 32),
+                  SizedBox(height: 32),
                   if (timeToEmpty != null)
                     _buildProp('Time to empty', timeToEmpty),
-                  if (timeToEmpty != null) const SizedBox(height: 12),
+                  if (timeToEmpty != null) SizedBox(height: 12),
                   if (timeToFull != null)
                     _buildProp('Time to full', timeToFull),
-                  if (timeToFull != null) const SizedBox(height: 12),
+                  if (timeToFull != null) SizedBox(height: 12),
                   _buildProp('Vendor', _powerInfo['vendor'] ?? 'Unknown'),
-                  const SizedBox(height: 12),
+                  SizedBox(height: 12),
                   _buildProp('Model', _powerInfo['model'] ?? 'Unknown'),
-                  const SizedBox(height: 12),
+                  SizedBox(height: 12),
                   _buildProp('Capacity', _powerInfo['capacity'] ?? 'Unknown'),
                 ],
               ),
@@ -301,14 +302,14 @@ class _PowerPaneState extends State<PowerPane> {
       children: [
         Text(
           label,
-          style: const TextStyle(color: Colors.white70, fontSize: 16),
+          style: TextStyle(color: FyrTheme.textColorMuted, fontSize: 16),
         ),
         DropdownButton<int>(
           value: currentValue,
-          dropdownColor: const Color(0xFF2E2E2E),
-          style: const TextStyle(color: Colors.white, fontSize: 16),
+          dropdownColor: FyrTheme.cardColor,
+          style: TextStyle(color: FyrTheme.textColor, fontSize: 16),
           underline: Container(),
-          icon: const Icon(Icons.arrow_drop_down, color: Colors.purpleAccent),
+          icon: Icon(Icons.arrow_drop_down, color: FyrTheme.accentColor),
           items: options.map((int value) {
             return DropdownMenuItem<int>(
               value: value,
@@ -327,12 +328,12 @@ class _PowerPaneState extends State<PowerPane> {
       children: [
         Text(
           label,
-          style: const TextStyle(color: Colors.white70, fontSize: 16),
+          style: TextStyle(color: FyrTheme.textColorMuted, fontSize: 16),
         ),
         Text(
           value,
-          style: const TextStyle(
-            color: Colors.white,
+          style: TextStyle(
+            color: FyrTheme.textColor,
             fontSize: 16,
             fontWeight: FontWeight.w500,
           ),

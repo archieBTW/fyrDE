@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import '../fyr_theme.dart';
 
 class WiFiPane extends StatefulWidget {
   const WiFiPane({super.key});
@@ -115,29 +116,29 @@ class _WiFiPaneState extends State<WiFiPane> {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            const Text(
+            Text(
               'Wi-Fi',
               style: TextStyle(
                 fontSize: 28,
                 fontWeight: FontWeight.bold,
-                color: Colors.white,
+                color: FyrTheme.textColor,
               ),
             ),
             Switch(
               value: _wifiEnabled,
               onChanged: _toggleWiFi,
-              activeColor: Colors.purpleAccent,
+              activeColor: FyrTheme.accentColor,
             ),
           ],
         ),
-        const SizedBox(height: 24),
+        SizedBox(height: 24),
         if (_scanning && _networks.isEmpty)
-          const Center(child: CircularProgressIndicator())
+          Center(child: CircularProgressIndicator())
         else if (!_wifiEnabled)
-          const Center(
+          Center(
             child: Text(
               'Wi-Fi is turned off',
-              style: TextStyle(color: Colors.white70),
+              style: TextStyle(color: FyrTheme.textColorMuted),
             ),
           )
         else
@@ -150,18 +151,18 @@ class _WiFiPaneState extends State<WiFiPane> {
                 return ListTile(
                   leading: Icon(
                     inUse ? Icons.wifi : Icons.wifi_outlined,
-                    color: inUse ? Colors.purpleAccent : Colors.white,
+                    color: inUse ? FyrTheme.accentColor : FyrTheme.textColor,
                   ),
                   title: Text(
                     net['ssid']!,
-                    style: const TextStyle(color: Colors.white),
+                    style: TextStyle(color: FyrTheme.textColor),
                   ),
                   subtitle: Text(
                     net['security']!,
-                    style: const TextStyle(color: Colors.white54),
+                    style: TextStyle(color: FyrTheme.textColorMuted),
                   ),
                   trailing: inUse
-                      ? const Icon(Icons.check, color: Colors.purpleAccent)
+                      ? Icon(Icons.check, color: FyrTheme.accentColor)
                       : null,
                   onTap: () {
                     if (!inUse) _connect(net['ssid']!);

@@ -5,8 +5,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'fyr_theme.dart';
 
 void main() {
+  FyrTheme.initialize();
   runApp(const OverviewApp());
 }
 
@@ -15,15 +17,30 @@ class OverviewApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+    return AnimatedBuilder(
+      animation: Listenable.merge([FyrTheme.accentColorNotifier, FyrTheme.themeModeNotifier]),
+      builder: (context, child) => MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Sway Overview',
-      theme: ThemeData(
-        fontFamily: 'San Francisco',
+      themeMode: FyrTheme.themeMode,
+      darkTheme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: Colors.transparent,
-        brightness: Brightness.dark,
+        textTheme: ThemeData.dark().textTheme.apply(fontFamily: 'San Francisco'),
+        colorScheme: ColorScheme.dark(
+          primary: FyrTheme.accentColor,
+          secondary: FyrTheme.accentColor,
+        ),
       ),
-      home: const OverviewScreen(),
+      theme: ThemeData.light().copyWith(
+        scaffoldBackgroundColor: Colors.transparent,
+        textTheme: ThemeData.light().textTheme.apply(fontFamily: 'San Francisco'),
+        colorScheme: ColorScheme.light(
+          primary: FyrTheme.accentColor,
+          secondary: FyrTheme.accentColor,
+        ),
+      ),
+      home: OverviewScreen(),
+    ),
     );
   }
 }
@@ -300,7 +317,7 @@ class _OverviewScreenState extends State<OverviewScreen>
   Widget _buildAppIcon(String? iconName, {double size = 48}) {
     final defaultIcon = Icon(
       Icons.web_asset,
-      color: Colors.white.withOpacity(0.8),
+      color: FyrTheme.textColor.withOpacity(0.8),
       size: size * 0.8,
     );
 
@@ -399,20 +416,20 @@ class _OverviewScreenState extends State<OverviewScreen>
           duration: const Duration(milliseconds: 200),
           curve: Curves.easeOut,
           decoration: BoxDecoration(
-            color: Colors.black.withOpacity(0.5),
+            color: FyrTheme.bgColor,
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
               color: isSelected
-                  ? Colors.purpleAccent.withOpacity(0.8)
+                  ? FyrTheme.accentColor.withOpacity(0.8)
                   : (ws.isFocused
-                        ? Colors.purpleAccent.withOpacity(0.3)
-                        : Colors.white.withOpacity(0.1)),
+                        ? FyrTheme.accentColor.withOpacity(0.3)
+                        : FyrTheme.hoverColor),
               width: isSelected ? 3 : 1,
             ),
             boxShadow: isSelected
                 ? [
                     BoxShadow(
-                      color: Colors.purpleAccent.withOpacity(0.2),
+                      color: FyrTheme.accentColor.withOpacity(0.2),
                       blurRadius: 20,
                       spreadRadius: 2,
                     ),
@@ -449,7 +466,7 @@ class _OverviewScreenState extends State<OverviewScreen>
                       style: TextStyle(
                         fontSize: 100,
                         fontWeight: FontWeight.bold,
-                        color: Colors.white.withOpacity(0.1),
+                        color: FyrTheme.hoverColor,
                       ),
                     ),
                   ),
@@ -491,13 +508,13 @@ class _OverviewScreenState extends State<OverviewScreen>
                                   borderRadius: BorderRadius.circular(6),
                                   border: Border.all(
                                     color: win.isFocused
-                                        ? Colors.purpleAccent
-                                        : Colors.white.withOpacity(0.2),
+                                        ? FyrTheme.accentColor
+                                        : FyrTheme.textColor.withOpacity(0.2),
                                     width: win.isFocused ? 2 : 1,
                                   ),
                                   boxShadow: [
                                     BoxShadow(
-                                      color: Colors.black.withOpacity(0.4),
+                                      color: FyrTheme.bgColor,
                                       blurRadius: 8,
                                       offset: const Offset(0, 4),
                                     ),
@@ -578,12 +595,12 @@ class _OverviewScreenState extends State<OverviewScreen>
                       child: Container(
                         width: 12,
                         height: 12,
-                        decoration: const BoxDecoration(
-                          color: Colors.purpleAccent,
+                        decoration: BoxDecoration(
+                          color: FyrTheme.accentColor,
                           shape: BoxShape.circle,
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.purpleAccent,
+                              color: FyrTheme.accentColor,
                               blurRadius: 8,
                             ),
                           ],
@@ -598,21 +615,21 @@ class _OverviewScreenState extends State<OverviewScreen>
                     right: 0,
                     child: Center(
                       child: Container(
-                        padding: const EdgeInsets.symmetric(
+                        padding: EdgeInsets.symmetric(
                           horizontal: 16,
                           vertical: 6,
                         ),
                         decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.6),
+                          color: FyrTheme.bgColor,
                           borderRadius: BorderRadius.circular(20),
                           border: Border.all(
-                            color: Colors.white.withOpacity(0.1),
+                            color: FyrTheme.hoverColor,
                           ),
                         ),
                         child: Text(
                           'Workspace ${ws.name}',
-                          style: const TextStyle(
-                            color: Colors.white,
+                          style: TextStyle(
+                            color: FyrTheme.textColor,
                             fontWeight: FontWeight.bold,
                             fontSize: 14,
                           ),
@@ -632,7 +649,7 @@ class _OverviewScreenState extends State<OverviewScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black.withOpacity(0.4),
+      backgroundColor: FyrTheme.bgColor,
       body: Focus(
         focusNode: _focusNode,
         onKeyEvent: (node, event) {
@@ -670,12 +687,12 @@ class _OverviewScreenState extends State<OverviewScreen>
           return KeyEventResult.ignored;
         },
         child: _isLoading
-            ? const Center(
-                child: CircularProgressIndicator(color: Colors.white),
+            ? Center(
+                child: CircularProgressIndicator(color: FyrTheme.textColor),
               )
             : SafeArea(
                 child: Padding(
-                  padding: const EdgeInsets.only(
+                  padding: EdgeInsets.only(
                     top: 96.0,
                     bottom: 48.0,
                     left: 48.0,

@@ -9,6 +9,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:wayland_layer_shell/wayland_layer_shell.dart';
 import 'package:wayland_layer_shell/types.dart';
 import 'dart:convert';
+import 'fyr_theme.dart';
 
 class SystemState {
   static final ValueNotifier<int> batteryLevel = ValueNotifier(100);
@@ -108,6 +109,7 @@ class SystemState {
 }
 
 void main() async {
+  FyrTheme.initialize();
   WidgetsFlutterBinding.ensureInitialized();
   await windowManager.ensureInitialized();
   SystemState.init();
@@ -232,20 +234,33 @@ class FyrTaskbarApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor: Colors.transparent,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.purpleAccent,
-          brightness: Brightness.dark,
+    return AnimatedBuilder(
+      animation: Listenable.merge([FyrTheme.accentColorNotifier, FyrTheme.themeModeNotifier]),
+      builder: (context, child) => MaterialApp(
+        debugShowCheckedModeBanner: false,
+        themeMode: FyrTheme.themeMode,
+        darkTheme: ThemeData.dark().copyWith(
+          scaffoldBackgroundColor: Colors.transparent,
+          textTheme: ThemeData.dark().textTheme.apply(
+            fontFamily: 'San Francisco',
+          ),
+          colorScheme: ColorScheme.dark(
+            primary: FyrTheme.accentColor,
+            secondary: FyrTheme.accentColor,
+          ),
         ),
-        textTheme: const TextTheme(
-          bodyMedium: TextStyle(fontFamily: 'San Francisco'),
-          titleMedium: TextStyle(fontFamily: 'San Francisco'),
+        theme: ThemeData.light().copyWith(
+          scaffoldBackgroundColor: Colors.transparent,
+          textTheme: ThemeData.light().textTheme.apply(
+            fontFamily: 'San Francisco',
+          ),
+          colorScheme: ColorScheme.light(
+            primary: FyrTheme.accentColor,
+            secondary: FyrTheme.accentColor,
+          ),
         ),
+        home: TaskbarScreen(),
       ),
-      home: const TaskbarScreen(),
     );
   }
 }
@@ -293,12 +308,12 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
       try {
         await channel.invokeMethod('setSize', {'width': 1920, 'height': 1080});
       } catch (_) {}
-      await windowManager.setSize(const Size(1920, 1080));
+      await windowManager.setSize(Size(1920, 1080));
     } else {
       try {
         await channel.invokeMethod('setSize', {'width': 1920, 'height': 56});
       } catch (_) {}
-      await windowManager.setSize(const Size(1920, 56));
+      await windowManager.setSize(Size(1920, 56));
     }
   }
 
@@ -320,17 +335,15 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
             Container(
               height: 56,
               width: double.infinity,
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.85),
-              ),
+              decoration: BoxDecoration(color: FyrTheme.bgColor),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   InkWell(
                     onTap: _toggleStartMenu,
-                    hoverColor: Colors.white.withOpacity(0.1),
+                    hoverColor: FyrTheme.hoverColor,
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      padding: EdgeInsets.symmetric(horizontal: 20),
                       alignment: Alignment.center,
                       child: Image.asset(
                         'assets/icons/fyr_icon.png',
@@ -342,9 +355,9 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                   const ClockWidget(),
                   InkWell(
                     onTap: _toggleQuickSettings,
-                    hoverColor: Colors.white.withOpacity(0.1),
+                    hoverColor: FyrTheme.hoverColor,
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      padding: EdgeInsets.symmetric(horizontal: 20),
                       alignment: Alignment.center,
                       child: Row(
                         children: [
@@ -354,13 +367,13 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                               return Icon(
                                 ssid != null ? Icons.wifi : Icons.wifi_off,
                                 color: ssid != null
-                                    ? Colors.white.withOpacity(0.9)
-                                    : Colors.white.withOpacity(0.4),
+                                    ? FyrTheme.textColor.withOpacity(0.9)
+                                    : FyrTheme.textColor.withOpacity(0.4),
                                 size: 18,
                               );
                             },
                           ),
-                          const SizedBox(width: 12),
+                          SizedBox(width: 12),
                           ValueListenableBuilder<List<String>>(
                             valueListenable: SystemState.bluetoothDevices,
                             builder: (context, devices, _) {
@@ -369,13 +382,13 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                                     ? Icons.bluetooth_connected
                                     : Icons.bluetooth,
                                 color: devices.isNotEmpty
-                                    ? Colors.white.withOpacity(0.9)
-                                    : Colors.white.withOpacity(0.4),
+                                    ? FyrTheme.textColor.withOpacity(0.9)
+                                    : FyrTheme.textColor.withOpacity(0.4),
                                 size: 18,
                               );
                             },
                           ),
-                          const SizedBox(width: 12),
+                          SizedBox(width: 12),
                           ValueListenableBuilder<bool>(
                             valueListenable: SystemState.isCharging,
                             builder: (context, isCharging, _) {
@@ -390,7 +403,7 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                                   Color batteryColor =
                                       level <= 20 && !isCharging
                                       ? Colors.redAccent
-                                      : Colors.white.withOpacity(0.9);
+                                      : FyrTheme.textColor.withOpacity(0.9);
 
                                   return Row(
                                     children: [
@@ -399,7 +412,7 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                                         color: batteryColor,
                                         size: 18,
                                       ),
-                                      const SizedBox(width: 4),
+                                      SizedBox(width: 4),
                                       Text(
                                         "${level}%",
                                         style: TextStyle(
@@ -503,8 +516,8 @@ class _ClockWidgetState extends State<ClockWidget> {
     return Center(
       child: Text(
         _timeString,
-        style: const TextStyle(
-          color: Colors.white,
+        style: TextStyle(
+          color: FyrTheme.textColor,
           fontSize: 13,
           fontWeight: FontWeight.w600,
           letterSpacing: 0.5,
@@ -522,7 +535,8 @@ class StartMenuPopup extends StatefulWidget {
   State<StartMenuPopup> createState() => _StartMenuPopupState();
 }
 
-class _StartMenuPopupState extends State<StartMenuPopup> with SingleTickerProviderStateMixin {
+class _StartMenuPopupState extends State<StartMenuPopup>
+    with SingleTickerProviderStateMixin {
   List<DesktopApp> _apps = AppService.cachedApps ?? [];
   late List<DesktopApp> _filteredApps;
   final TextEditingController _searchController = TextEditingController();
@@ -536,15 +550,15 @@ class _StartMenuPopupState extends State<StartMenuPopup> with SingleTickerProvid
       duration: const Duration(milliseconds: 150),
       vsync: this,
     );
-    _slideAnimation = Tween<Offset>(
-      begin: const Offset(-1.0, 0.0),
-      end: Offset.zero,
-    ).animate(CurvedAnimation(
-      parent: _animationController,
-      curve: Curves.easeOutQuart,
-    ));
+    _slideAnimation =
+        Tween<Offset>(begin: const Offset(-1.0, 0.0), end: Offset.zero).animate(
+          CurvedAnimation(
+            parent: _animationController,
+            curve: Curves.easeOutQuart,
+          ),
+        );
     _animationController.forward();
-    
+
     _filteredApps = _apps;
     if (_apps.isEmpty) {
       _loadApps();
@@ -624,19 +638,17 @@ class _StartMenuPopupState extends State<StartMenuPopup> with SingleTickerProvid
       child: Container(
         width: 400,
         decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.85),
-          border: Border(
-            right: BorderSide(color: Colors.white.withOpacity(0.05)),
-          ),
+          color: FyrTheme.bgColor,
+          border: Border(right: BorderSide(color: FyrTheme.cardColor)),
         ),
         child: Column(
           children: [
             SizedBox(height: 24),
             Expanded(
               child: _apps.isEmpty
-                  ? const Center(child: CircularProgressIndicator())
+                  ? Center(child: CircularProgressIndicator())
                   : ListView.builder(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      padding: EdgeInsets.symmetric(horizontal: 8),
                       itemCount: _filteredApps.length,
                       itemBuilder: (context, index) {
                         final app = _filteredApps[index];
@@ -653,7 +665,7 @@ class _StartMenuPopupState extends State<StartMenuPopup> with SingleTickerProvid
                               items: [
                                 PopupMenuItem(
                                   value: 'pin',
-                                  child: const Text('Toggle Pin to Dock'),
+                                  child: Text('Toggle Pin to Dock'),
                                   onTap: () => _pinApp(app),
                                 ),
                               ],
@@ -663,7 +675,7 @@ class _StartMenuPopupState extends State<StartMenuPopup> with SingleTickerProvid
                             onTap: () => _launchApp(app.exec),
                             borderRadius: BorderRadius.circular(12),
                             child: Padding(
-                              padding: const EdgeInsets.symmetric(
+                              padding: EdgeInsets.symmetric(
                                 horizontal: 8,
                                 vertical: 8,
                               ),
@@ -673,7 +685,7 @@ class _StartMenuPopupState extends State<StartMenuPopup> with SingleTickerProvid
                                     width: 40,
                                     height: 40,
                                     decoration: BoxDecoration(
-                                      color: Colors.white.withOpacity(0.05),
+                                      color: FyrTheme.cardColor,
                                       borderRadius: BorderRadius.circular(10),
                                     ),
                                     child: app.icon.startsWith('/')
@@ -702,7 +714,8 @@ class _StartMenuPopupState extends State<StartMenuPopup> with SingleTickerProvid
                                                           stackTrace,
                                                         ) => Icon(
                                                           Icons.widgets,
-                                                          color: Colors.white
+                                                          color: FyrTheme
+                                                              .textColor
                                                               .withOpacity(0.8),
                                                           size: 20,
                                                         ),
@@ -710,19 +723,18 @@ class _StartMenuPopupState extends State<StartMenuPopup> with SingleTickerProvid
                                           )
                                         : Icon(
                                             Icons.widgets,
-                                            color: Colors.white.withOpacity(
-                                              0.8,
-                                            ),
+                                            color: FyrTheme.textColor
+                                                .withOpacity(0.8),
                                             size: 20,
                                           ),
                                   ),
-                                  const SizedBox(width: 16),
+                                  SizedBox(width: 16),
                                   Expanded(
                                     child: Text(
                                       app.name,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
+                                      style: TextStyle(
                                         fontSize: 16,
                                         fontWeight: FontWeight.w500,
                                       ),
@@ -737,12 +749,10 @@ class _StartMenuPopupState extends State<StartMenuPopup> with SingleTickerProvid
                     ),
             ),
             Container(
-              padding: const EdgeInsets.all(16),
+              padding: EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.02),
-                border: Border(
-                  top: BorderSide(color: Colors.white.withOpacity(0.05)),
-                ),
+                color: FyrTheme.textColor.withOpacity(0.02),
+                border: Border(top: BorderSide(color: FyrTheme.cardColor)),
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -792,21 +802,21 @@ class _PowerButton extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         child: Column(
           children: [
             Icon(
               icon,
               color: isDanger
                   ? const Color(0xFFFF6584)
-                  : Colors.white.withOpacity(0.8),
+                  : FyrTheme.textColor.withOpacity(0.8),
             ),
-            const SizedBox(height: 4),
+            SizedBox(height: 4),
             Text(
               label,
               style: TextStyle(
                 fontSize: 11,
-                color: Colors.white.withOpacity(0.6),
+                color: FyrTheme.textColor.withOpacity(0.6),
               ),
             ),
           ],
@@ -826,7 +836,8 @@ class QuickSettingsPopup extends StatefulWidget {
   State<QuickSettingsPopup> createState() => _QuickSettingsPopupState();
 }
 
-class _QuickSettingsPopupState extends State<QuickSettingsPopup> with SingleTickerProviderStateMixin {
+class _QuickSettingsPopupState extends State<QuickSettingsPopup>
+    with SingleTickerProviderStateMixin {
   QuickSettingsMenu _currentMenu = QuickSettingsMenu.main;
   double _brightness = 0.5;
   double _volume = 0.5;
@@ -849,13 +860,13 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup> with SingleTick
       duration: const Duration(milliseconds: 150),
       vsync: this,
     );
-    _slideAnimation = Tween<Offset>(
-      begin: const Offset(0.0, -1.0),
-      end: Offset.zero,
-    ).animate(CurvedAnimation(
-      parent: _animationController,
-      curve: Curves.easeOutQuart,
-    ));
+    _slideAnimation =
+        Tween<Offset>(begin: const Offset(0.0, -1.0), end: Offset.zero).animate(
+          CurvedAnimation(
+            parent: _animationController,
+            curve: Curves.easeOutQuart,
+          ),
+        );
     _animationController.forward();
 
     _brightness = SystemState.brightness.value;
@@ -1021,14 +1032,14 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup> with SingleTick
       child: Container(
         width: 400,
         decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.85),
-          borderRadius: const BorderRadius.only(bottomLeft: Radius.circular(16)),
-          border: Border.all(color: Colors.white.withOpacity(0.05)),
+          color: FyrTheme.bgColor,
+          borderRadius: BorderRadius.only(bottomLeft: Radius.circular(16)),
+          border: Border.all(color: FyrTheme.cardColor),
         ),
         child: AnimatedSize(
           duration: const Duration(milliseconds: 200),
           child: Padding(
-            padding: const EdgeInsets.all(32.0),
+            padding: EdgeInsets.all(32.0),
             child: _buildCurrentMenu(),
           ),
         ),
@@ -1052,8 +1063,9 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup> with SingleTick
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        Wrap(
+          spacing: 10,
+          runSpacing: 16,
           children: [
             ValueListenableBuilder<String?>(
               valueListenable: SystemState.wifiSsid,
@@ -1094,15 +1106,30 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup> with SingleTick
               isActive: _nightLightEnabled,
               onTap: _toggleNightLight,
             ),
+            ValueListenableBuilder<ThemeMode>(
+              valueListenable: FyrTheme.themeModeNotifier,
+              builder: (context, themeMode, _) {
+                final isDark = themeMode == ThemeMode.dark;
+                return _QuickToggle(
+                  icon: isDark ? Icons.dark_mode : Icons.light_mode,
+                  label: isDark ? "Dark Mode" : "Light Mode",
+                  isActive: isDark,
+                  onTap: () {
+                    FyrTheme.setThemeMode(
+                        isDark ? ThemeMode.light : ThemeMode.dark);
+                  },
+                );
+              },
+            ),
           ],
         ),
-        const SizedBox(height: 24),
+        SizedBox(height: 24),
         _SliderRow(
           icon: Icons.light_mode,
           value: _brightness,
           onChanged: _setBrightness,
         ),
-        const SizedBox(height: 16),
+        SizedBox(height: 16),
         _SliderRow(
           icon: Icons.volume_up,
           value: _volume,
@@ -1120,31 +1147,31 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup> with SingleTick
         Row(
           children: [
             IconButton(
-              icon: const Icon(Icons.arrow_back, color: Colors.white, size: 20),
+              icon: Icon(Icons.arrow_back, color: FyrTheme.textColor, size: 20),
               onPressed: () =>
                   setState(() => _currentMenu = QuickSettingsMenu.main),
             ),
-            const Text(
+            Text(
               "Wi-Fi Networks",
               style: TextStyle(
-                color: Colors.white,
+                color: FyrTheme.textColor,
                 fontWeight: FontWeight.bold,
                 fontSize: 14,
               ),
             ),
             const Spacer(),
             if (_isScanning)
-              const SizedBox(
+              SizedBox(
                 width: 14,
                 height: 14,
                 child: CircularProgressIndicator(
                   strokeWidth: 2,
-                  color: Colors.purpleAccent,
+                  color: FyrTheme.accentColor,
                 ),
               ),
           ],
         ),
-        const SizedBox(height: 8),
+        SizedBox(height: 8),
         ConstrainedBox(
           constraints: const BoxConstraints(maxHeight: 250),
           child: ListView.builder(
@@ -1154,15 +1181,15 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup> with SingleTick
               final net = _wifiNetworks[index];
               return ListTile(
                 dense: true,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                contentPadding: EdgeInsets.symmetric(horizontal: 8),
                 title: Text(
                   net['ssid']!,
-                  style: const TextStyle(fontSize: 13, color: Colors.white),
+                  style: TextStyle(fontSize: 13, color: FyrTheme.textColor),
                 ),
                 trailing: Icon(
                   Icons.network_wifi,
                   size: 16,
-                  color: Colors.white.withOpacity(0.7),
+                  color: FyrTheme.textColor.withOpacity(0.7),
                 ),
                 onTap: () => _connectWifi(net['ssid']!),
               );
@@ -1180,31 +1207,31 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup> with SingleTick
         Row(
           children: [
             IconButton(
-              icon: const Icon(Icons.arrow_back, color: Colors.white, size: 20),
+              icon: Icon(Icons.arrow_back, color: FyrTheme.textColor, size: 20),
               onPressed: () =>
                   setState(() => _currentMenu = QuickSettingsMenu.main),
             ),
-            const Text(
+            Text(
               "Bluetooth Devices",
               style: TextStyle(
-                color: Colors.white,
+                color: FyrTheme.textColor,
                 fontWeight: FontWeight.bold,
                 fontSize: 14,
               ),
             ),
             const Spacer(),
             if (_isScanning)
-              const SizedBox(
+              SizedBox(
                 width: 14,
                 height: 14,
                 child: CircularProgressIndicator(
                   strokeWidth: 2,
-                  color: Colors.purpleAccent,
+                  color: FyrTheme.accentColor,
                 ),
               ),
           ],
         ),
-        const SizedBox(height: 8),
+        SizedBox(height: 8),
         ConstrainedBox(
           constraints: const BoxConstraints(maxHeight: 250),
           child: ListView.builder(
@@ -1214,15 +1241,15 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup> with SingleTick
               final dev = _btDevices[index];
               return ListTile(
                 dense: true,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                leading: const Icon(
+                contentPadding: EdgeInsets.symmetric(horizontal: 8),
+                leading: Icon(
                   Icons.bluetooth,
                   size: 16,
-                  color: Colors.white70,
+                  color: FyrTheme.textColorMuted,
                 ),
                 title: Text(
                   dev['name']!,
-                  style: const TextStyle(fontSize: 13, color: Colors.white),
+                  style: TextStyle(fontSize: 13, color: FyrTheme.textColor),
                 ),
                 onTap: () => _connectBluetooth(dev['address']!),
               );
@@ -1266,13 +1293,15 @@ class _QuickToggle extends StatelessWidget {
               alignment: Alignment.center,
               decoration: BoxDecoration(
                 color: isActive
-                    ? Colors.purpleAccent.withOpacity(0.3)
-                    : Colors.white.withOpacity(0.05),
+                    ? FyrTheme.accentColor.withOpacity(0.3)
+                    : FyrTheme.cardColor,
                 shape: BoxShape.circle,
               ),
               child: Icon(
                 icon,
-                color: isActive ? Colors.white : Colors.white.withOpacity(0.7),
+                color: isActive
+                    ? FyrTheme.textColor
+                    : FyrTheme.textColor.withOpacity(0.7),
                 size: 28,
               ),
             ),
@@ -1300,16 +1329,16 @@ class _SliderRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Icon(icon, color: Colors.white.withOpacity(0.7), size: 20),
-        const SizedBox(width: 16),
+        Icon(icon, color: FyrTheme.textColor.withOpacity(0.7), size: 20),
+        SizedBox(width: 16),
         Expanded(
           child: SliderTheme(
             data: SliderTheme.of(context).copyWith(
               trackHeight: 6,
-              activeTrackColor: Colors.purpleAccent.withOpacity(0.5),
-              inactiveTrackColor: Colors.white.withOpacity(0.1),
-              thumbColor: Colors.white,
-              overlayColor: Colors.purpleAccent.withOpacity(0.2),
+              activeTrackColor: FyrTheme.accentColor.withOpacity(0.5),
+              inactiveTrackColor: FyrTheme.hoverColor,
+              thumbColor: FyrTheme.textColor,
+              overlayColor: FyrTheme.accentColor.withOpacity(0.2),
               thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
             ),
             child: Slider(
