@@ -1,0 +1,155 @@
+[
+  {
+    "id": 4,
+    "type": "workspace",
+    "orientation": "horizontal",
+    "percent": null,
+    "urgent": false,
+    "marks": [],
+    "layout": "splith",
+    "border": "none",
+    "current_border_width": 0,
+    "rect": {
+      "x": 40,
+      "y": 88,
+      "width": 1840,
+      "height": 952
+    },
+    "deco_rect": {
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0
+    },
+    "window_rect": {
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0
+    },
+    "geometry": {
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0
+    },
+    "name": "1",
+    "window": null,
+    "nodes": [],
+    "floating_nodes": [],
+    "focus": [
+      6
+    ],
+    "fullscreen_mode": 1,
+    "sticky": false,
+    "floating": null,
+    "scratchpad_state": null,
+    "num": 1,
+    "output": "eDP-1",
+    "representation": "H[antigravity]",
+    "focused": false,
+    "visible": false
+  },
+  {
+    "id": 9,
+    "type": "workspace",
+    "orientation": "horizontal",
+    "percent": null,
+    "urgent": false,
+    "marks": [],
+    "layout": "splith",
+    "border": "none",
+    "current_border_width": 0,
+    "rect": {
+      "x": 40,
+      "y": 88,
+      "width": 1840,
+      "height": 952
+    },
+    "deco_rect": {
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0
+    },
+    "window_rect": {
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0
+    },
+    "geometry": {
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0
+    },
+    "name": "2",
+    "window": null,
+    "nodes": [],
+    "floating_nodes": [],
+    "focus": [
+      10
+    ],
+    "fullscreen_mode": 1,
+    "sticky": false,
+    "floating": null,
+    "scratchpad_state": null,
+    "num": 2,
+    "output": "eDP-1",
+    "representation": "H[com.example.flutterm]",
+    "focused": true,
+    "visible": true
+  },
+  {
+    "id": 37,
+    "type": "workspace",
+    "orientation": "horizontal",
+    "percent": null,
+    "urgent": false,
+    "marks": [],
+    "layout": "splith",
+    "border": "none",
+    "current_border_width": 0,
+    "rect": {
+      "x": 40,
+      "y": 88,
+      "width": 1840,
+      "height": 952
+    },
+    "deco_rect": {
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0
+    },
+    "window_rect": {
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0
+    },
+    "geometry": {
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0
+    },
+    "name": "3",
+    "window": null,
+    "nodes": [],
+    "floating_nodes": [],
+    "focus": [
+      38
+    ],
+    "fullscreen_mode": 1,
+    "sticky": false,
+    "floating": null,
+    "scratchpad_state": null,
+    "num": 3,
+    "output": "eDP-1",
+    "representation": "H[firefox]",
+    "focused": false,
+    "visible": false
+  }
+]
