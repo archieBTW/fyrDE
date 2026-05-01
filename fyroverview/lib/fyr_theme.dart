@@ -66,6 +66,12 @@ class FyrTheme {
   static bool get isDark => themeMode == ThemeMode.dark;
   static Color get textColor => isDark ? Colors.white : Colors.black87;
   static Color get textColorMuted => isDark ? Colors.white70 : Colors.black54;
+
+  static Color get textColorOnAccent =>
+      accentColorNotifier.value.computeLuminance() > 0.5 ? Colors.black87 : Colors.white;
+  static Color get textColorMutedOnAccent =>
+      accentColorNotifier.value.computeLuminance() > 0.5 ? Colors.black54 : Colors.white70;
+
   static Color get bgColor =>
       isDark ? Colors.black.withOpacity(0.85) : Colors.white.withOpacity(0.9);
   static Color get cardColor =>
@@ -85,9 +91,12 @@ class FyrTheme {
       await file.writeAsString(color.value.toRadixString(16).padLeft(8, '0'));
       accentColorNotifier.value = color;
 
-      final swayConfigFile = File('${Platform.environment['HOME']}/.config/sway/config');
+      final swayConfigFile = File(
+        '${Platform.environment['HOME']}/.config/sway/config',
+      );
       if (swayConfigFile.existsSync()) {
-        final hexColor = '#${color.value.toRadixString(16).substring(2).padLeft(6, '0')}';
+        final hexColor =
+            '#${color.value.toRadixString(16).substring(2).padLeft(6, '0')}';
         final lines = await swayConfigFile.readAsLines();
         final newLines = lines.map((line) {
           if (line.startsWith('client.focused ')) {
@@ -95,7 +104,7 @@ class FyrTheme {
           }
           return line;
         }).toList();
-        await swayConfigFile.writeAsString('${newLines.join('\\n')}\\n');
+        await swayConfigFile.writeAsString('${newLines.join('\n')}\n');
         Process.run('swaymsg', ['reload']);
       }
     } catch (e) {
@@ -107,6 +116,7 @@ class FyrTheme {
     try {
       final themeName = mode == ThemeMode.light ? 'Fyr-Purple-Light' : 'Fyr-Purple-Dark';
       final preferDark = mode == ThemeMode.dark ? '1' : '0';
+      final colorScheme = mode == ThemeMode.dark ? 'prefer-dark' : 'default';
       
       final gtk3Dir = Directory('${Platform.environment['HOME']}/.config/gtk-3.0');
       if (!gtk3Dir.existsSync()) gtk3Dir.createSync(recursive: true);
@@ -124,6 +134,24 @@ class FyrTheme {
       
       final gtk4File = File('${gtk4Dir.path}/settings.ini');
       await gtk4File.writeAsString(content);
+
+      try {
+        final targetCss = mode == ThemeMode.light ? 'gtk-light.css' : 'gtk-dark.css';
+        final cssSrc = File('${gtk4Dir.path}/$targetCss');
+        if (cssSrc.existsSync()) {
+          await cssSrc.copy('${gtk4Dir.path}/gtk.css');
+        }
+      } catch (e) {
+        // Ignore
+      }
+
+      try {
+        Process.run('gsettings', ['set', 'org.gnome.desktop.interface', 'gtk-theme', themeName]);
+        Process.run('gsettings', ['set', 'org.gnome.desktop.interface', 'color-scheme', colorScheme]);
+        Process.run('gsettings', ['set', 'org.gnome.desktop.wm.preferences', 'button-layout', 'close,minimize,maximize:']);
+      } catch (e) {
+        // Ignore
+      }
     } catch (e) {
       // Ignore
     }

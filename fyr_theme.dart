@@ -105,7 +105,7 @@ class FyrTheme {
 
   static Future<void> _updateGtkSettings(ThemeMode mode) async {
     try {
-      final themeName = mode == ThemeMode.light ? 'Fyr-Purple-Light' : 'Fyr-Purple-Dark';
+      final themeName = mode == ThemeMode.light ? 'Fyr-Light' : 'Fyr-Dark';
       final preferDark = mode == ThemeMode.dark ? '1' : '0';
       
       final gtk3Dir = Directory('${Platform.environment['HOME']}/.config/gtk-3.0');

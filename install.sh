@@ -123,14 +123,12 @@ fi
 echo "Installing Fyr GTK theme..."
 if [ -d "./fyr-gtk-theme" ]; then
     cd ./fyr-gtk-theme
-    ./install.sh -t purple -c dark --libadwaita fixed
-    cd ..
-    
+    ./install.sh -c dark --libadwaita fixed
     # Apply initial GTK settings globally
     mkdir -p ~/.config/gtk-3.0
     cat <<EOF > ~/.config/gtk-3.0/settings.ini
 [Settings]
-gtk-theme-name=Fyr-Purple-Dark
+gtk-theme-name=Fyr-Dark
 gtk-application-prefer-dark-theme=1
 gtk-decoration-layout=close,minimize,maximize:
 EOF
@@ -138,10 +136,25 @@ EOF
     mkdir -p ~/.config/gtk-4.0
     cat <<EOF > ~/.config/gtk-4.0/settings.ini
 [Settings]
-gtk-theme-name=Fyr-Purple-Dark
+gtk-theme-name=Fyr-Dark
 gtk-application-prefer-dark-theme=1
 gtk-decoration-layout=close,minimize,maximize:
 EOF
+
+    echo "Installing Firefox theme..."
+    for ff_path in "$HOME/.mozilla/firefox" "$HOME/.var/app/org.mozilla.firefox/.mozilla/firefox"; do
+        if [ -d "$ff_path" ]; then
+            for profile in "$ff_path"/*.default*; do
+                if [ -d "$profile" ]; then
+                    mkdir -p "$profile/chrome"
+                    cp -r "$PWD/src/other/firefox/chrome/"* "$profile/chrome/"
+                    if ! grep -q "toolkit.legacyUserProfileCustomizations.stylesheets" "$profile/user.js" 2>/dev/null; then
+                        echo 'user_pref("toolkit.legacyUserProfileCustomizations.stylesheets", true);' >> "$profile/user.js"
+                    fi
+                fi
+            done
+        fi
+    done
 else
     echo "Warning: ./fyr-gtk-theme not found!"
 fi

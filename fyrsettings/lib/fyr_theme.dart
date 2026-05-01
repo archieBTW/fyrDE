@@ -136,6 +136,16 @@ class FyrTheme {
       await gtk4File.writeAsString(content);
 
       try {
+        final targetCss = mode == ThemeMode.light ? 'gtk-light.css' : 'gtk-dark.css';
+        final cssSrc = File('${gtk4Dir.path}/$targetCss');
+        if (cssSrc.existsSync()) {
+          await cssSrc.copy('${gtk4Dir.path}/gtk.css');
+        }
+      } catch (e) {
+        // Ignore
+      }
+
+      try {
         Process.run('gsettings', ['set', 'org.gnome.desktop.interface', 'gtk-theme', themeName]);
         Process.run('gsettings', ['set', 'org.gnome.desktop.interface', 'color-scheme', colorScheme]);
         Process.run('gsettings', ['set', 'org.gnome.desktop.wm.preferences', 'button-layout', 'close,minimize,maximize:']);
