@@ -1,53 +1,92 @@
 #!/bin/bash
 set -e
 
-echo "Updating system..."
-sudo pacman -Syu --noconfirm
-
-echo "Installing base-devel and git for building packages..."
-sudo pacman -S --needed --noconfirm base-devel git
-
-if ! command -v yay &> /dev/null; then
-    echo "yay could not be found. Installing yay..."
-    git clone https://aur.archlinux.org/yay.git /tmp/yay
-    cd /tmp/yay
-    makepkg -si --noconfirm
-    cd -
-    rm -rf /tmp/yay
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    OS=$ID
 else
-    echo "yay is already installed."
+    echo "Cannot determine OS. Exiting."
+    exit 1
 fi
 
-deps=(
-    "swaybg"
-    "swaylock"
-    "swayidle"
-    "xorg-xwayland"
-    "foot"
-    "wmenu"
-    "gtk-layer-shell"
-    "xdg-desktop-portal"
-    "xdg-desktop-portal-gtk"
-    "xdg-desktop-portal-wlr"
-    "xclip"
-    "wl-clipboard"
-    "brightnessctl"
-    "wireplumber"
-    "wlsunset"
-    "cmake"
-    "cpio"
-    "pkg-config"
-    "gcc"
-    "grim"
-    "ninja"
-    "clang"
-)
+echo "Detected OS: $OS"
 
-echo "Installing official dependencies via pacman..."
-sudo pacman -S --needed --noconfirm "${deps[@]}"
+if [ "$OS" = "arch" ] || [ "$OS" = "manjaro" ] || [ "$OS" = "endeavouros" ]; then
+    echo "Updating system..."
+    sudo pacman -Syu --noconfirm
 
-echo "Installing swayfx and flutter via yay..."
-yay -S --needed --noconfirm swayfx flutter
+    echo "Installing base-devel and git for building packages..."
+    sudo pacman -S --needed --noconfirm base-devel git
+
+    if ! command -v yay &> /dev/null; then
+        echo "yay could not be found. Installing yay..."
+        git clone https://aur.archlinux.org/yay.git /tmp/yay
+        cd /tmp/yay
+        makepkg -si --noconfirm
+        cd -
+        rm -rf /tmp/yay
+    else
+        echo "yay is already installed."
+    fi
+
+    deps=(
+        "swaybg" "swaylock" "swayidle" "xorg-xwayland" "foot" "wmenu"
+        "gtk-layer-shell" "xdg-desktop-portal" "xdg-desktop-portal-gtk"
+        "xdg-desktop-portal-wlr" "xclip" "wl-clipboard" "brightnessctl"
+        "wireplumber" "wlsunset" "cmake" "cpio" "pkg-config" "gcc" "grim" "ninja" "clang"
+    )
+
+    echo "Installing official dependencies via pacman..."
+    sudo pacman -S --needed --noconfirm "${deps[@]}"
+
+    echo "Installing swayfx and flutter via yay..."
+    yay -S --needed --noconfirm swayfx flutter
+
+elif [ "$OS" = "ubuntu" ] || [ "$OS" = "debian" ]; then
+    echo "Updating system..."
+    sudo apt-get update && sudo apt-get upgrade -y
+
+    deps=(
+        "swaybg" "swaylock" "swayidle" "xwayland" "foot" "libgtk-layer-shell-dev"
+        "xdg-desktop-portal" "xdg-desktop-portal-gtk" "xdg-desktop-portal-wlr"
+        "xclip" "wl-clipboard" "brightnessctl" "wireplumber" "cmake" "cpio"
+        "pkg-config" "gcc" "grim" "ninja-build" "clang" "curl" "git" "unzip" "xz-utils" "zip" "libglu1-mesa" "sway"
+    )
+
+    echo "Installing official dependencies via apt..."
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${deps[@]}"
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y wlsunset wmenu swayfx || echo "Some optional packages (wlsunset, wmenu, swayfx) might not be available, continuing..."
+
+    if ! command -v flutter &> /dev/null; then
+        echo "Flutter not found. Installing via snap..."
+        sudo snap install flutter --classic || echo "Failed to install flutter via snap. Please install flutter manually."
+    fi
+
+elif [ "$OS" = "fedora" ]; then
+    echo "Updating system..."
+    sudo dnf upgrade -y
+
+    deps=(
+        "swaybg" "swaylock" "swayidle" "xorg-x11-server-Xwayland" "foot" "gtk-layer-shell-devel"
+        "xdg-desktop-portal" "xdg-desktop-portal-gtk" "xdg-desktop-portal-wlr"
+        "xclip" "wl-clipboard" "brightnessctl" "wireplumber" "cmake" "cpio"
+        "pkgconf" "gcc" "grim" "ninja-build" "clang" "curl" "git" "unzip" "zip" "mesa-libGLU" "sway"
+    )
+
+    echo "Installing official dependencies via dnf..."
+    sudo dnf install -y "${deps[@]}"
+    sudo dnf install -y wlsunset wmenu swayfx || echo "Some optional packages (wlsunset, wmenu, swayfx) might not be available, continuing..."
+
+    if ! command -v flutter &> /dev/null; then
+        echo "Flutter not found. Please install Flutter manually: https://docs.flutter.dev/get-started/install/linux"
+        exit 1
+    fi
+
+else
+    echo "Unsupported OS: $OS"
+    echo "Please install dependencies and flutter manually, then run the build steps."
+    exit 1
+fi
 
 echo "Building and installing Flutter applications..."
 git config --global --add safe.directory /opt/flutter || true

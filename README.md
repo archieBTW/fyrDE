@@ -54,3 +54,28 @@ After the installation is complete, you can start the desktop environment from y
 ```bash
 sway
 ```
+
+## Keyboard Shortcuts
+
+FyrDE relies on standard Sway keyboard shortcuts, with a few custom additions. The main modifier key (`$mod`) is the **Super/Windows** key.
+
+| Action | Shortcut |
+|---|---|
+| **System** | |
+| Close Window | `Super + Q` |
+| Open Application Launcher (Fyrsearch) | `Super + Space` |
+| Toggle Overview (Fyroverview) | `Super + Tab` |
+| Take a Screenshot | `Print Screen` |
+| **Window Management** | |
+| Change Focus | `Super + Arrow Keys` |
+| Resize Window | `Super + Shift + Arrow Keys` |
+| Split Horizontally | `Super + H` |
+| Split Vertically | `Super + V` |
+| Focus Next/Prev Window | `Alt + Tab` / `Alt + Shift + Tab` |
+| **Workspaces** | |
+| Switch to Workspace 1-10 | `Super + 1-0` |
+| Move Window to Workspace 1-10 | `Super + Shift + 1-0` |
+| **Media & Brightness** | |
+| Volume Up / Down | `Volume Keys` |
+| Mute Audio / Mic | `Mute / Mic Mute Keys` |
+| Brightness Up / Down | `Brightness Keys` |
