@@ -110,7 +110,7 @@ class _HelpScreenState extends State<HelpScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: FyrTheme.bgColor.withOpacity(0.4),
+      backgroundColor: Colors.transparent,
       body: Focus(
         focusNode: _focusNode,
         onKeyEvent: (node, event) {
@@ -163,21 +163,23 @@ class _HelpScreenState extends State<HelpScreen> {
                 Expanded(
                   child: ListView(
                     children: [
-                      _buildShortcut('Super + Enter', 'Open Terminal (Foot)'),
+                      _buildShortcut('Super + Q', 'Close Focused Window'),
+                      _buildShortcut('Alt + Tab', 'Focus Next Window'),
+                      _buildShortcut('Alt + Shift + Tab', 'Focus Previous Window'),
+                      _buildShortcut('Super + T', 'Open Terminal (fyrterm)'),
+                      _buildShortcut('Super + F', 'Open File Manager (fyr_files)'),
                       _buildShortcut('Super + Space', 'Open App Launcher (fyrsearch)'),
                       _buildShortcut('Super + Tab', 'Open Overview (fyroverview)'),
-                      _buildShortcut('Super + Q', 'Close Focused Window'),
-                      _buildShortcut('Super + Shift + Q', 'Force Kill Focused Window'),
-                      _buildShortcut('Super + F', 'Toggle Fullscreen'),
-                      _buildShortcut('Super + S', 'Toggle Floating Mode'),
                       _buildShortcut('Super + /', 'Show This Cheatsheet (fyrhelp)'),
-                      _buildShortcut('Super + 1..9', 'Switch to Workspace 1..9'),
-                      _buildShortcut('Super + Shift + 1..9', 'Move Window to Workspace 1..9'),
+                      _buildShortcut('Super + .', 'Open Emoji Picker (fyremoji)'),
+                      _buildShortcut('Super + V', 'Split Vertical'),
+                      _buildShortcut('Super + H', 'Split Horizontal'),
+                      _buildShortcut('Super + 1..0', 'Switch to Workspace 1..10'),
+                      _buildShortcut('Super + Shift + 1..0', 'Move Window to Workspace 1..10'),
                       _buildShortcut('Super + Arrows', 'Change Focus'),
-                      _buildShortcut('Super + Shift + Arrows', 'Move Focused Window'),
-                      _buildShortcut('Super + R', 'Reload Sway Configuration'),
-                      _buildShortcut('Super + Shift + E', 'Exit Sway (Logout)'),
-                      _buildShortcut('Super + L', 'Lock Screen'),
+                      _buildShortcut('Super + Shift + Arrows', 'Resize Window'),
+                      _buildShortcut('Swipe 3 L/R', 'Prev/Next Workspace'),
+                      _buildShortcut('Swipe 3 D/U', 'Show/Hide Overview'),
                       _buildShortcut('Print Screen', 'Take Screenshot'),
                       _buildShortcut('Super + Shift + S', 'Take Region Screenshot'),
                     ],

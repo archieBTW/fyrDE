@@ -118,20 +118,43 @@ bar {
 # ==========================================
 for_window [app_id="(?i).*fyrsearch.*"] floating enable, border none, move scratchpad
 for_window [class="(?i).*fyrsearch.*"] floating enable, border none, move scratchpad
-bindsym $mod+space [app_id="(?i).*fyrsearch.*"] scratchpad show, border none, resize set 9999 9999, move absolute positon 0 0
+bindsym $mod+space [app_id="(?i).*fyrsearch.*"] scratchpad show, border none, resize set 1920 1080, move absolute positon 0 0
 
 
 # ==========================================
 # Fyroverview Sway Configuration
 # ==========================================
 exec /opt/fyroverview/fyroverview
-for_window [app_id="fyroverview"] floating enable, border none, resize set 9999 9999, move position 0 0, move scratchpad
-bindsym $mod+Tab [app_id="fyroverview"] scratchpad show, resize set 9999 9999, border none, move absolute position 0 0
-bindgesture swipe:3:down [app_id="fyroverview"] scratchpad show, resize set 9999 9999, border none, move absolute position 0 0
+for_window [app_id="fyroverview"] floating enable, border none, resize set 1920 1080, move position 0 0, move scratchpad
+bindsym $mod+Tab [app_id="fyroverview"] scratchpad show, resize set 1920 1080, border none, move absolute position 0 0
+bindgesture swipe:3:down [app_id="fyroverview"] scratchpad show, resize set 1920 1080, border none, move absolute position 0 0
 bindgesture swipe:3:up [app_id="fyroverview"] move scratchpad
+
+
+# ==========================================
+# Fyrhelp Sway Configuration
+# ==========================================
+exec /opt/fyrhelp/fyrhelp
+for_window [app_id="fyrhelp"] floating enable, border none, resize set 1920 1080, move position 0 0, move scratchpad
+bindsym $mod+Control_L [app_id="fyrhelp"] scratchpad show, resize set 1920 1080, border none, move absolute position 0 0
+bindsym $mod+Control_R [app_id="fyrhelp"] scratchpad show, resize set 1920 1080, border none, move absolute position 0 0
+bindsym $mod+Ctrl [app_id="fyrhelp"] scratchpad show, resize set 1920 1080, border none, move absolute position 0 0
+for_window [app_id="fyrhelp"] floating enable, border none, resize set 1920 1080, move position 0 0, move scratchpad
+
+
+# ==========================================
+# Fyremoji Sway Configuration
+# ==========================================
+exec /opt/fyremoji/fyremoji
+for_window [app_id="fyremoji"] floating enable, border none, resize set 400 250, move scratchpad
+bindsym $mod+period [app_id="fyremoji"] scratchpad show, resize set 400 250, border none, move position mouse
 
 
 # PRIMARY OUTPUT SETTINGS
 assign [app_id="fyrtaskbar"] output DP-5
 assign [app_id="fyrdock"] output DP-5
 # END PRIMARY OUTPUT SETTINGS
+# DISPLAY OUTPUT SETTINGS
+output eDP-1 resolution 1920x1080 position 0 0
+output DP-5 resolution 1920x1080 position 1920 0
+# END DISPLAY OUTPUT SETTINGS

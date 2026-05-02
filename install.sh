@@ -40,7 +40,7 @@ if [ "$OS" = "arch" ] || [ "$OS" = "manjaro" ] || [ "$OS" = "endeavouros" ]; the
     sudo pacman -S --needed --noconfirm "${deps[@]}"
 
     echo "Installing swayfx, flutter, and termfilechooser via yay..."
-    yay -S --needed --noconfirm swayfx flutter xdg-desktop-portal-termfilechooser-hunkyburrito-git
+    yay -S --needed --noconfirm swayfx xdg-desktop-portal-termfilechooser-hunkyburrito-git # flutter
 
 elif [ "$OS" = "ubuntu" ] || [ "$OS" = "debian" ]; then
     echo "Updating system..."
@@ -91,7 +91,7 @@ fi
 echo "Building and installing Flutter applications..."
 git config --global --add safe.directory /opt/flutter || true
 
-flutter_apps=("fyrdock" "fyroverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrTerm" "fyrFiles")
+flutter_apps=("fyrdock" "fyroverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrTerm" "fyrFiles" "fyrhelp" "fyremoji")
 
 for app in "${flutter_apps[@]}"; do
     if [ -d "./$app" ]; then

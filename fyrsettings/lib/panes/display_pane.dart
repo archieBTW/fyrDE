@@ -169,6 +169,63 @@ class _DisplayPaneState extends State<DisplayPane> {
     }
   }
 
+  Future<void> _updateSwayConfigDisplays() async {
+    if (_outputs.isEmpty) return;
+
+    final configFiles = [
+      '${Platform.environment['HOME']}/.config/sway/config',
+      '${Platform.environment['HOME']}/Code/de/sway/config'
+    ];
+
+    List<String> outputCmds = [];
+    int maxW = 1920;
+    int maxH = 1080;
+    
+    for (final out in _outputs) {
+      final name = out['name'] ?? 'Unknown';
+      final rect = out['rect'] ?? {};
+      final w = rect['width'] ?? 1920;
+      final h = rect['height'] ?? 1080;
+      final x = rect['x'] ?? 0;
+      final y = rect['y'] ?? 0;
+      if (w > maxW) maxW = w;
+      if (h > maxH) maxH = h;
+      outputCmds.add('output $name resolution ${w}x$h position $x $y');
+    }
+
+    for (final path in configFiles) {
+      final file = File(path);
+      if (await file.exists()) {
+        var lines = await file.readAsLines();
+        bool inBlock = false;
+        var newLines = <String>[];
+        for (var line in lines) {
+          if (line == '# DISPLAY OUTPUT SETTINGS') {
+            inBlock = true;
+            continue;
+          }
+          if (line == '# END DISPLAY OUTPUT SETTINGS') {
+            inBlock = false;
+            continue;
+          }
+          if (!inBlock) {
+            newLines.add(line);
+          }
+        }
+
+        newLines.add('# DISPLAY OUTPUT SETTINGS');
+        newLines.addAll(outputCmds);
+        newLines.add('# END DISPLAY OUTPUT SETTINGS');
+
+        for (int i = 0; i < newLines.length; i++) {
+          newLines[i] = newLines[i].replaceAll(RegExp(r'resize set \d+ \d+'), 'resize set $maxW $maxH');
+        }
+
+        await file.writeAsString('${newLines.join('\n')}\n');
+      }
+    }
+  }
+
   Future<void> _updateWorkspaceBindings() async {
     if (_outputs.isEmpty) return;
 
@@ -223,6 +280,7 @@ class _DisplayPaneState extends State<DisplayPane> {
           }
         });
         await _updateWorkspaceBindings();
+        await _updateSwayConfigDisplays();
       }
     } catch (e) {
     } finally {
