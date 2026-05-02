@@ -416,7 +416,7 @@ class _OverviewScreenState extends State<OverviewScreen>
           duration: const Duration(milliseconds: 200),
           curve: Curves.easeOut,
           decoration: BoxDecoration(
-            color: FyrTheme.bgColor,
+            color: FyrTheme.bgColor.withOpacity(0.6),
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
               color: isSelected
@@ -514,7 +514,7 @@ class _OverviewScreenState extends State<OverviewScreen>
                                   ),
                                   boxShadow: [
                                     BoxShadow(
-                                      color: FyrTheme.bgColor,
+                                      color: FyrTheme.bgColor.withOpacity(0.3),
                                       blurRadius: 8,
                                       offset: const Offset(0, 4),
                                     ),
@@ -620,7 +620,7 @@ class _OverviewScreenState extends State<OverviewScreen>
                           vertical: 6,
                         ),
                         decoration: BoxDecoration(
-                          color: FyrTheme.bgColor,
+                          color: FyrTheme.bgColor.withOpacity(0.6),
                           borderRadius: BorderRadius.circular(20),
                           border: Border.all(
                             color: FyrTheme.hoverColor,
@@ -649,7 +649,7 @@ class _OverviewScreenState extends State<OverviewScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: FyrTheme.bgColor,
+      backgroundColor: FyrTheme.bgColor.withOpacity(0.4),
       body: Focus(
         focusNode: _focusNode,
         onKeyEvent: (node, event) {
