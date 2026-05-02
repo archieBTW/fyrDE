@@ -137,7 +137,7 @@ class _DisplayPaneState extends State<DisplayPane> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('primary_output', name);
 
-    for (final app in ['fyrtaskbar', 'fyrdock', 'fyrsearch', 'fyroverview']) {
+    for (final app in ['fyrtaskbar', 'fyrdock']) {
       await Process.run('swaymsg', ['[app_id="$app"]', 'move', 'output', name]);
     }
 
@@ -164,9 +164,45 @@ class _DisplayPaneState extends State<DisplayPane> {
       newLines.add('# PRIMARY OUTPUT SETTINGS');
       newLines.add('assign [app_id="fyrtaskbar"] output $name');
       newLines.add('assign [app_id="fyrdock"] output $name');
-      newLines.add('assign [app_id="(?i).*fyrsearch.*"] output $name');
-      newLines.add('assign [app_id="fyroverview"] output $name');
       newLines.add('# END PRIMARY OUTPUT SETTINGS');
+      await configFile.writeAsString('${newLines.join('\n')}\n');
+    }
+  }
+
+  Future<void> _updateWorkspaceBindings() async {
+    if (_outputs.isEmpty) return;
+
+    List<String> workspaceCmds = [];
+    for (int w = 1; w <= 9; w++) {
+      int monitorIndex = (w - 1) % _outputs.length;
+      String outputName = _outputs[monitorIndex]['name'];
+      workspaceCmds.add('workspace $w output $outputName');
+      await Process.run('swaymsg', ['workspace', '$w', 'output', outputName]);
+    }
+
+    final configFile = File(
+      '${Platform.environment['HOME']}/.config/sway/config',
+    );
+    if (await configFile.exists()) {
+      var lines = await configFile.readAsLines();
+      bool inBlock = false;
+      var newLines = <String>[];
+      for (var line in lines) {
+        if (line == '# WORKSPACE BINDINGS') {
+          inBlock = true;
+          continue;
+        }
+        if (line == '# END WORKSPACE BINDINGS') {
+          inBlock = false;
+          continue;
+        }
+        if (!inBlock) {
+          newLines.add(line);
+        }
+      }
+      newLines.add('# WORKSPACE BINDINGS');
+      newLines.addAll(workspaceCmds);
+      newLines.add('# END WORKSPACE BINDINGS');
       await configFile.writeAsString('${newLines.join('\n')}\n');
     }
   }
@@ -186,6 +222,7 @@ class _DisplayPaneState extends State<DisplayPane> {
             _primaryOutput = outputs.first['name'];
           }
         });
+        await _updateWorkspaceBindings();
       }
     } catch (e) {
     } finally {

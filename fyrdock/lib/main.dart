@@ -291,50 +291,89 @@ class _DockScreenState extends State<DockScreen> {
                           );
                         }
 
-                        return Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 4),
-                          child: Tooltip(
-                            message: app['name'] ?? '',
-                            child: GestureDetector(
-                              onSecondaryTapDown: (details) {
-                                showMenu(
-                                  context: context,
-                                  position: RelativeRect.fromLTRB(
-                                    details.globalPosition.dx,
-                                    details.globalPosition.dy - 50,
-                                    details.globalPosition.dx,
-                                    0,
-                                  ),
-                                  items: [
-                                    PopupMenuItem(
-                                      value: 'unpin',
-                                      child: Text('Unpin from Dock'),
-                                      onTap: () => _unpinApp(app['exec']),
-                                    ),
-                                  ],
-                                );
-                              },
-                              child: InkWell(
-                                onTap: () => _launchApp(app['exec']),
-                                borderRadius: BorderRadius.circular(16),
-                                hoverColor: FyrTheme.hoverColor,
-                                child: Container(
-                                  width: 56,
-                                  height: 56,
-                                  alignment: Alignment.center,
-                                  child: AnimatedContainer(
-                                    duration: const Duration(milliseconds: 200),
-                                    curve: Curves.easeInOut,
-                                    child: iconWidget,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
+                        return _DockIcon(
+                          app: app,
+                          iconWidget: iconWidget,
+                          onTap: () => _launchApp(app['exec']),
+                          onUnpin: () => _unpinApp(app['exec']),
                         );
                       },
                     );
                   }).toList(),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DockIcon extends StatefulWidget {
+  final Map<String, dynamic> app;
+  final Widget iconWidget;
+  final VoidCallback onTap;
+  final VoidCallback onUnpin;
+
+  const _DockIcon({
+    super.key,
+    required this.app,
+    required this.iconWidget,
+    required this.onTap,
+    required this.onUnpin,
+  });
+
+  @override
+  State<_DockIcon> createState() => _DockIconState();
+}
+
+class _DockIconState extends State<_DockIcon> {
+  bool _isHovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: 4),
+      child: Tooltip(
+        message: widget.app['name'] ?? '',
+        child: GestureDetector(
+          onSecondaryTapDown: (details) {
+            showMenu(
+              context: context,
+              position: RelativeRect.fromLTRB(
+                details.globalPosition.dx,
+                details.globalPosition.dy - 50,
+                details.globalPosition.dx,
+                0,
+              ),
+              items: [
+                PopupMenuItem(
+                  value: 'unpin',
+                  child: Text('Unpin from Dock'),
+                  onTap: widget.onUnpin,
+                ),
+              ],
+            );
+          },
+          child: MouseRegion(
+            onEnter: (_) => setState(() => _isHovered = true),
+            onExit: (_) => setState(() => _isHovered = false),
+            child: InkWell(
+              onTap: widget.onTap,
+              borderRadius: BorderRadius.circular(16),
+              hoverColor: FyrTheme.hoverColor,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.easeOutBack,
+                width: _isHovered ? 64 : 56,
+                height: _isHovered ? 64 : 56,
+                alignment: Alignment.center,
+                child: AnimatedScale(
+                  scale: _isHovered ? 1.15 : 1.0,
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeOutBack,
+                  child: widget.iconWidget,
                 ),
               ),
             ),

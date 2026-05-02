@@ -101,11 +101,52 @@ class _WiFiPaneState extends State<WiFiPane> {
     }
   }
 
-  Future<void> _connect(String ssid) async {
+  Future<void> _connect(String ssid, [String? password]) async {
     try {
-      await Process.run('nmcli', ['dev', 'wifi', 'connect', ssid]);
+      if (password != null && password.isNotEmpty) {
+        await Process.run('nmcli', ['dev', 'wifi', 'connect', ssid, 'password', password]);
+      } else {
+        await Process.run('nmcli', ['dev', 'wifi', 'connect', ssid]);
+      }
       _scanNetworks();
     } catch (e) {}
+  }
+
+  void _showPasswordDialog(String ssid) {
+    final TextEditingController _passwordController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: FyrTheme.bgColor,
+          title: Text('Connect to $ssid', style: TextStyle(color: FyrTheme.textColor)),
+          content: TextField(
+            controller: _passwordController,
+            obscureText: true,
+            style: TextStyle(color: FyrTheme.textColor),
+            decoration: InputDecoration(
+              hintText: 'Password',
+              hintStyle: TextStyle(color: FyrTheme.textColorMuted),
+              enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: FyrTheme.cardColor)),
+              focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: FyrTheme.accentColor)),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text('Cancel', style: TextStyle(color: FyrTheme.textColorMuted)),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                _connect(ssid, _passwordController.text);
+              },
+              child: Text('Connect', style: TextStyle(color: FyrTheme.accentColor)),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   @override
@@ -165,7 +206,13 @@ class _WiFiPaneState extends State<WiFiPane> {
                       ? Icon(Icons.check, color: FyrTheme.accentColor)
                       : null,
                   onTap: () {
-                    if (!inUse) _connect(net['ssid']!);
+                    if (!inUse) {
+                      if (net['security'] != null && net['security'] != '' && net['security'] != '--') {
+                        _showPasswordDialog(net['ssid']!);
+                      } else {
+                        _connect(net['ssid']!);
+                      }
+                    }
                   },
                 );
               },

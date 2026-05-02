@@ -34,6 +34,9 @@ class _BluetoothPaneState extends State<BluetoothPane> {
   Future<void> _toggleBluetooth(bool value) async {
     setState(() => _btEnabled = value);
     try {
+      if (value) {
+        await Process.run('rfkill', ['unblock', 'bluetooth']);
+      }
       await Process.run('bluetoothctl', ['power', value ? 'on' : 'off']);
       if (value) {
         _loadDevices();
@@ -47,6 +50,7 @@ class _BluetoothPaneState extends State<BluetoothPane> {
     if (!_btEnabled) return;
     setState(() => _scanning = true);
     try {
+      await Process.run('bluetoothctl', ['--timeout', '5', 'scan', 'on']);
       final result = await Process.run('bluetoothctl', ['devices']);
       final lines = (result.stdout as String).split('\n');
       final List<Map<String, String>> devs = [];

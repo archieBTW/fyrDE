@@ -16,6 +16,7 @@ class SystemState {
   static final ValueNotifier<bool> isCharging = ValueNotifier(false);
   static final ValueNotifier<String?> wifiSsid = ValueNotifier(null);
   static final ValueNotifier<List<String>> bluetoothDevices = ValueNotifier([]);
+  static final ValueNotifier<bool> bluetoothEnabled = ValueNotifier(false);
   static final ValueNotifier<double> volume = ValueNotifier(0.5);
   static final ValueNotifier<double> brightness = ValueNotifier(0.5);
   static final ValueNotifier<bool> nightLight = ValueNotifier(false);
@@ -58,6 +59,13 @@ class SystemState {
           }
         }
         wifiSsid.value = ssid;
+      }
+
+      final btShowResult = await Process.run('bluetoothctl', ['show']);
+      if (btShowResult.exitCode == 0) {
+        bluetoothEnabled.value = btShowResult.stdout.toString().contains(
+          'Powered: yes',
+        );
       }
 
       final btResult = await Process.run('bluetoothctl', [
@@ -113,12 +121,12 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await windowManager.ensureInitialized();
   SystemState.init();
-  
+
   FyrTheme.accentColorNotifier.addListener(() {
     AppService.cachedApps = null;
     AppService.getInstalledApps();
   });
-  
+
   await AppService.getInstalledApps();
 
   final waylandLayerShellPlugin = WaylandLayerShell();
@@ -245,7 +253,10 @@ class FyrTaskbarApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: Listenable.merge([FyrTheme.accentColorNotifier, FyrTheme.themeModeNotifier]),
+      animation: Listenable.merge([
+        FyrTheme.accentColorNotifier,
+        FyrTheme.themeModeNotifier,
+      ]),
       builder: (context, child) => MaterialApp(
         debugShowCheckedModeBanner: false,
         themeMode: FyrTheme.themeMode,
@@ -885,10 +896,12 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
     _brightness = SystemState.brightness.value;
     _volume = SystemState.volume.value;
     _wifiEnabled = SystemState.wifiSsid.value != null;
+    _bluetoothEnabled = SystemState.bluetoothEnabled.value;
     _nightLightEnabled = SystemState.nightLight.value;
     _airplaneModeEnabled = SystemState.airplaneMode.value;
 
     SystemState.brightness.addListener(_onStateChange);
+    SystemState.bluetoothEnabled.addListener(_onStateChange);
     SystemState.volume.addListener(_onStateChange);
     SystemState.nightLight.addListener(_onStateChange);
     SystemState.wifiSsid.addListener(_onStateChange);
@@ -899,6 +912,7 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
   void dispose() {
     _animationController.dispose();
     SystemState.brightness.removeListener(_onStateChange);
+    SystemState.bluetoothEnabled.removeListener(_onStateChange);
     SystemState.volume.removeListener(_onStateChange);
     SystemState.nightLight.removeListener(_onStateChange);
     SystemState.wifiSsid.removeListener(_onStateChange);
@@ -913,6 +927,7 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
         _volume = SystemState.volume.value;
         _nightLightEnabled = SystemState.nightLight.value;
         _wifiEnabled = SystemState.wifiSsid.value != null;
+        _bluetoothEnabled = SystemState.bluetoothEnabled.value;
         _airplaneModeEnabled = SystemState.airplaneMode.value;
       });
     }
@@ -928,7 +943,10 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
   }
 
   void _toggleBluetooth() {
-    _runCmd('rfkill', [!_bluetoothEnabled ? 'unblock' : 'block', 'bluetooth']);
+    if (!_bluetoothEnabled) {
+      _runCmd('rfkill', ['unblock', 'bluetooth']);
+    }
+    _runCmd('bluetoothctl', ['power', !_bluetoothEnabled ? 'on' : 'off']);
     setState(() => _bluetoothEnabled = !_bluetoothEnabled);
   }
 
@@ -1008,6 +1026,7 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
       _currentMenu = QuickSettingsMenu.bluetooth;
     });
     try {
+      await Process.run('bluetoothctl', ['--timeout', '5', 'scan', 'on']);
       final result = await Process.run('bluetoothctl', ['devices']);
       if (result.exitCode == 0) {
         final lines = result.stdout.toString().trim().split('\n');
@@ -1028,9 +1047,50 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
     }
   }
 
-  void _connectWifi(String ssid) {
-    _runCmd('nmcli', ['dev', 'wifi', 'connect', ssid]);
+  void _connectWifi(String ssid, [String? password]) {
+    if (password != null && password.isNotEmpty) {
+      _runCmd('nmcli', ['dev', 'wifi', 'connect', ssid, 'password', password]);
+    } else {
+      _runCmd('nmcli', ['dev', 'wifi', 'connect', ssid]);
+    }
     setState(() => _currentMenu = QuickSettingsMenu.main);
+  }
+
+  void _showWifiPasswordDialog(String ssid) {
+    final TextEditingController _passwordController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: FyrTheme.bgColor,
+          title: Text('Connect to $ssid', style: TextStyle(color: FyrTheme.textColor)),
+          content: TextField(
+            controller: _passwordController,
+            obscureText: true,
+            style: TextStyle(color: FyrTheme.textColor),
+            decoration: InputDecoration(
+              hintText: 'Password',
+              hintStyle: TextStyle(color: FyrTheme.textColorMuted),
+              enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: FyrTheme.cardColor)),
+              focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: FyrTheme.accentColor)),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text('Cancel', style: TextStyle(color: FyrTheme.textColorMuted)),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                _connectWifi(ssid, _passwordController.text);
+              },
+              child: Text('Connect', style: TextStyle(color: FyrTheme.accentColor)),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   void _connectBluetooth(String address) {
@@ -1043,7 +1103,7 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
     return SlideTransition(
       position: _slideAnimation,
       child: Container(
-        width: 400,
+        width: 472,
         decoration: BoxDecoration(
           color: FyrTheme.bgColor,
           borderRadius: BorderRadius.only(bottomLeft: Radius.circular(16)),
@@ -1076,65 +1136,82 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Wrap(
-          spacing: 10,
-          runSpacing: 16,
-          children: [
-            ValueListenableBuilder<String?>(
-              valueListenable: SystemState.wifiSsid,
-              builder: (context, ssid, _) {
-                return _QuickToggle(
-                  icon: ssid != null ? Icons.wifi : Icons.wifi_off,
-                  label: ssid ?? "Wi-Fi",
-                  isActive: _wifiEnabled,
-                  onTap: _toggleWifi,
-                  onLongPress: _scanWifi,
-                );
-              },
-            ),
-            ValueListenableBuilder<List<String>>(
-              valueListenable: SystemState.bluetoothDevices,
-              builder: (context, devices, _) {
-                final hasDevices = devices.isNotEmpty;
-                return _QuickToggle(
-                  icon: hasDevices
-                      ? Icons.bluetooth_connected
-                      : Icons.bluetooth,
-                  label: hasDevices ? devices.first : "Bluetooth",
-                  isActive: _bluetoothEnabled,
-                  onTap: _toggleBluetooth,
-                  onLongPress: _scanBluetooth,
-                );
-              },
-            ),
-            _QuickToggle(
-              icon: Icons.airplanemode_active,
-              label: "Airplane",
-              isActive: _airplaneModeEnabled,
-              onTap: _toggleAirplaneMode,
-            ),
-            _QuickToggle(
-              icon: Icons.nightlight_round,
-              label: "Night Light",
-              isActive: _nightLightEnabled,
-              onTap: _toggleNightLight,
-            ),
-            ValueListenableBuilder<ThemeMode>(
-              valueListenable: FyrTheme.themeModeNotifier,
-              builder: (context, themeMode, _) {
-                final isDark = themeMode == ThemeMode.dark;
-                return _QuickToggle(
-                  icon: isDark ? Icons.dark_mode : Icons.light_mode,
-                  label: isDark ? "Dark Mode" : "Light Mode",
-                  isActive: isDark,
-                  onTap: () {
-                    FyrTheme.setThemeMode(
-                        isDark ? ThemeMode.light : ThemeMode.dark);
-                  },
-                );
-              },
-            ),
-          ],
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              ValueListenableBuilder<String?>(
+                valueListenable: SystemState.wifiSsid,
+                builder: (context, ssid, _) {
+                  return _QuickToggle(
+                    icon: ssid != null ? Icons.wifi : Icons.wifi_off,
+                    label: ssid ?? "Wi-Fi",
+                    isActive: _wifiEnabled,
+                    onTap: _toggleWifi,
+                    onLongPress: _scanWifi,
+                  );
+                },
+              ),
+              SizedBox(width: 12),
+              ValueListenableBuilder<List<String>>(
+                valueListenable: SystemState.bluetoothDevices,
+                builder: (context, devices, _) {
+                  final hasDevices = devices.isNotEmpty;
+                  return _QuickToggle(
+                    icon: hasDevices
+                        ? Icons.bluetooth_connected
+                        : Icons.bluetooth,
+                    label: hasDevices ? devices.first : "Bluetooth",
+                    isActive: _bluetoothEnabled,
+                    onTap: _toggleBluetooth,
+                    onLongPress: _scanBluetooth,
+                  );
+                },
+              ),
+              SizedBox(width: 12),
+              _QuickToggle(
+                icon: Icons.airplanemode_active,
+                label: "Airplane",
+                isActive: _airplaneModeEnabled,
+                onTap: _toggleAirplaneMode,
+              ),
+              SizedBox(width: 12),
+              _QuickToggle(
+                icon: Icons.nightlight_round,
+                label: "Night Light",
+                isActive: _nightLightEnabled,
+                onTap: _toggleNightLight,
+              ),
+              SizedBox(width: 12),
+              ValueListenableBuilder<ThemeMode>(
+                valueListenable: FyrTheme.themeModeNotifier,
+                builder: (context, themeMode, _) {
+                  final isDark = themeMode == ThemeMode.dark;
+                  return _QuickToggle(
+                    icon: isDark ? Icons.dark_mode : Icons.light_mode,
+                    label: isDark ? "Dark Mode" : "Light Mode",
+                    isActive: isDark,
+                    onTap: () {
+                      FyrTheme.setThemeMode(
+                        isDark ? ThemeMode.light : ThemeMode.dark,
+                      );
+                    },
+                  );
+                },
+              ),
+              SizedBox(width: 12),
+              _QuickToggle(
+                icon: Icons.settings,
+                label: "Settings",
+                isActive: false,
+                onTap: () {
+                  _runCmd('/opt/fyrsettings/fyrsettings', []);
+                  widget.onClose();
+                },
+              ),
+              // SizedBox(width: 32),
+            ],
+          ),
         ),
         SizedBox(height: 24),
         _SliderRow(
@@ -1204,7 +1281,13 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
                   size: 16,
                   color: FyrTheme.textColor.withOpacity(0.7),
                 ),
-                onTap: () => _connectWifi(net['ssid']!),
+                onTap: () {
+                  if (net['security'] != null && net['security'] != '' && net['security'] != '--') {
+                    _showWifiPasswordDialog(net['ssid']!);
+                  } else {
+                    _connectWifi(net['ssid']!);
+                  }
+                },
               );
             },
           ),
@@ -1301,8 +1384,8 @@ class _QuickToggle extends StatelessWidget {
           child: BackdropFilter(
             filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
             child: Container(
-              width: 76,
-              height: 76,
+              width: 58,
+              height: 58,
               alignment: Alignment.center,
               decoration: BoxDecoration(
                 color: isActive
@@ -1315,7 +1398,7 @@ class _QuickToggle extends StatelessWidget {
                 color: isActive
                     ? FyrTheme.textColor
                     : FyrTheme.textColor.withOpacity(0.7),
-                size: 28,
+                size: 24,
               ),
             ),
           ),
