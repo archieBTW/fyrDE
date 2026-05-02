@@ -39,8 +39,8 @@ if [ "$OS" = "arch" ] || [ "$OS" = "manjaro" ] || [ "$OS" = "endeavouros" ]; the
     echo "Installing official dependencies via pacman..."
     sudo pacman -S --needed --noconfirm "${deps[@]}"
 
-    echo "Installing swayfx and flutter via yay..."
-    yay -S --needed --noconfirm swayfx flutter
+    echo "Installing swayfx, flutter, and termfilechooser via yay..."
+    yay -S --needed --noconfirm swayfx flutter xdg-desktop-portal-termfilechooser-hunkyburrito-git
 
 elif [ "$OS" = "ubuntu" ] || [ "$OS" = "debian" ]; then
     echo "Updating system..."
@@ -91,7 +91,7 @@ fi
 echo "Building and installing Flutter applications..."
 git config --global --add safe.directory /opt/flutter || true
 
-flutter_apps=("fyrdock" "fyroverview" "fyrsearch" "fyrsettings" "fyrtaskbar")
+flutter_apps=("fyrdock" "fyroverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrTerm" "fyrFiles")
 
 for app in "${flutter_apps[@]}"; do
     if [ -d "./$app" ]; then
@@ -110,6 +110,84 @@ for app in "${flutter_apps[@]}"; do
         echo "Warning: Directory ./$app not found!"
     fi
 done
+
+echo "Setting up fyrTerm configurations..."
+if [ -d "./fyrTerm" ]; then
+    sudo ln -sf /opt/fyrTerm/fyrterm /usr/local/bin/fyrterm
+    
+    if [ -f "./fyrTerm/assets/icons/fyrterm.png" ]; then
+        sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+        sudo cp ./fyrTerm/assets/icons/fyrterm.png /usr/share/icons/hicolor/512x512/apps/fyrterm.png
+    fi
+
+    sudo tee /usr/share/applications/fyrterm.desktop > /dev/null <<'EOF'
+[Desktop Entry]
+Version=1.0
+Name=fyrTerm
+GenericName=Terminal Emulator
+Comment=A flutter terminal emulator
+Exec=/usr/local/bin/fyrterm
+Icon=fyrterm
+Terminal=false
+Type=Application
+Categories=System;TerminalEmulator;
+EOF
+
+    if command -v update-desktop-database &> /dev/null; then
+        sudo update-desktop-database /usr/share/applications || true
+    fi
+
+    if command -v gtk-update-icon-cache &> /dev/null; then
+        sudo gtk-update-icon-cache -f -t /usr/share/icons/hicolor || true
+    fi
+
+    sudo update-alternatives --install /usr/bin/x-terminal-emulator x-terminal-emulator /usr/local/bin/fyrterm 50 || true
+fi
+
+echo "Setting up FyrFiles configurations..."
+if [ -d "./fyrFiles" ]; then
+    sudo ln -sf /opt/fyrFiles/fyr_files /usr/local/bin/fyrfiles
+
+    sudo tee /usr/share/applications/fyrfiles.desktop > /dev/null <<'EOF'
+[Desktop Entry]
+Name=FyrFiles
+Comment=A modern, custom file manager
+Exec=/usr/local/bin/fyrfiles
+Icon=system-file-manager
+Terminal=false
+Type=Application
+Categories=Utility;System;FileTools;
+EOF
+
+    if command -v update-desktop-database &> /dev/null; then
+        sudo update-desktop-database /usr/share/applications || true
+    fi
+
+    echo "Setting up FyrFiles as default file picker for Sway..."
+    sudo tee /usr/local/bin/fyr_files_picker > /dev/null <<'EOF'
+#!/bin/bash
+out="$5"
+/usr/local/bin/fyrfiles --picker > "$out"
+if [ ! -s "$out" ]; then
+    exit 1
+fi
+exit 0
+EOF
+    sudo chmod +x /usr/local/bin/fyr_files_picker
+
+    mkdir -p ~/.config/xdg-desktop-portal-termfilechooser
+    cat > ~/.config/xdg-desktop-portal-termfilechooser/config <<EOF
+[filechooser]
+cmd=/usr/local/bin/fyr_files_picker
+EOF
+
+    mkdir -p ~/.config/xdg-desktop-portal
+    cat > ~/.config/xdg-desktop-portal/sway-portals.conf <<EOF
+[preferred]
+default=wlr;gtk;
+org.freedesktop.impl.portal.FileChooser=termfilechooser
+EOF
+fi
 
 echo "Copying sway configuration..."
 mkdir -p ~/.config/sway

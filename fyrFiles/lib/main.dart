@@ -1,0 +1,1767 @@
+// ignore_for_file: avoid_print
+
+import 'dart:convert';
+import 'dart:async';
+import 'dart:math';
+import 'package:flutter/gestures.dart';
+import 'package:flutter/material.dart';
+import 'dart:io';
+import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:window_manager/window_manager.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'fyr_theme.dart';
+
+bool isPicker = false;
+
+void main(List<String> args) async {
+  if (args.contains('--picker')) {
+    isPicker = true;
+  }
+  WidgetsFlutterBinding.ensureInitialized();
+  FyrTheme.initialize();
+  await windowManager.ensureInitialized();
+  WindowOptions windowOptions = const WindowOptions(
+    size: Size(800, 600),
+    titleBarStyle: TitleBarStyle.hidden,
+  );
+  windowManager.waitUntilReadyToShow(windowOptions, () async {
+    await windowManager.show();
+    await windowManager.focus();
+  });
+  runApp(const FyrFilesApp());
+}
+
+Widget getDotColor(Color color) {
+  return Container(
+    width: 10,
+    height: 10,
+    decoration: BoxDecoration(
+      color: color,
+      shape: BoxShape.circle,
+    ),
+  );
+}
+
+List<Map<String, dynamic>> customTags = [
+  {'id': 'purple', 'name': 'Creativity', 'colorValue': Colors.purple.value},
+  {'id': 'green', 'name': 'Important', 'colorValue': Colors.green.value},
+  {'id': 'blue', 'name': 'Development', 'colorValue': Colors.blue.value},
+];
+List<String> customPins = [];
+
+Widget getDotByTag(String tag) {
+  var t = customTags.firstWhere((element) => element['id'] == tag, orElse: () => <String, dynamic>{});
+  if (t.isNotEmpty) {
+    return getDotColor(Color(t['colorValue']));
+  }
+  return getDotColor(Colors.transparent);
+}
+
+Future<void> saveCustomTags() async {
+  String homePath = Platform.environment['HOME'] ?? '/home/';
+  if (Platform.isAndroid) {
+    homePath = (await getApplicationDocumentsDirectory()).path;
+  }
+  String customTagsPath = p.join(homePath, '.fyr/files/tags_config.json');
+  File file = File(customTagsPath);
+  if (!file.existsSync()) file.createSync(recursive: true);
+  file.writeAsStringSync(jsonEncode(customTags));
+}
+
+Future<void> saveCustomPins() async {
+  String homePath = Platform.environment['HOME'] ?? '/home/';
+  if (Platform.isAndroid) {
+    homePath = (await getApplicationDocumentsDirectory()).path;
+  }
+  String pinsPath = p.join(homePath, '.fyr/files/pins.json');
+  File file = File(pinsPath);
+  if (!file.existsSync()) file.createSync(recursive: true);
+  file.writeAsStringSync(jsonEncode(customPins));
+}
+
+class FileInfo {
+  final String filePath;
+  String? tag;
+
+  FileInfo({required this.filePath, this.tag});
+
+  Map<String, dynamic> toJson() {
+    return {
+      'filePath': filePath,
+      'tag': tag,
+    };
+  }
+
+  factory FileInfo.fromJson(Map<String, dynamic> json) {
+    return FileInfo(
+      filePath: json['filePath'] as String,
+      tag: json['tag'] as String?,
+    );
+  }
+}
+
+
+
+class FyrFilesApp extends StatelessWidget {
+  const FyrFilesApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: Listenable.merge([FyrTheme.themeModeNotifier, FyrTheme.accentColorNotifier]),
+      builder: (_, __) {
+        return MaterialApp(
+          theme: ThemeData.light().copyWith(
+            useMaterial3: false,
+            primaryColor: FyrTheme.accentColor,
+            colorScheme: ColorScheme.light(primary: FyrTheme.accentColor),
+          ),
+          darkTheme: ThemeData.dark().copyWith(
+            useMaterial3: false,
+            scaffoldBackgroundColor: const Color(0xFF2A282C),
+            primaryColor: FyrTheme.accentColor,
+            colorScheme: ColorScheme.dark(primary: FyrTheme.accentColor),
+          ),
+          themeMode: FyrTheme.themeMode,
+          home: const FyrFiles(),
+        );
+      },
+    );
+  }
+}
+
+class FyrFiles extends StatefulWidget {
+  const FyrFiles({super.key});
+
+  @override
+  State<FyrFiles> createState() => _FyrFilesState();
+}
+
+class _FyrFilesState extends State<FyrFiles> {
+  late List<FileSystemEntity> files;
+  late Directory currentDir = Directory.current;
+  FileSystemEntity? copiedEntity;
+  bool isFileContextMenuShown = false;
+  bool showHiddenFiles = false;
+  bool isSidebarCollapsed = false;
+  List<FileInfo> fileInfoList = [];
+  late String tagsFilePath;
+  String? selectedTag;
+  Set<String> selectedPaths = {};
+  Offset? dragStart;
+  Offset? dragCurrent;
+  final ScrollController _scrollController = ScrollController();
+  String? previewImagePath;
+
+  void _updateSelection() {
+    if (dragStart == null || dragCurrent == null) return;
+    
+    Rect selectionRect = Rect.fromPoints(dragStart!, dragCurrent!);
+    double width = MediaQuery.of(context).size.width;
+    double itemWidth = width / (width / 120).floor();
+    int crossAxisCount = (width / 120).floor();
+    
+    Set<String> newSelection = {};
+    for (int i = 0; i < files.length; i++) {
+      int row = i ~/ crossAxisCount;
+      int col = i % crossAxisCount;
+      
+      double x = col * itemWidth;
+      double y = row * itemWidth - _scrollController.offset;
+      
+      Rect itemRect = Rect.fromLTWH(x, y, itemWidth, itemWidth);
+      if (selectionRect.overlaps(itemRect)) {
+        newSelection.add(files[i].path);
+      }
+    }
+    
+    setState(() {
+      selectedPaths = newSelection;
+    });
+  }
+
+  Stream<List<FileSystemEntity>> watchDirectory() async* {
+    List<FileSystemEntity> previousFiles = [];
+    bool isFirstRun = true;
+
+    while (true) {
+      final currentFiles = selectedTag == null
+          ? currentDir.listSync()
+          : fileInfoList
+              .where((info) => info.tag == selectedTag)
+              .map((info) => FileSystemEntity.isDirectorySync(info.filePath)
+                  ? Directory(info.filePath)
+                  : File(info.filePath))
+              .toList();
+
+      final filteredFiles = showHiddenFiles
+          ? currentFiles
+          : currentFiles
+              .where((file) => !p.basename(file.path).startsWith('.'))
+              .toList();
+
+      if (isFirstRun || !listEquals(previousFiles, filteredFiles)) {
+        yield filteredFiles;
+        previousFiles = filteredFiles;
+        isFirstRun = false;
+      }
+
+      await Future.delayed(const Duration(seconds: 1));
+    }
+  }
+
+  bool isAndroid() {
+    return Platform.isAndroid;
+  }
+
+  Future<Directory> getHomeDirectoryByPlatform() async {
+    if (isAndroid()) {
+      final directory = await getApplicationDocumentsDirectory();
+      return directory;
+    } else {
+      return Directory(Platform.environment['HOME'] ?? '/home/');
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+
+    getHomeDirectoryByPlatform().then((Directory dir) async {
+      setState(() {
+        currentDir = dir;
+        tagsFilePath = p.join(currentDir.path, '.fyr/files/tags.json');
+      });
+
+      String customTagsPath = p.join(currentDir.path, '.fyr/files/tags_config.json');
+      String pinsPath = p.join(currentDir.path, '.fyr/files/pins.json');
+      
+      if (File(customTagsPath).existsSync()) {
+        try {
+          customTags = List<Map<String, dynamic>>.from(jsonDecode(File(customTagsPath).readAsStringSync()));
+        } catch(e) {}
+      }
+      
+      if (File(pinsPath).existsSync()) {
+        try {
+          customPins = List<String>.from(jsonDecode(File(pinsPath).readAsStringSync()));
+        } catch(e) {}
+      }
+
+      try {
+        await checkAndCreateFile();
+        final loadedFileInfo = await readTagsFromFile(tagsFilePath);
+        setState(() {
+          fileInfoList = loadedFileInfo;
+          files = currentDir.listSync();
+        });
+      } catch (err) {
+        stderr.writeln(err);
+        setState(() {
+          fileInfoList = [];
+          files = currentDir.listSync();
+        });
+      }
+    });
+  }
+
+  String displayText(
+      Directory dir, Directory currentDir, bool isColorFiltered) {
+    if (isColorFiltered) {
+      return '';
+    }
+
+    if (dir.path == '/' && dir != currentDir) {
+      return 'root > ';
+    } else if (dir.path == '/' && dir == currentDir) {
+      return 'root';
+    } else if (dir != currentDir) {
+      return '${dir.path.split('/').last} > ';
+    } else {
+      return dir.path.split('/').last;
+    }
+  }
+
+  double getToolbarPadding() {
+    if (Platform.isAndroid) {
+      return 42.0;
+    } else if (Platform.isLinux) {
+      return 0.0;
+    } else {
+      return 0.0;
+    }
+  }
+
+  String formatBytes(int bytes, int decimals) {
+    if (bytes <= 0) return "0 B";
+    const suffixes = ["B", "KB", "MB", "GB", "TB"];
+    var i = (log(bytes) / log(1024)).floor();
+    return "${(bytes / pow(1024, i)).toStringAsFixed(decimals)} ${suffixes[i]}";
+  }
+
+  Map<String, dynamic> fileStatToMap(FileStat fileStat, String filePath) {
+    return {
+      'filename': filePath.split('/').last,
+      'mode': fileStat.mode.toString(),
+      'modified': fileStat.modified.toString(),
+      'accessed': fileStat.accessed.toString(),
+      'changed': fileStat.changed.toString(),
+      'size': formatBytes(fileStat.size, 2),
+      'type': fileStat.type.toString(),
+    };
+  }
+
+  Map<String, dynamic> dirStatToMap(FileStat dirStat, String dirPath) {
+    return {
+      'directory': dirPath,
+      'mode': dirStat.mode.toString(),
+      'modified': dirStat.modified.toString(),
+      'accessed': dirStat.accessed.toString(),
+      'changed': dirStat.changed.toString(),
+      'type': dirStat.type.toString(),
+    };
+  }
+
+  Future<void> checkAndCreateFile() async {
+    try {
+      final file = File(tagsFilePath);
+      await file.parent.create(recursive: true);
+
+      if (await file.exists()) {
+        stderr.writeln("File exists.");
+      } else {
+        stderr.writeln("File does not exist. Creating file.");
+
+        List<dynamic> initialData = [];
+
+        await file.writeAsString(jsonEncode(initialData));
+      }
+    } catch (e) {
+      stderr.writeln("An error occurred: $e");
+    }
+  }
+
+  void openDirectory(Directory directory) {
+    setState(() {
+      selectedTag = null;
+      currentDir = directory;
+      files = directory.listSync().where((file) {
+        String fileName = p.basename(file.path);
+        return showHiddenFiles || !fileName.startsWith('.');
+      }).toList();
+    });
+  }
+
+  bool hasChildDirectories(Directory directory) {
+    var entities = directory.listSync(followLinks: false);
+    return entities.any((entity) => entity is Directory);
+  }
+
+  Future<void> createFile(Directory directory, String fileName) async {
+    final newFile = File('${directory.path}/$fileName');
+    await newFile.create();
+  }
+
+  Future<void> createDir(Directory directory, String newDirName) async {
+    final newDir = Directory('${directory.path}/$newDirName');
+    await newDir.create();
+  }
+
+  List<Directory> getParentDirectories(Directory currDir) {
+    List<Directory> parents = [];
+    Directory? dir = currDir;
+    while (dir?.path != dir?.parent.path) {
+      if (dir != null) {
+        parents.add(dir);
+      }
+      dir = dir?.parent;
+    }
+    if (dir != null && dir.path == dir.parent.path) {
+      parents.add(dir);
+    }
+    return parents.reversed.toList();
+  }
+
+  Future<bool> isClipboardDataAvailable() async {
+    ClipboardData? clipboardData = await Clipboard.getData('text/plain');
+    String? path = clipboardData?.text;
+
+    if (path != null && path.isNotEmpty) {
+      return FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound;
+    }
+
+    return false;
+  }
+
+  String formatPath(String path) {
+    List<String> segments = path.split('/');
+    return segments.where((seg) => seg.isNotEmpty).join(' > ');
+  }
+
+  Future<void> pasteFile(Directory targetDir) async {
+    try {
+      ClipboardData data =
+          await Clipboard.getData('text/plain') as ClipboardData;
+      String text = data.text ?? '';
+      List<String> paths = text.split('\n');
+      for (String path in paths) {
+        path = path.trim();
+        if (path.isEmpty) continue;
+        if (FileSystemEntity.isFileSync(path)) {
+          File sourceFile = File(path);
+          String fileName = sourceFile.uri.pathSegments.last;
+          await sourceFile.copy('${targetDir.path}/$fileName');
+        } else if (FileSystemEntity.isDirectorySync(path)) {
+          Directory sourceDir = Directory(path);
+          String dirName = sourceDir.uri.pathSegments.where((s) => s.isNotEmpty).last;
+          await Process.run('cp', ['-r', path, '${targetDir.path}/$dirName']);
+        }
+      }
+      setState(() {});
+    } catch (err) {
+      stderr.writeln(err);
+    }
+  }
+
+  Future<void> writeTagsToFile(
+      List<FileInfo> fileInfos, String filePath) async {
+    final json = jsonEncode(fileInfos.map((e) => e.toJson()).toList());
+    final file = File(filePath);
+    await file.writeAsString(json);
+  }
+
+  Future<List<FileInfo>> readTagsFromFile(String filePath) async {
+    final file = File(filePath);
+    if (await file.exists()) {
+      final json = await file.readAsString();
+      if (json.trim() == '{}') {
+        return [];
+      }
+      final list = jsonDecode(json) as List;
+      return list
+          .map((e) => FileInfo.fromJson(e as Map<String, dynamic>))
+          .toList();
+    }
+    return [];
+  }
+
+  void showPropertiesDialog(
+      BuildContext context, Map<String, dynamic> properties) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text("File Properties"),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: properties.entries.map((entry) {
+                return Text('${entry.key}: ${entry.value}');
+              }).toList(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+              },
+              child: const Text("Close"),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildSidebarItem(IconData icon, String label, VoidCallback onTap, {VoidCallback? onUnpin}) {
+    if (isSidebarCollapsed) {
+      return Tooltip(
+        message: label,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16.0),
+            child: Icon(icon, size: 24, color: FyrTheme.accentColor),
+          ),
+        ),
+      );
+    }
+    return ListTile(
+      leading: Icon(icon, size: 20, color: FyrTheme.accentColor),
+      title: Text(label, style: const TextStyle(fontSize: 14), overflow: TextOverflow.ellipsis),
+      dense: true,
+      onTap: onTap,
+      trailing: onUnpin != null ? IconButton(
+        icon: const Icon(Icons.close, size: 16),
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints(),
+        onPressed: onUnpin,
+      ) : null,
+    );
+  }
+
+  void _showTagsSettingsModal(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (context, setStateModal) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: const Text("Manage Tags"),
+              content: SizedBox(
+                width: 300,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: customTags.length,
+                      itemBuilder: (context, index) {
+                        var tag = customTags[index];
+                        return ListTile(
+                          leading: getDotColor(Color(tag['colorValue'])),
+                          title: Text(tag['name']),
+                          trailing: IconButton(
+                            icon: const Icon(Icons.delete),
+                            onPressed: () {
+                              setStateModal(() {
+                                customTags.removeAt(index);
+                              });
+                              setState(() {});
+                              saveCustomTags();
+                            },
+                          ),
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    ElevatedButton(
+                      onPressed: () {
+                        TextEditingController nameController = TextEditingController();
+                        Color selectedColor = Colors.red;
+                        showDialog(
+                          context: context,
+                          builder: (context) {
+                            return StatefulBuilder(
+                              builder: (context, setStateAdd) {
+                                return AlertDialog(
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                  title: const Text('Add Tag'),
+                                  content: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      TextField(
+                                        controller: nameController,
+                                        decoration: const InputDecoration(labelText: 'Tag Name'),
+                                      ),
+                                      const SizedBox(height: 16),
+                                      Wrap(
+                                        spacing: 8,
+                                        children: [
+                                          Colors.red, Colors.pink, Colors.purple, Colors.deepPurple,
+                                          Colors.indigo, Colors.blue, Colors.lightBlue, Colors.cyan,
+                                          Colors.teal, Colors.green, Colors.lightGreen, Colors.lime,
+                                          Colors.yellow, Colors.amber, Colors.orange, Colors.deepOrange,
+                                          Colors.brown, Colors.grey, Colors.blueGrey,
+                                        ].map((color) => GestureDetector(
+                                          onTap: () {
+                                            setStateAdd(() {
+                                              selectedColor = color;
+                                            });
+                                          },
+                                          child: Container(
+                                            width: 24, height: 24,
+                                            decoration: BoxDecoration(
+                                              color: color,
+                                              shape: BoxShape.circle,
+                                              border: Border.all(
+                                                color: selectedColor == color ? Colors.white : Colors.transparent,
+                                                width: 2,
+                                              ),
+                                            ),
+                                          ),
+                                        )).toList(),
+                                      ),
+                                    ],
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.pop(context),
+                                      child: const Text('Cancel'),
+                                    ),
+                                    ElevatedButton(
+                                      onPressed: () {
+                                        if (nameController.text.isNotEmpty) {
+                                          setStateModal(() {
+                                            customTags.add({
+                                              'id': DateTime.now().millisecondsSinceEpoch.toString(),
+                                              'name': nameController.text,
+                                              'colorValue': selectedColor.value,
+                                            });
+                                          });
+                                          setState(() {});
+                                          saveCustomTags();
+                                          Navigator.pop(context);
+                                        }
+                                      },
+                                      child: const Text('Add'),
+                                    ),
+                                  ],
+                                );
+                              }
+                            );
+                          }
+                        );
+                      },
+                      child: const Text("Add New Tag"),
+                    )
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text("Close"),
+                ),
+              ],
+            );
+          }
+        );
+      }
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    double width = MediaQuery.of(context).size.width;
+    Stream<List<FileSystemEntity>> fileStream = watchDirectory();
+
+    return RawKeyboardListener(
+      focusNode: FocusNode(),
+      autofocus: true,
+      onKey: (event) {
+        if (event is RawKeyDownEvent) {
+          if (event.logicalKey == LogicalKeyboardKey.controlLeft ||
+              event.logicalKey == LogicalKeyboardKey.controlRight) {
+          } else if (event.logicalKey == LogicalKeyboardKey.keyH &&
+              event.isControlPressed) {
+            setState(() {
+              showHiddenFiles = !showHiddenFiles;
+              if (selectedTag == null) {
+                openDirectory(currentDir);
+              }
+            });
+          } else if (event.logicalKey == LogicalKeyboardKey.space) {
+            if (previewImagePath != null) {
+              setState(() {
+                previewImagePath = null;
+              });
+            } else if (selectedPaths.length == 1) {
+              String path = selectedPaths.first;
+              String lower = path.toLowerCase();
+              if (lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
+                setState(() {
+                  previewImagePath = path;
+                });
+              }
+            }
+          } else if (event.logicalKey == LogicalKeyboardKey.delete || event.logicalKey == LogicalKeyboardKey.backspace) {
+            if (selectedPaths.isNotEmpty) {
+              for (String path in selectedPaths.toList()) {
+                try {
+                  var result = Process.runSync('gio', ['trash', path]);
+                  if (result.exitCode != 0) {
+                    FileSystemEntity.typeSync(path) == FileSystemEntityType.directory 
+                        ? Directory(path).deleteSync(recursive: true)
+                        : File(path).deleteSync();
+                  }
+                } catch (e) {
+                  FileSystemEntity.typeSync(path) == FileSystemEntityType.directory 
+                      ? Directory(path).deleteSync(recursive: true)
+                      : File(path).deleteSync();
+                }
+              }
+              setState(() {
+                selectedPaths.clear();
+              });
+            }
+          } else if (event.logicalKey == LogicalKeyboardKey.keyC && event.isControlPressed) {
+            if (selectedPaths.isNotEmpty) {
+              Clipboard.setData(ClipboardData(text: selectedPaths.join('\n')));
+            }
+          } else if (event.logicalKey == LogicalKeyboardKey.keyV && event.isControlPressed) {
+            pasteFile(currentDir);
+          }
+        }
+      },
+      child: Scaffold(
+        backgroundColor: FyrTheme.bgColor,
+        appBar: null,
+        body: Stack(
+          children: [
+            Column(
+              children: [
+                GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onPanStart: (details) {
+                    windowManager.startDragging();
+                  },
+                  onDoubleTap: () async {
+                    if (await windowManager.isMaximized()) {
+                      windowManager.unmaximize();
+                    } else {
+                      windowManager.maximize();
+                    }
+                  },
+                  child: Container(
+                    height: 55 + getToolbarPadding(),
+                    padding: EdgeInsets.only(top: getToolbarPadding(), left: 16, right: 16),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        InkWell(
+                          onTap: () => windowManager.close(),
+                          child: Icon(Icons.circle, color: Colors.red.shade300, size: 16),
+                        ),
+                        const SizedBox(width: 8),
+                        InkWell(
+                          onTap: () => windowManager.minimize(),
+                          child: Icon(Icons.circle, color: Colors.amber.shade300, size: 16),
+                        ),
+                        const SizedBox(width: 8),
+                        InkWell(
+                          onTap: () async {
+                            if (await windowManager.isMaximized()) {
+                              windowManager.unmaximize();
+                            } else {
+                              windowManager.maximize();
+                            }
+                          },
+                          child: Icon(Icons.circle, color: Colors.green.shade300, size: 16),
+                        ),
+                        const SizedBox(width: 24),
+                        if (currentDir.path != currentDir.parent.path)
+                          IconButton(
+                            icon: const Icon(Icons.arrow_back),
+                            onPressed: () {
+                              if (selectedTag != null) {
+                                setState(() {
+                                  selectedTag = null;
+                                });
+                              } else {
+                                openDirectory(currentDir.parent);
+                              }
+                            },
+                            iconSize: 24.0,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                          ),
+                        if (currentDir.path != currentDir.parent.path)
+                          const SizedBox(width: 16),
+                        Expanded(
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: RichText(
+                              text: TextSpan(
+                                children: getParentDirectories(currentDir).map((dir) {
+                                  return TextSpan(
+                                    text: displayText(dir, currentDir, selectedTag != null),
+                                    style: TextStyle(
+                                      color: MediaQuery.of(context).platformBrightness == Brightness.dark
+                                          ? Colors.white
+                                          : Colors.black,
+                                    ),
+                                    recognizer: TapGestureRecognizer()
+                                      ..onTap = () {
+                                        selectedTag = null;
+                                        openDirectory(dir);
+                                      },
+                                  );
+                                }).toList(),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          icon: const Icon(Icons.search, size: 20),
+                          onPressed: () {
+                            showDialog(
+                              context: context,
+                              builder: (context) => AlertDialog(
+                                title: const Text('Search'),
+                                content: const TextField(
+                                  decoration: InputDecoration(hintText: "Search files..."),
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(context),
+                                    child: const Text('Close'),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                        ),
+                        const SizedBox(width: 8),
+                        const Text('Filter:', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                        const SizedBox(width: 8),
+                        Theme(
+                          data: Theme.of(context).copyWith(
+                            focusColor: Colors.transparent,
+                            hoverColor: Colors.transparent,
+                            highlightColor: Colors.transparent,
+                            splashColor: Colors.transparent,
+                          ),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.grey.withOpacity(0.3)),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<String>(
+                                focusNode: FocusNode(canRequestFocus: false, skipTraversal: true),
+                                value: selectedTag,
+                                icon: const Icon(Icons.arrow_drop_down, size: 20),
+                                items: [
+                                  const DropdownMenuItem(
+                                    value: null,
+                                    child: Text('All Files'),
+                                  ),
+                                  ...customTags.map((tag) => DropdownMenuItem(
+                                        value: tag['id'],
+                                        child: Row(children: [getDotColor(Color(tag['colorValue'])), const SizedBox(width: 8), Text(tag['name'])]),
+                                      ))
+                                ],
+                                onChanged: (String? newValue) {
+                                  setState(() {
+                                    selectedTag = newValue;
+                                  });
+                                },
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          icon: const Icon(Icons.settings, size: 20),
+                          onPressed: () {
+                            _showTagsSettingsModal(context);
+                          },
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: Row(
+                    children: [
+                      Container(
+                        width: isSidebarCollapsed ? 64 : 200,
+                        color: MediaQuery.of(context).platformBrightness == Brightness.dark
+                            ? FyrTheme.bgColor
+                            : const Color(0xFFF0F0F0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.only(left: 8.0, top: 8.0, bottom: 8.0),
+                              child: IconButton(
+                                icon: Icon(isSidebarCollapsed ? Icons.menu : Icons.menu_open, color: FyrTheme.accentColor),
+                                onPressed: () {
+                                  setState(() {
+                                    isSidebarCollapsed = !isSidebarCollapsed;
+                                  });
+                                },
+                              ),
+                            ),
+                            Expanded(
+                              child: ListView(
+                                padding: EdgeInsets.zero,
+                                children: [
+                                  _buildSidebarItem(Icons.home, 'Home', () => getHomeDirectoryByPlatform().then((d) => openDirectory(d))),
+                                  _buildSidebarItem(Icons.desktop_mac, 'Desktop', () => getHomeDirectoryByPlatform().then((d) => openDirectory(Directory(p.join(d.path, 'Desktop'))))),
+                                  _buildSidebarItem(Icons.library_music, 'Music', () => getHomeDirectoryByPlatform().then((d) => openDirectory(Directory(p.join(d.path, 'Music'))))),
+                                  _buildSidebarItem(Icons.photo_library, 'Pictures', () => getHomeDirectoryByPlatform().then((d) => openDirectory(Directory(p.join(d.path, 'Pictures'))))),
+                                  _buildSidebarItem(Icons.file_download, 'Downloads', () => getHomeDirectoryByPlatform().then((d) => openDirectory(Directory(p.join(d.path, 'Downloads'))))),
+                                  _buildSidebarItem(Icons.delete, 'Trash', () => getHomeDirectoryByPlatform().then((d) => openDirectory(Directory(p.join(d.path, '.local/share/Trash/files'))))),
+                                  _buildSidebarItem(Icons.computer, 'My Computer', () => openDirectory(Directory('/'))),
+                                  const Divider(),
+                                  if (!isSidebarCollapsed)
+                                    const Padding(
+                                      padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                                      child: Text("Custom Pins", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                                    ),
+                                  ...customPins.map((pin) => _buildSidebarItem(Icons.folder, p.basename(pin), () => openDirectory(Directory(pin)), onUnpin: () {
+                                    setState(() {
+                                      customPins.remove(pin);
+                                    });
+                                    saveCustomPins();
+                                  })),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (MediaQuery.of(context).platformBrightness == Brightness.dark)
+                        VerticalDivider(width: 1, thickness: 1, color: Colors.white.withOpacity(0.1)),
+                      Expanded(
+                        child: StreamBuilder<List<FileSystemEntity>>(
+                          stream: fileStream,
+                          builder: (context, snapshot) {
+                            if (snapshot.hasData) {
+                              files = snapshot.data as List<FileSystemEntity>;
+                              return GestureDetector(
+                onTap: () {
+                  setState(() {
+                    selectedPaths.clear();
+                  });
+                },
+                onLongPressStart: (LongPressStartDetails details) async {
+                  await openBodyContextMenu(context, details);
+                },
+                onSecondaryTapDown: (TapDownDetails details) async {
+                  if (!isFileContextMenuShown) {
+                    await openBodyContextMenuRightClickTap(context, details.globalPosition);
+                  }
+                },
+                onPanStart: (details) {
+                  setState(() {
+                    dragStart = details.localPosition;
+                    dragCurrent = details.localPosition;
+                    selectedPaths.clear();
+                  });
+                },
+                onPanUpdate: (details) {
+                  setState(() {
+                    dragCurrent = details.localPosition;
+                  });
+                  _updateSelection();
+                },
+                onPanEnd: (details) {
+                  setState(() {
+                    dragStart = null;
+                    dragCurrent = null;
+                  });
+                },
+                child: Stack(
+                  children: [
+                    GridView.builder(
+                      controller: _scrollController,
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: (width / 120).floor()),
+                      itemCount: files.length,
+                      itemBuilder: (context, index) {
+                        var file = files[index];
+                        var isDir = FileSystemEntity.isDirectorySync(file.path);
+
+                        FileInfo? currentFileInfo = fileInfoList.firstWhere(
+                          (info) => info.filePath == file.path,
+                          orElse: () => FileInfo(filePath: file.path),
+                        );
+
+                        return isAndroid()
+                            ? Material(
+                                color: Colors.transparent,
+                              child: InkWell(
+                                  onTap: () {
+                                    setState(() {
+                                      if (selectedPaths.contains(file.path)) {
+                                        selectedPaths.remove(file.path);
+                                      } else {
+                                        selectedPaths.clear();
+                                        selectedPaths.add(file.path);
+                                      }
+                                    });
+                                  },
+                                  onDoubleTap: () async {
+                                    if (isDir) {
+                                      openDirectory(file as Directory);
+                                    } else {
+                                      var filePath = file.path;
+                                      if (isPicker) { stdout.writeln(filePath); await stdout.flush(); exit(0); } var result = await Process.run(
+                                          'xdg-open', [filePath]);
+                                      if (result.exitCode != 0) {
+                                        stderr.writeln(
+                                            'Could not open $filePath: ${result.stderr}');
+                                      }
+                                    }
+                                  },
+                                  child: Container(
+                                    color: selectedPaths.contains(file.path) ? FyrTheme.accentColor.withOpacity(0.3) : Colors.transparent,
+                                    child: Stack(
+                                        alignment: Alignment.center,
+                                      children: [
+                                        Column(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          children: [
+                                            GestureDetector(
+                                              onLongPressStart:
+                                                  (LongPressStartDetails
+                                                      event) {
+                                                isFileContextMenuShown = true;
+                                                openIconContextMenu(
+                                                        context, event, file)
+                                                    .then((value) =>
+                                                        isFileContextMenuShown =
+                                                            false);
+                                              },
+                                              child: Icon(
+                                                isDir
+                                                    ? Icons.folder
+                                                    : Icons.file_copy,
+                                                size: 48.0,
+                                                color: FyrTheme.accentColor,
+                                              ),
+                                            ),
+                                            Text(
+                                              isDir
+                                                  ? file.path.split('/').last
+                                                  : file.uri.pathSegments.last,
+                                              textAlign: TextAlign.center,
+                                              overflow: TextOverflow.ellipsis,
+                                              maxLines: 1,
+                                            ),
+                                          ],
+                                        ),
+                                        if (currentFileInfo.tag != null)
+                                          Positioned(
+                                              top: 24,
+                                              left: 24,
+                                              child: getDotByTag(
+                                                  currentFileInfo.tag!)),
+                                      ]),
+                                ),
+                              ),
+                            )
+                            : Listener(
+                                behavior: HitTestBehavior.translucent,
+                                onPointerDown: (PointerDownEvent event) {
+                                  if (event.kind == PointerDeviceKind.mouse &&
+                                      event.buttons == kSecondaryMouseButton) {
+                                    isFileContextMenuShown = true;
+                                    openIconContextMenuRightClick(
+                                            context, event, file)
+                                        .then((value) =>
+                                            isFileContextMenuShown = false);
+                                  }
+                                },
+                                child: Material(
+                                  color: Colors.transparent,
+                                  child: GestureDetector(
+                                    onDoubleTap: () async {
+                                      if (isDir) {
+                                        openDirectory(file as Directory);
+                                      } else {
+                                        var filePath = file.path;
+                                        if (isPicker) {
+                                          stdout.write(filePath);
+                                          await stdout.flush();
+                                          exit(0);
+                                        }
+                                        var result = await Process.run(
+                                            'xdg-open', [filePath]);
+                                        if (result.exitCode != 0) {
+                                          stderr.writeln(
+                                              'Could not open $filePath: ${result.stderr}');
+                                        }
+                                      }
+                                    },
+                                    child: InkWell(
+                                      onTap: () {
+                                        setState(() {
+                                          if (selectedPaths.contains(file.path)) {
+                                            selectedPaths.remove(file.path);
+                                          } else {
+                                            selectedPaths.clear();
+                                            selectedPaths.add(file.path);
+                                          }
+                                        });
+                                      },
+                                      child: Container(
+                                        color: selectedPaths.contains(file.path) ? FyrTheme.accentColor.withOpacity(0.3) : Colors.transparent,
+                                        child: Stack(
+                                              alignment: Alignment.center,
+                                            children: [
+                                              Column(
+                                                mainAxisAlignment:
+                                                    MainAxisAlignment.center,
+                                                children: [
+                                                  Icon(
+                                                    isDir
+                                                        ? Icons.folder
+                                                        : Icons.file_copy,
+                                                    size: 48.0,
+                                                    color: FyrTheme.accentColor,
+                                                  ),
+                                                  Text(
+                                                    isDir
+                                                        ? file.path
+                                                            .split('/')
+                                                            .last
+                                                        : file.uri.pathSegments
+                                                            .last,
+                                                    textAlign: TextAlign.center,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    maxLines: 1,
+                                                  ),
+                                                ],
+                                              ),
+                                              if (currentFileInfo.tag != null)
+                                                Positioned(
+                                                    top: 24,
+                                                    left: 24,
+                                                    child: getDotByTag(
+                                                        currentFileInfo.tag!)),
+                                            ]),
+                                      ),
+                                    ))),
+                              );
+                      },
+                    ),
+                    if (dragStart != null && dragCurrent != null)
+                      Positioned(
+                        left: min(dragStart!.dx, dragCurrent!.dx),
+                        top: min(dragStart!.dy, dragCurrent!.dy),
+                        width: (dragCurrent!.dx - dragStart!.dx).abs(),
+                        height: (dragCurrent!.dy - dragStart!.dy).abs(),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: FyrTheme.accentColor.withOpacity(0.3),
+                            border: Border.all(color: FyrTheme.accentColor, width: 1),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              );
+            }
+            return const CircularProgressIndicator();
+          },
+        ),
+                ),
+                    ],
+                  ),
+                ),
+                if (isPicker)
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+                    decoration: BoxDecoration(
+                      color: FyrTheme.bgColor,
+                      border: Border(
+                        top: BorderSide(
+                          color: FyrTheme.accentColor.withOpacity(0.2),
+                          width: 1.0,
+                        ),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed: () => exit(1),
+                          child: Text(
+                            'Cancel',
+                            style: TextStyle(
+                              color: MediaQuery.of(context).platformBrightness == Brightness.dark 
+                                ? Colors.white 
+                                : Colors.black
+                            )
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: FyrTheme.accentColor,
+                            foregroundColor: Colors.white,
+                          ),
+                          onPressed: () async {
+                            String output = selectedPaths.isNotEmpty 
+                                ? selectedPaths.first 
+                                : currentDir.path;
+                            stdout.writeln(output);
+                            await stdout.flush();
+                            exit(0);
+                          },
+                          child: const Text('Select'),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+        if (previewImagePath != null)
+              Positioned.fill(
+                child: GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      previewImagePath = null;
+                    });
+                  },
+                  child: Container(
+                    color: Colors.black.withOpacity(0.8),
+                    child: Center(
+                      child: Image.file(File(previewImagePath!)),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<dynamic> openIconContextMenuRightClick(
+      BuildContext context, PointerDownEvent event, FileSystemEntity file) {
+    return showMenu(
+      context: context,
+      position: RelativeRect.fromLTRB(event.position.dx, event.position.dy,
+          event.position.dx, event.position.dy),
+      items: [
+        PopupMenuItem(
+          child: ListTile(
+            leading: const Icon(Icons.copy),
+            title: const Text('Copy'),
+            onTap: () {
+              String paths = selectedPaths.contains(file.path) && selectedPaths.length > 1 
+                  ? selectedPaths.join('\n') 
+                  : file.path;
+              Clipboard.setData(ClipboardData(text: paths));
+              Navigator.pop(context);
+            },
+          ),
+        ),
+        PopupMenuItem(
+          child: ListTile(
+            leading: const Icon(Icons.edit),
+            title: const Text('Rename'),
+            onTap: () async {
+              Navigator.pop(context);
+              TextEditingController renameController =
+                  TextEditingController(text: file.uri.pathSegments.last);
+              await showDialog(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: const Text('Rename File'),
+                  content: TextField(
+                    controller: renameController,
+                  ),
+                  actions: [
+                    ElevatedButton(
+                      onPressed: () {
+                        Navigator.pop(context);
+                      },
+                      child: const Text('Cancel'),
+                    ),
+                    ElevatedButton(
+                      onPressed: () {
+                        String newName = renameController.text;
+                        String newPath = p.join(p.dirname(file.path), newName);
+                        file.renameSync(newPath);
+                        Navigator.pop(context);
+                      },
+                      child: const Text('Rename'),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+        PopupMenuItem(
+          child: ListTile(
+            leading: const Icon(Icons.delete),
+            title: const Text('Delete'),
+            onTap: () {
+              List<String> toDelete = selectedPaths.contains(file.path) && selectedPaths.length > 1 
+                  ? selectedPaths.toList() 
+                  : [file.path];
+              for (String path in toDelete) {
+                try {
+                  var result = Process.runSync('gio', ['trash', path]);
+                  if (result.exitCode != 0) {
+                    FileSystemEntity.typeSync(path) == FileSystemEntityType.directory 
+                        ? Directory(path).deleteSync(recursive: true)
+                        : File(path).deleteSync();
+                  }
+                } catch (e) {
+                  FileSystemEntity.typeSync(path) == FileSystemEntityType.directory 
+                      ? Directory(path).deleteSync(recursive: true)
+                      : File(path).deleteSync();
+                }
+              }
+              setState(() {
+                selectedPaths.clear();
+              });
+              Navigator.pop(context);
+            },
+          ),
+        ),
+        PopupMenuItem(
+          child: Column(
+            children: [
+              ListTile(
+                leading: const Icon(Icons.info),
+                title: const Text('Properties'),
+                onTap: () {
+                  Navigator.pop(context);
+                  var fileStat = file.statSync();
+                  var properties = fileStatToMap(fileStat, file.path);
+                  showPropertiesDialog(context, properties);
+                },
+              ),
+              if (FileSystemEntity.isDirectorySync(file.path) && !customPins.contains(file.path))
+                ListTile(
+                  leading: const Icon(Icons.push_pin),
+                  title: const Text('Pin to Sidebar'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    setState(() {
+                      customPins.add(file.path);
+                    });
+                    saveCustomPins();
+                  },
+                ),
+            ],
+          ),
+        ),
+        ...customTags.map((tag) => PopupMenuItem(
+          child: GestureDetector(
+              onTap: () async {
+                FileInfo currentFileInfo = fileInfoList.firstWhere(
+                  (info) => info.filePath == file.path,
+                  orElse: () => FileInfo(filePath: file.path),
+                );
+
+                currentFileInfo.tag = tag['id'];
+
+                fileInfoList.removeWhere((info) => info.filePath == file.path);
+                fileInfoList.add(currentFileInfo);
+
+                await writeTagsToFile(fileInfoList, tagsFilePath);
+
+                Navigator.pop(context);
+              },
+              child: Row(
+                children: [
+                  getDotColor(Color(tag['colorValue'])),
+                  const SizedBox(width: 8),
+                  Text(tag['name']),
+                ],
+              )),
+        )),
+      ],
+    );
+  }
+
+  openBodyContextMenuRightClickTap(BuildContext context, Offset position) async {
+    showMenu(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        position.dx,
+        position.dy,
+        position.dx,
+        position.dy,
+      ),
+      items: [
+        PopupMenuItem(
+          child: ListTile(
+            leading: const Icon(Icons.create),
+            title: const Text('Create File'),
+            onTap: () {
+              Navigator.pop(context);
+              showDialog(
+                context: context,
+                builder: (context) {
+                  TextEditingController fileNameController =
+                      TextEditingController();
+                  return AlertDialog(
+                    title: const Text('Enter File Name'),
+                    content: TextField(
+                      controller: fileNameController,
+                      decoration: const InputDecoration(hintText: "File name"),
+                    ),
+                    actions: <Widget>[
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Cancel'),
+                      ),
+                      TextButton(
+                        onPressed: () async {
+                          if (fileNameController.text.isNotEmpty) {
+                            await createFile(
+                                currentDir, fileNameController.text);
+                            Navigator.pop(context);
+                          }
+                        },
+                        child: const Text('Create'),
+                      ),
+                    ],
+                  );
+                },
+              );
+            },
+          ),
+        ),
+        PopupMenuItem(
+          child: ListTile(
+            leading: const Icon(Icons.create),
+            title: const Text('Create Directory'),
+            onTap: () {
+              Navigator.pop(context);
+              showDialog(
+                context: context,
+                builder: (context) {
+                  TextEditingController dirNameController =
+                      TextEditingController();
+                  return AlertDialog(
+                    title: const Text('Enter Directory Name'),
+                    content: TextField(
+                      controller: dirNameController,
+                      decoration:
+                          const InputDecoration(hintText: "Directory name"),
+                    ),
+                    actions: <Widget>[
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Cancel'),
+                      ),
+                      TextButton(
+                        onPressed: () async {
+                          if (dirNameController.text.isNotEmpty) {
+                            await createDir(currentDir, dirNameController.text);
+                            Navigator.pop(context);
+                          }
+                        },
+                        child: const Text('Create'),
+                      ),
+                    ],
+                  );
+                },
+              );
+            },
+          ),
+        ),
+        PopupMenuItem(
+          enabled: await isClipboardDataAvailable(),
+          child: ListTile(
+            leading: const Icon(Icons.paste),
+            title: const Text('Paste'),
+            onTap: () async {
+              await pasteFile(currentDir);
+              Navigator.pop(context);
+            },
+          ),
+        ),
+        PopupMenuItem(
+          child: ListTile(
+            leading: const Icon(Icons.info),
+            title: const Text('Properties'),
+            onTap: () {
+              Navigator.pop(context);
+              var dirStat = currentDir.statSync();
+              var properties = dirStatToMap(dirStat, currentDir.path);
+              showPropertiesDialog(context, properties);
+            },
+          ),
+        ),
+        PopupMenuItem(
+          child: ListTile(
+            leading: const Icon(Icons.terminal),
+            title: const Text('Open in Terminal'),
+            onTap: () {
+              Navigator.pop(context);
+              Process.run('fyrterm', [], workingDirectory: currentDir.path);
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  openBodyContextMenu(
+      BuildContext context, LongPressStartDetails details) async {
+    showMenu(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        details.globalPosition.dx,
+        details.globalPosition.dy,
+        details.globalPosition.dx,
+        details.globalPosition.dy,
+      ),
+      items: [
+        PopupMenuItem(
+          child: ListTile(
+            leading: const Icon(Icons.create),
+            title: const Text('Create File'),
+            onTap: () {
+              Navigator.pop(context);
+              showDialog(
+                context: context,
+                builder: (context) {
+                  TextEditingController fileNameController =
+                      TextEditingController();
+                  return AlertDialog(
+                    title: const Text('Enter File Name'),
+                    content: TextField(
+                      controller: fileNameController,
+                      decoration: const InputDecoration(hintText: "File name"),
+                    ),
+                    actions: <Widget>[
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Cancel'),
+                      ),
+                      TextButton(
+                        onPressed: () async {
+                          if (fileNameController.text.isNotEmpty) {
+                            await createFile(
+                                currentDir, fileNameController.text);
+                            Navigator.pop(context);
+                          }
+                        },
+                        child: const Text('Create'),
+                      ),
+                    ],
+                  );
+                },
+              );
+            },
+          ),
+        ),
+        PopupMenuItem(
+          child: ListTile(
+            leading: const Icon(Icons.create),
+            title: const Text('Create Directory'),
+            onTap: () {
+              Navigator.pop(context);
+              showDialog(
+                context: context,
+                builder: (context) {
+                  TextEditingController dirNameController =
+                      TextEditingController();
+                  return AlertDialog(
+                    title: const Text('Enter Directory Name'),
+                    content: TextField(
+                      controller: dirNameController,
+                      decoration:
+                          const InputDecoration(hintText: "Directory name"),
+                    ),
+                    actions: <Widget>[
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Cancel'),
+                      ),
+                      TextButton(
+                        onPressed: () async {
+                          if (dirNameController.text.isNotEmpty) {
+                            await createDir(currentDir, dirNameController.text);
+                            Navigator.pop(context);
+                          }
+                        },
+                        child: const Text('Create'),
+                      ),
+                    ],
+                  );
+                },
+              );
+            },
+          ),
+        ),
+        PopupMenuItem(
+          enabled: await isClipboardDataAvailable(),
+          child: ListTile(
+            leading: const Icon(Icons.paste),
+            title: const Text('Paste'),
+            onTap: () async {
+              await pasteFile(currentDir);
+              Navigator.pop(context);
+            },
+          ),
+        ),
+        PopupMenuItem(
+          child: ListTile(
+            leading: const Icon(Icons.info),
+            title: const Text('Properties'),
+            onTap: () {
+              Navigator.pop(context);
+              var dirStat = currentDir.statSync();
+              var properties = dirStatToMap(dirStat, currentDir.path);
+              showPropertiesDialog(context, properties);
+            },
+          ),
+        ),
+        PopupMenuItem(
+          child: ListTile(
+            leading: const Icon(Icons.terminal),
+            title: const Text('Open in Terminal'),
+            onTap: () {
+              Navigator.pop(context);
+              Process.run('fyrterm', [], workingDirectory: currentDir.path);
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<dynamic> openIconContextMenu(BuildContext context,
+      LongPressStartDetails event, FileSystemEntity file) {
+    return showMenu(
+      context: context,
+      position: RelativeRect.fromLTRB(
+          event.globalPosition.dx,
+          event.globalPosition.dy,
+          event.globalPosition.dx,
+          event.globalPosition.dy),
+      items: [
+        PopupMenuItem(
+          child: ListTile(
+            leading: const Icon(Icons.copy),
+            title: const Text('Copy'),
+            onTap: () {
+              String paths = selectedPaths.contains(file.path) && selectedPaths.length > 1 
+                  ? selectedPaths.join('\n') 
+                  : file.path;
+              Clipboard.setData(ClipboardData(text: paths));
+              Navigator.pop(context);
+            },
+          ),
+        ),
+        PopupMenuItem(
+          child: ListTile(
+            leading: const Icon(Icons.edit),
+            title: const Text('Rename'),
+            onTap: () async {
+              Navigator.pop(context);
+              TextEditingController renameController =
+                  TextEditingController(text: file.uri.pathSegments.last);
+              await showDialog(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: const Text('Rename File'),
+                  content: TextField(
+                    controller: renameController,
+                  ),
+                  actions: [
+                    ElevatedButton(
+                      onPressed: () {
+                        Navigator.pop(context);
+                      },
+                      child: const Text('Cancel'),
+                    ),
+                    ElevatedButton(
+                      onPressed: () {
+                        String newName = renameController.text;
+                        String newPath = p.join(p.dirname(file.path), newName);
+                        file.renameSync(newPath);
+                        Navigator.pop(context);
+                      },
+                      child: const Text('Rename'),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+        PopupMenuItem(
+          child: ListTile(
+            leading: const Icon(Icons.delete),
+            title: const Text('Delete'),
+            onTap: () {
+              List<String> toDelete = selectedPaths.contains(file.path) && selectedPaths.length > 1 
+                  ? selectedPaths.toList() 
+                  : [file.path];
+              for (String path in toDelete) {
+                try {
+                  var result = Process.runSync('gio', ['trash', path]);
+                  if (result.exitCode != 0) {
+                    FileSystemEntity.typeSync(path) == FileSystemEntityType.directory 
+                        ? Directory(path).deleteSync(recursive: true)
+                        : File(path).deleteSync();
+                  }
+                } catch (e) {
+                  FileSystemEntity.typeSync(path) == FileSystemEntityType.directory 
+                      ? Directory(path).deleteSync(recursive: true)
+                      : File(path).deleteSync();
+                }
+              }
+              setState(() {
+                selectedPaths.clear();
+              });
+              Navigator.pop(context);
+            },
+          ),
+        ),
+        PopupMenuItem(
+          child: Column(
+            children: [
+              ListTile(
+                leading: const Icon(Icons.info),
+                title: const Text('Properties'),
+                onTap: () {
+                  Navigator.pop(context);
+                  var fileStat = file.statSync();
+                  var properties = fileStatToMap(fileStat, file.path);
+                  showPropertiesDialog(context, properties);
+                },
+              ),
+              if (FileSystemEntity.isDirectorySync(file.path) && !customPins.contains(file.path))
+                ListTile(
+                  leading: const Icon(Icons.push_pin),
+                  title: const Text('Pin to Sidebar'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    setState(() {
+                      customPins.add(file.path);
+                    });
+                    saveCustomPins();
+                  },
+                ),
+            ],
+          ),
+        ),
+        ...customTags.map((tag) => PopupMenuItem(
+          child: GestureDetector(
+              onTap: () async {
+                FileInfo currentFileInfo = fileInfoList.firstWhere(
+                  (info) => info.filePath == file.path,
+                  orElse: () => FileInfo(filePath: file.path),
+                );
+
+                currentFileInfo.tag = tag['id'];
+
+                fileInfoList.removeWhere((info) => info.filePath == file.path);
+                fileInfoList.add(currentFileInfo);
+
+                await writeTagsToFile(fileInfoList, tagsFilePath);
+
+                Navigator.pop(context);
+              },
+              child: Row(
+                children: [
+                  getDotColor(Color(tag['colorValue'])),
+                  const SizedBox(width: 8),
+                  Text(tag['name']),
+                ],
+              )),
+        )),
+      ],
+    );
+  }
+}

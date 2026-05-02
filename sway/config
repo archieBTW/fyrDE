@@ -44,7 +44,7 @@ bindsym XF86AudioMicMute exec wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle
 bindsym XF86MonBrightnessUp exec brightnessctl set +5%
 bindsym XF86MonBrightnessDown exec brightnessctl set 5%-
 bindsym Print exec grim ~/Pictures/Screenshots/$(date +'%Y-%m-%d_%H-%M-%S').png
-bindsym $mod+t exec flutterm
+bindsym $mod+t exec fyrterm
 bindsym $mod+f exec fyr_files
 
 # -------------------------------------------------------------
