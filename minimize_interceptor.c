@@ -32,33 +32,7 @@ void window_manager_minimize() {
     do_minimize();
 }
 
-void gtk_window_maximize(void *window) {
-    static void (*real_max)(void*) = NULL;
-    if (!real_max) real_max = dlsym(RTLD_NEXT, "gtk_window_maximize");
-    if (real_max) real_max(window);
-    do_maximize();
-}
 
-void gtk_window_unmaximize(void *window) {
-    static void (*real_unmax)(void*) = NULL;
-    if (!real_unmax) real_unmax = dlsym(RTLD_NEXT, "gtk_window_unmaximize");
-    if (real_unmax) real_unmax(window);
-    do_maximize();
-}
-
-void gtk_window_fullscreen(void *window) {
-    static void (*real_full)(void*) = NULL;
-    if (!real_full) real_full = dlsym(RTLD_NEXT, "gtk_window_fullscreen");
-    if (real_full) real_full(window);
-    do_maximize();
-}
-
-void gtk_window_unfullscreen(void *window) {
-    static void (*real_unfull)(void*) = NULL;
-    if (!real_unfull) real_unfull = dlsym(RTLD_NEXT, "gtk_window_unfullscreen");
-    if (real_unfull) real_unfull(window);
-    do_maximize();
-}
 
 void gtk_actionable_set_action_name(void *actionable, const char *action_name) {
     static void (*real_set)(void*, const char*) = NULL;

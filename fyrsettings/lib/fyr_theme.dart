@@ -101,7 +101,9 @@ class FyrTheme {
           }
           return line;
         }).toList();
-        await swayConfigFile.writeAsString('${newLines.join('\n')}\n');
+        final tempFile = File('${swayConfigFile.path}.tmp');
+        await tempFile.writeAsString('${newLines.join('\n')}\n');
+        await tempFile.rename(swayConfigFile.path);
         Process.run('swaymsg', ['reload']);
       }
     } catch (e) {
@@ -111,37 +113,40 @@ class FyrTheme {
 
   static String get iconThemeName {
     final currentColor = accentColorNotifier.value;
-    final mode = themeModeNotifier.value;
+    final r = currentColor.red;
+    final g = currentColor.green;
+    final b = currentColor.blue;
 
-    final int val = currentColor.value;
-    String baseIconTheme = 'purple';
-    if (val == Colors.purpleAccent.value ||
-        val == Colors.purple.value ||
-        val == Colors.deepPurpleAccent.value) {
-      baseIconTheme = 'purple';
-    } else if (val == Colors.indigoAccent.value ||
-        val == Colors.blueAccent.value ||
-        val == Colors.lightBlueAccent.value) {
-      baseIconTheme = 'blue';
-    } else if (val == Colors.cyanAccent.value || val == Colors.tealAccent.value) {
-      baseIconTheme = 'standard';
-    } else if (val == Colors.greenAccent.value ||
-        val == Colors.lightGreenAccent.value ||
-        val == Colors.limeAccent.value) {
-      baseIconTheme = 'green';
-    } else if (val == Colors.yellowAccent.value ||
-        val == Colors.amberAccent.value) {
-      baseIconTheme = 'yellow';
-    } else if (val == Colors.orangeAccent.value ||
-        val == Colors.deepOrangeAccent.value) {
-      baseIconTheme = 'orange';
-    } else if (val == Colors.redAccent.value) {
-      baseIconTheme = 'red';
-    } else if (val == Colors.pinkAccent.value) {
-      baseIconTheme = 'pink';
+    final Map<String, Color> themeColors = {
+      'purple': Colors.purple,
+      'blue': Colors.blue,
+      'standard': Colors.teal,
+      'green': Colors.green,
+      'yellow': Colors.yellow,
+      'orange': Colors.orange,
+      'red': Colors.red,
+      'pink': Colors.pink,
+    };
+
+    String bestTheme = 'purple';
+    double minDistance = double.infinity;
+
+    for (final entry in themeColors.entries) {
+      final tc = entry.value;
+      final dist = (r - tc.red) * (r - tc.red) +
+                   (g - tc.green) * (g - tc.green) +
+                   (b - tc.blue) * (b - tc.blue);
+      if (dist < minDistance) {
+        minDistance = dist.toDouble();
+        bestTheme = entry.key;
+      }
     }
 
-    return 'Tela-$baseIconTheme-dark';
+    final isDark = themeModeNotifier.value == ThemeMode.dark;
+    if (bestTheme == 'standard') {
+      return isDark ? 'Tela-dark' : 'Tela';
+    }
+    return isDark ? 'Tela-$bestTheme-dark' : 'Tela-$bestTheme';
   }
 
   static Future<void> _updateGtkSettings(ThemeMode mode, {Color? color}) async {
@@ -163,7 +168,9 @@ class FyrTheme {
       content += 'gtk-application-prefer-dark-theme=$preferDark\n';
       content += 'gtk-decoration-layout=close,minimize,maximize:\n';
 
-      await gtk3File.writeAsString(content);
+      final tempGtk3File = File('${gtk3Dir.path}/settings.ini.tmp');
+      await tempGtk3File.writeAsString(content);
+      await tempGtk3File.rename(gtk3File.path);
 
       final gtk4Dir = Directory(
         '${Platform.environment['HOME']}/.config/gtk-4.0',
@@ -171,7 +178,9 @@ class FyrTheme {
       if (!gtk4Dir.existsSync()) gtk4Dir.createSync(recursive: true);
 
       final gtk4File = File('${gtk4Dir.path}/settings.ini');
-      await gtk4File.writeAsString(content);
+      final tempGtk4File = File('${gtk4Dir.path}/settings.ini.tmp');
+      await tempGtk4File.writeAsString(content);
+      await tempGtk4File.rename(gtk4File.path);
 
       final gtk4CssFile = File('${gtk4Dir.path}/gtk.css');
       final targetCssName = mode == ThemeMode.light
@@ -179,8 +188,9 @@ class FyrTheme {
           : 'gtk-dark.css';
       final targetCssFile = File('${gtk4Dir.path}/$targetCssName');
       if (targetCssFile.existsSync()) {
-        if (gtk4CssFile.existsSync()) gtk4CssFile.deleteSync();
-        targetCssFile.copySync(gtk4CssFile.path);
+        final tempCssFile = File('${gtk4Dir.path}/gtk.css.tmp');
+        targetCssFile.copySync(tempCssFile.path);
+        tempCssFile.renameSync(gtk4CssFile.path);
       }
 
       Process.run('gsettings', [
@@ -213,7 +223,9 @@ class FyrTheme {
         dir.createSync(recursive: true);
       }
       final file = File('${dir.path}/theme_mode.txt');
-      await file.writeAsString(mode == ThemeMode.light ? 'light' : 'dark');
+      final tempFile = File('${dir.path}/theme_mode.txt.tmp');
+      await tempFile.writeAsString(mode == ThemeMode.light ? 'light' : 'dark');
+      await tempFile.rename(file.path);
       themeModeNotifier.value = mode;
       await _updateGtkSettings(mode);
     } catch (e) {

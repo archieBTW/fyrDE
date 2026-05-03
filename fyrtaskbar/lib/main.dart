@@ -1193,96 +1193,96 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: [
-              ValueListenableBuilder<String?>(
-                valueListenable: SystemState.wifiSsid,
-                builder: (context, ssid, _) {
-                  return _QuickToggle(
-                    icon: ssid != null ? Icons.wifi : Icons.wifi_off,
-                    label: ssid ?? "Wi-Fi",
-                    isActive: _wifiEnabled,
-                    onTap: _toggleWifi,
-                    onLongPress: _scanWifi,
-                  );
-                },
-              ),
-              SizedBox(width: 12),
-              ValueListenableBuilder<List<String>>(
-                valueListenable: SystemState.bluetoothDevices,
-                builder: (context, devices, _) {
-                  final hasDevices = devices.isNotEmpty;
-                  return _QuickToggle(
-                    icon: hasDevices
-                        ? Icons.bluetooth_connected
-                        : Icons.bluetooth,
-                    label: hasDevices ? devices.first : "Bluetooth",
-                    isActive: _bluetoothEnabled,
-                    onTap: _toggleBluetooth,
-                    onLongPress: _scanBluetooth,
-                  );
-                },
-              ),
-              SizedBox(width: 12),
-              _QuickToggle(
-                icon: Icons.airplanemode_active,
-                label: "Airplane",
-                isActive: _airplaneModeEnabled,
-                onTap: _toggleAirplaneMode,
-              ),
-              SizedBox(width: 12),
-              _QuickToggle(
-                icon: Icons.nightlight_round,
-                label: "Night Light",
-                isActive: _nightLightEnabled,
-                onTap: _toggleNightLight,
-              ),
-              SizedBox(width: 12),
-              _QuickToggle(
-                icon: Icons.layers,
-                label: "Floating",
-                isActive: _floatingModeEnabled,
-                onTap: _toggleFloatingMode,
-              ),
-              SizedBox(width: 12),
-              _QuickToggle(
-                icon: Icons.visibility_off,
-                label: "Dock Autohide",
-                isActive: _dockAutohideEnabled,
-                onTap: _toggleDockAutohide,
-              ),
-              SizedBox(width: 12),
-              ValueListenableBuilder<ThemeMode>(
-                valueListenable: FyrTheme.themeModeNotifier,
-                builder: (context, themeMode, _) {
-                  final isDark = themeMode == ThemeMode.dark;
-                  return _QuickToggle(
-                    icon: isDark ? Icons.dark_mode : Icons.light_mode,
-                    label: isDark ? "Dark Mode" : "Light Mode",
-                    isActive: isDark,
-                    onTap: () {
-                      FyrTheme.setThemeMode(
-                        isDark ? ThemeMode.light : ThemeMode.dark,
-                      );
-                    },
-                  );
-                },
-              ),
-              SizedBox(width: 12),
-              _QuickToggle(
-                icon: Icons.settings,
-                label: "Settings",
-                isActive: false,
-                onTap: () {
-                  _runCmd('/opt/fyrsettings/fyrsettings', []);
-                  widget.onClose();
-                },
-              ),
-              // SizedBox(width: 32),
-            ],
-          ),
+        Column(
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                ValueListenableBuilder<String?>(
+                  valueListenable: SystemState.wifiSsid,
+                  builder: (context, ssid, _) {
+                    return _QuickToggle(
+                      icon: ssid != null ? Icons.wifi : Icons.wifi_off,
+                      label: ssid ?? "Wi-Fi",
+                      isActive: _wifiEnabled,
+                      onTap: _toggleWifi,
+                      onLongPress: _scanWifi,
+                    );
+                  },
+                ),
+                ValueListenableBuilder<List<String>>(
+                  valueListenable: SystemState.bluetoothDevices,
+                  builder: (context, devices, _) {
+                    final hasDevices = devices.isNotEmpty;
+                    return _QuickToggle(
+                      icon: hasDevices
+                          ? Icons.bluetooth_connected
+                          : Icons.bluetooth,
+                      label: hasDevices ? devices.first : "Bluetooth",
+                      isActive: _bluetoothEnabled,
+                      onTap: _toggleBluetooth,
+                      onLongPress: _scanBluetooth,
+                    );
+                  },
+                ),
+                _QuickToggle(
+                  icon: Icons.airplanemode_active,
+                  label: "Airplane",
+                  isActive: _airplaneModeEnabled,
+                  onTap: _toggleAirplaneMode,
+                ),
+                _QuickToggle(
+                  icon: Icons.nightlight_round,
+                  label: "Night Light",
+                  isActive: _nightLightEnabled,
+                  onTap: _toggleNightLight,
+                ),
+              ],
+            ),
+            SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _QuickToggle(
+                  icon: Icons.layers,
+                  label: "Floating",
+                  isActive: _floatingModeEnabled,
+                  onTap: _toggleFloatingMode,
+                ),
+                _QuickToggle(
+                  icon: Icons.visibility_off,
+                  label: "Dock Autohide",
+                  isActive: _dockAutohideEnabled,
+                  onTap: _toggleDockAutohide,
+                ),
+                ValueListenableBuilder<ThemeMode>(
+                  valueListenable: FyrTheme.themeModeNotifier,
+                  builder: (context, themeMode, _) {
+                    final isDark = themeMode == ThemeMode.dark;
+                    return _QuickToggle(
+                      icon: isDark ? Icons.dark_mode : Icons.light_mode,
+                      label: isDark ? "Dark Mode" : "Light Mode",
+                      isActive: isDark,
+                      onTap: () {
+                        FyrTheme.setThemeMode(
+                          isDark ? ThemeMode.light : ThemeMode.dark,
+                        );
+                      },
+                    );
+                  },
+                ),
+                _QuickToggle(
+                  icon: Icons.settings,
+                  label: "Settings",
+                  isActive: false,
+                  onTap: () {
+                    _runCmd('/opt/fyrsettings/fyrsettings', []);
+                    widget.onClose();
+                  },
+                ),
+              ],
+            ),
+          ],
         ),
         SizedBox(height: 24),
         _SliderRow(

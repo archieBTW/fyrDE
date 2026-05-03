@@ -33,7 +33,7 @@ if [ "$OS" = "arch" ] || [ "$OS" = "manjaro" ] || [ "$OS" = "endeavouros" ]; the
         "swaybg" "swaylock" "swayidle" "xorg-xwayland" "foot" "wmenu"
         "gtk-layer-shell" "xdg-desktop-portal" "xdg-desktop-portal-gtk"
         "xdg-desktop-portal-wlr" "xclip" "wl-clipboard" "brightnessctl"
-        "wireplumber" "wlsunset" "cmake" "cpio" "pkg-config" "gcc" "grim" "ninja" "clang"
+        "wireplumber" "wlsunset" "cmake" "cpio" "pkg-config" "gcc" "wf-recorder" "grim" "ninja" "clang"
     )
 
     echo "Installing official dependencies via pacman..."
@@ -50,7 +50,7 @@ elif [ "$OS" = "ubuntu" ] || [ "$OS" = "debian" ]; then
         "swaybg" "swaylock" "swayidle" "xwayland" "foot" "libgtk-layer-shell-dev"
         "xdg-desktop-portal" "xdg-desktop-portal-gtk" "xdg-desktop-portal-wlr"
         "xclip" "wl-clipboard" "brightnessctl" "wireplumber" "cmake" "cpio"
-        "pkg-config" "gcc" "grim" "ninja-build" "clang" "curl" "git" "unzip" "xz-utils" "zip" "libglu1-mesa" "sway"
+        "pkg-config" "gcc" "wf-recorder" "grim" "ninja-build" "clang" "curl" "git" "unzip" "xz-utils" "zip" "libglu1-mesa" "sway"
     )
 
     echo "Installing official dependencies via apt..."
@@ -70,7 +70,7 @@ elif [ "$OS" = "fedora" ]; then
         "swaybg" "swaylock" "swayidle" "xorg-x11-server-Xwayland" "foot" "gtk-layer-shell-devel"
         "xdg-desktop-portal" "xdg-desktop-portal-gtk" "xdg-desktop-portal-wlr"
         "xclip" "wl-clipboard" "brightnessctl" "wireplumber" "cmake" "cpio"
-        "pkgconf" "gcc" "grim" "ninja-build" "clang" "curl" "git" "unzip" "zip" "mesa-libGLU" "sway"
+        "pkgconf" "gcc" "wf-recorder" "grim" "ninja-build" "clang" "curl" "git" "unzip" "zip" "mesa-libGLU" "sway"
     )
 
     echo "Installing official dependencies via dnf..."
@@ -212,6 +212,22 @@ chmod +x ~/.config/fyr/toggle_floating.sh
 
 touch ~/.config/sway/floating.conf
 
+echo "Setting up Screen Recording script..."
+cat << 'EOF' > ~/.config/fyr/toggle_recording.sh
+#!/bin/bash
+pid=$(pgrep wf-recorder)
+if [ -n "$pid" ]; then
+    kill -SIGINT $pid
+    notify-send "Screen Recording" "Saved to ~/Videos/screencasts/"
+else
+    mkdir -p ~/Videos/screencasts
+    wf-recorder -f ~/Videos/screencasts/$(date +'%Y-%m-%d_%H-%M-%S').mp4 &
+    notify-send "Screen Recording" "Started"
+fi
+EOF
+chmod +x ~/.config/fyr/toggle_recording.sh
+
+
 echo "Copying sway configuration..."
 mkdir -p ~/.config/sway
 if [ -f "./sway/config" ]; then
@@ -258,7 +274,7 @@ if [ -d "./themes" ]; then
 gtk-theme-name=Fyr-Dark
 gtk-icon-theme-name=Tela-purple-dark
 gtk-application-prefer-dark-theme=1
-gtk-decoration-layout=close,minimize,maximize:
+gtk-decoration-layout=close:
 EOF
 
     cat <<EOF > ~/.config/gtk-4.0/settings.ini
@@ -266,7 +282,7 @@ EOF
 gtk-theme-name=Fyr-Dark
 gtk-icon-theme-name=Tela-purple-dark
 gtk-application-prefer-dark-theme=1
-gtk-decoration-layout=close,minimize,maximize:
+gtk-decoration-layout=close:
 EOF
 
     # Enforce GTK settings using gsettings for libadwaita/gnome apps
