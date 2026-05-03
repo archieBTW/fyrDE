@@ -10,8 +10,8 @@ import 'package:wayland_layer_shell/wayland_layer_shell.dart';
 import 'package:wayland_layer_shell/types.dart';
 import 'dart:convert';
 import 'fyr_theme.dart';
-
-class SystemState {
+import 'calendar_weather.dart';
+import 'workspace_switcher.dart';class SystemState {
   static final ValueNotifier<int> batteryLevel = ValueNotifier(100);
   static final ValueNotifier<bool> isCharging = ValueNotifier(false);
   static final ValueNotifier<String?> wifiSsid = ValueNotifier(null);
@@ -23,11 +23,49 @@ class SystemState {
   static final ValueNotifier<bool> airplaneMode = ValueNotifier(false);
   static final ValueNotifier<bool> floatingMode = ValueNotifier(false);
   static final ValueNotifier<bool> dockAutohide = ValueNotifier(false);
+  static final ValueNotifier<List<Map<String, dynamic>>> workspaces = ValueNotifier([]);
+  static final ValueNotifier<String> splitLayout = ValueNotifier('none');
+  static final ValueNotifier<String> weatherLocation = ValueNotifier('London');
+  static final ValueNotifier<double?> weatherTemp = ValueNotifier(null);
+  static final ValueNotifier<String?> weatherDesc = ValueNotifier(null);
+  static final ValueNotifier<IconData> weatherIcon = ValueNotifier(Icons.cloud);
+
+  static int _updateCount = 0;
   static Timer? _timer;
+
+  static String? _findFocusedLayout(Map<String, dynamic> node, [String? parentLayout]) {
+    if (node['focused'] == true) return parentLayout;
+    if (node['nodes'] != null) {
+      for (var child in node['nodes']) {
+        final res = _findFocusedLayout(child, node['layout']);
+        if (res != null) return res;
+      }
+    }
+    return null;
+  }
 
   static void init() {
     _update();
-    _timer = Timer.periodic(const Duration(seconds: 5), (_) => _update());
+    _updateSwayState();
+    _loadWeatherLocation();
+    _timer = Timer.periodic(const Duration(seconds: 5), (_) {
+      _update();
+      _updateCount++;
+      if (_updateCount % 60 == 0) {
+        _fetchWeather();
+      }
+    });
+    
+    Process.start('swaymsg', [
+      '-t',
+      'subscribe',
+      '-m',
+      '["workspace", "window", "binding"]',
+    ]).then((process) {
+      process.stdout.transform(utf8.decoder).transform(const LineSplitter()).listen((line) {
+        _updateSwayState();
+      });
+    });
   }
 
   static Future<void> _update() async {
@@ -130,7 +168,99 @@ class SystemState {
           dockAutohide.value = data['autohide'] ?? false;
         } catch (_) {}
       }
+
+      _updateSwayState();
     } catch (_) {}
+  }
+
+  static Future<void> _updateSwayState() async {
+    try {
+      final wsResult = await Process.run('swaymsg', ['-t', 'get_workspaces']);
+      if (wsResult.exitCode == 0) {
+        final List<dynamic> wss = jsonDecode(wsResult.stdout);
+        workspaces.value = wss.map((w) => w as Map<String, dynamic>).toList();
+      }
+
+      final treeResult = await Process.run('swaymsg', ['-t', 'get_tree']);
+      if (treeResult.exitCode == 0) {
+        final Map<String, dynamic> tree = jsonDecode(treeResult.stdout);
+        String? layout = _findFocusedLayout(tree);
+        splitLayout.value = layout ?? 'none';
+      }
+    } catch (_) {}
+  }
+
+  static Future<void> _loadWeatherLocation() async {
+    final file = File('${Platform.environment['HOME']}/.config/fyrtaskbar/weather.json');
+    if (await file.exists()) {
+      try {
+        final data = jsonDecode(await file.readAsString());
+        if (data['location'] != null) {
+          weatherLocation.value = data['location'];
+        }
+      } catch (_) {}
+    }
+    _fetchWeather();
+  }
+
+  static Future<void> saveWeatherLocation(String loc) async {
+    final file = File('${Platform.environment['HOME']}/.config/fyrtaskbar/weather.json');
+    if (!await file.parent.exists()) {
+      await file.parent.create(recursive: true);
+    }
+    await file.writeAsString(jsonEncode({'location': loc}));
+    weatherLocation.value = loc;
+    _fetchWeather();
+  }
+
+  static Future<void> _fetchWeather() async {
+    try {
+      final loc = weatherLocation.value;
+      final geoResult = await Process.run('curl', ['-s', 'https://geocoding-api.open-meteo.com/v1/search?name=${Uri.encodeComponent(loc)}&count=1&language=en&format=json']);
+      if (geoResult.exitCode == 0) {
+        final geoData = jsonDecode(geoResult.stdout);
+        if (geoData['results'] != null && geoData['results'].isNotEmpty) {
+          final lat = geoData['results'][0]['latitude'];
+          final lon = geoData['results'][0]['longitude'];
+          
+          final weatherResult = await Process.run('curl', ['-s', 'https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon&current_weather=true&temperature_unit=fahrenheit']);
+          if (weatherResult.exitCode == 0) {
+            final weatherData = jsonDecode(weatherResult.stdout);
+            if (weatherData['current_weather'] != null) {
+              final cw = weatherData['current_weather'];
+              weatherTemp.value = cw['temperature']?.toDouble();
+              final code = cw['weathercode'];
+              weatherDesc.value = _getWeatherDescription(code);
+              weatherIcon.value = _getWeatherIcon(code);
+            }
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  static String _getWeatherDescription(int code) {
+    if (code == 0) return 'Clear sky';
+    if (code == 1 || code == 2 || code == 3) return 'Partly cloudy';
+    if (code == 45 || code == 48) return 'Fog';
+    if (code >= 51 && code <= 67) return 'Rain';
+    if (code >= 71 && code <= 77) return 'Snow';
+    if (code >= 80 && code <= 82) return 'Rain showers';
+    if (code >= 85 && code <= 86) return 'Snow showers';
+    if (code >= 95) return 'Thunderstorm';
+    return 'Unknown';
+  }
+
+  static IconData _getWeatherIcon(int code) {
+    if (code == 0) return Icons.wb_sunny;
+    if (code == 1 || code == 2 || code == 3) return Icons.cloud;
+    if (code == 45 || code == 48) return Icons.foggy;
+    if (code >= 51 && code <= 67) return Icons.water_drop;
+    if (code >= 71 && code <= 77) return Icons.ac_unit;
+    if (code >= 80 && code <= 82) return Icons.grain;
+    if (code >= 85 && code <= 86) return Icons.ac_unit;
+    if (code >= 95) return Icons.thunderstorm;
+    return Icons.cloud;
   }
 }
 
@@ -314,11 +444,15 @@ class TaskbarScreen extends StatefulWidget {
 class _TaskbarScreenState extends State<TaskbarScreen> {
   bool _isStartMenuOpen = false;
   bool _isQuickSettingsOpen = false;
+  bool _isCalendarOpen = false;
 
   void _toggleStartMenu() async {
     setState(() {
       _isStartMenuOpen = !_isStartMenuOpen;
-      if (_isStartMenuOpen) _isQuickSettingsOpen = false;
+      if (_isStartMenuOpen) {
+        _isQuickSettingsOpen = false;
+        _isCalendarOpen = false;
+      }
     });
     _updateWindowSize();
   }
@@ -326,16 +460,31 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
   void _toggleQuickSettings() async {
     setState(() {
       _isQuickSettingsOpen = !_isQuickSettingsOpen;
-      if (_isQuickSettingsOpen) _isStartMenuOpen = false;
+      if (_isQuickSettingsOpen) {
+        _isStartMenuOpen = false;
+        _isCalendarOpen = false;
+      }
+    });
+    _updateWindowSize();
+  }
+
+  void _toggleCalendar() async {
+    setState(() {
+      _isCalendarOpen = !_isCalendarOpen;
+      if (_isCalendarOpen) {
+        _isStartMenuOpen = false;
+        _isQuickSettingsOpen = false;
+      }
     });
     _updateWindowSize();
   }
 
   void _closeMenus() {
-    if (_isStartMenuOpen || _isQuickSettingsOpen) {
+    if (_isStartMenuOpen || _isQuickSettingsOpen || _isCalendarOpen) {
       setState(() {
         _isStartMenuOpen = false;
         _isQuickSettingsOpen = false;
+        _isCalendarOpen = false;
       });
       _updateWindowSize();
     }
@@ -343,7 +492,7 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
 
   void _updateWindowSize() async {
     const channel = MethodChannel('fyrtaskbar/resize');
-    if (_isStartMenuOpen || _isQuickSettingsOpen) {
+    if (_isStartMenuOpen || _isQuickSettingsOpen || _isCalendarOpen) {
       try {
         await channel.invokeMethod('setSize', {'width': 1920, 'height': 1080});
       } catch (_) {}
@@ -375,31 +524,62 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
               height: 56,
               width: double.infinity,
               decoration: BoxDecoration(color: FyrTheme.bgColor),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              child: Stack(
                 children: [
-                  InkWell(
-                    onTap: _toggleStartMenu,
-                    hoverColor: FyrTheme.hoverColor,
-                    child: Container(
-                      padding: EdgeInsets.symmetric(horizontal: 20),
-                      alignment: Alignment.center,
-                      child: Image.asset(
-                        'assets/icons/fyr_icon.png',
-                        width: 36,
-                        height: 36,
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    top: 0,
+                    bottom: 0,
+                    child: Center(
+                      child: GestureDetector(
+                        onTap: _toggleCalendar,
+                        behavior: HitTestBehavior.opaque,
+                        child: Container(
+                          padding: EdgeInsets.symmetric(horizontal: 20),
+                          alignment: Alignment.center,
+                          child: const ClockWidget(),
+                        ),
                       ),
                     ),
                   ),
-                  const ClockWidget(),
-                  InkWell(
-                    onTap: _toggleQuickSettings,
-                    hoverColor: FyrTheme.hoverColor,
-                    child: Container(
-                      padding: EdgeInsets.symmetric(horizontal: 20),
-                      alignment: Alignment.center,
-                      child: Row(
-                        children: [
+                  Positioned(
+                    left: 0,
+                    top: 0,
+                    bottom: 0,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        GestureDetector(
+                          onTap: _toggleStartMenu,
+                          behavior: HitTestBehavior.opaque,
+                          child: Container(
+                            padding: EdgeInsets.symmetric(horizontal: 20),
+                            alignment: Alignment.center,
+                            child: Image.asset(
+                              'assets/icons/fyr_icon.png',
+                              width: 36,
+                              height: 36,
+                            ),
+                          ),
+                        ),
+                        const WorkspaceSwitcher(),
+                      ],
+                    ),
+                  ),
+                  Positioned(
+                    right: 0,
+                    top: 0,
+                    bottom: 0,
+                    child: GestureDetector(
+                      onTap: _toggleQuickSettings,
+                      behavior: HitTestBehavior.opaque,
+                      child: Container(
+                        padding: EdgeInsets.symmetric(horizontal: 20),
+                        alignment: Alignment.center,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
                           ValueListenableBuilder<String?>(
                             valueListenable: SystemState.wifiSsid,
                             builder: (context, ssid, _) {
@@ -433,6 +613,20 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                             builder: (context, isFloating, _) {
                               return Icon(
                                 isFloating ? Icons.layers : Icons.grid_view,
+                                color: FyrTheme.textColor.withOpacity(0.9),
+                                size: 18,
+                              );
+                            },
+                          ),
+                          SizedBox(width: 12),
+                          ValueListenableBuilder<String>(
+                            valueListenable: SystemState.splitLayout,
+                            builder: (context, split, _) {
+                              IconData icon = Icons.crop_square;
+                              if (split == 'splitv') icon = Icons.splitscreen;
+                              if (split == 'splith') icon = Icons.vertical_split;
+                              return Icon(
+                                icon,
                                 color: FyrTheme.textColor.withOpacity(0.9),
                                 size: 18,
                               );
@@ -481,6 +675,7 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                       ),
                     ),
                   ),
+                  ),
                 ],
               ),
             ),
@@ -489,33 +684,51 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
               child: GestureDetector(
                 onTap: _closeMenus,
                 behavior: HitTestBehavior.opaque,
-                child: Stack(
-                  children: [
-                    if (_isStartMenuOpen)
-                      Positioned(
-                        top: 0,
-                        left: 0,
-                        bottom: 0,
-                        child: GestureDetector(
-                          onTap: () {},
-                          child: StartMenuPopup(
-                            key: ValueKey(FyrTheme.iconThemeName),
-                            onClose: _toggleStartMenu,
+                child: ClipRect(
+                  child: Stack(
+                    children: [
+                      if (_isStartMenuOpen)
+                        Positioned(
+                          top: 0,
+                          left: 0,
+                          bottom: 0,
+                          child: GestureDetector(
+                            onTap: () {},
+                            child: StartMenuPopup(
+                              key: ValueKey(FyrTheme.iconThemeName),
+                              onClose: _toggleStartMenu,
+                            ),
                           ),
                         ),
-                      ),
-                    if (_isQuickSettingsOpen)
-                      Positioned(
-                        top: -1,
-                        right: -1,
-                        child: GestureDetector(
-                          onTap: () {}, // absorb taps
-                          child: QuickSettingsPopup(
-                            onClose: _toggleQuickSettings,
+                      if (_isCalendarOpen)
+                        Positioned(
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          child: Align(
+                            alignment: Alignment.topCenter,
+                            child: GestureDetector(
+                              onTap: () {},
+                              child: CalendarMenuPopup(
+                                onClose: _toggleCalendar,
+                              ),
+                            ),
                           ),
                         ),
-                      ),
-                  ],
+                      if (_isQuickSettingsOpen)
+                        Positioned(
+                          top: -1,
+                          right: -1,
+                          child: GestureDetector(
+                            onTap: () {}, // absorb taps
+                            child: QuickSettingsPopup(
+                              onClose: _toggleQuickSettings,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -567,14 +780,45 @@ class _ClockWidgetState extends State<ClockWidget> {
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Text(
-        _timeString,
-        style: TextStyle(
-          color: FyrTheme.textColor,
-          fontSize: 13,
-          fontWeight: FontWeight.w600,
-          letterSpacing: 0.5,
-        ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ValueListenableBuilder<double?>(
+            valueListenable: SystemState.weatherTemp,
+            builder: (context, temp, _) {
+              if (temp == null) return const SizedBox();
+              return Row(
+                children: [
+                  ValueListenableBuilder<IconData>(
+                    valueListenable: SystemState.weatherIcon,
+                    builder: (context, icon, _) {
+                      return Icon(icon, color: FyrTheme.textColor, size: 14);
+                    },
+                  ),
+                  SizedBox(width: 4),
+                  Text(
+                    '${temp.round()}°F',
+                    style: TextStyle(
+                      color: FyrTheme.textColor,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  SizedBox(width: 12),
+                ],
+              );
+            },
+          ),
+          Text(
+            _timeString,
+            style: TextStyle(
+              color: FyrTheme.textColor,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.5,
+            ),
+          ),
+        ],
       ),
     );
   }
