@@ -21,6 +21,8 @@ class SystemState {
   static final ValueNotifier<double> brightness = ValueNotifier(0.5);
   static final ValueNotifier<bool> nightLight = ValueNotifier(false);
   static final ValueNotifier<bool> airplaneMode = ValueNotifier(false);
+  static final ValueNotifier<bool> floatingMode = ValueNotifier(false);
+  static final ValueNotifier<bool> dockAutohide = ValueNotifier(false);
   static Timer? _timer;
 
   static void init() {
@@ -111,6 +113,22 @@ class SystemState {
         airplaneMode.value =
             output.contains('Soft blocked: yes') &&
             !output.contains('Soft blocked: no');
+      }
+
+      final floatingFile = File('${Platform.environment['HOME']}/.config/sway/floating.conf');
+      if (await floatingFile.exists()) {
+        final content = await floatingFile.readAsString();
+        floatingMode.value = content.contains('floating enable');
+      } else {
+        floatingMode.value = false;
+      }
+
+      final dockConfigFile = File('${Platform.environment['HOME']}/.config/fyrdock/config.json');
+      if (await dockConfigFile.exists()) {
+        try {
+          final data = jsonDecode(await dockConfigFile.readAsString());
+          dockAutohide.value = data['autohide'] ?? false;
+        } catch (_) {}
       }
     } catch (_) {}
   }
@@ -405,6 +423,17 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                                 color: devices.isNotEmpty
                                     ? FyrTheme.textColor.withOpacity(0.9)
                                     : FyrTheme.textColor.withOpacity(0.4),
+                                size: 18,
+                              );
+                            },
+                          ),
+                          SizedBox(width: 12),
+                          ValueListenableBuilder<bool>(
+                            valueListenable: SystemState.floatingMode,
+                            builder: (context, isFloating, _) {
+                              return Icon(
+                                isFloating ? Icons.layers : Icons.grid_view,
+                                color: FyrTheme.textColor.withOpacity(0.9),
                                 size: 18,
                               );
                             },
@@ -869,6 +898,8 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
   bool _bluetoothEnabled = true;
   bool _nightLightEnabled = false;
   bool _airplaneModeEnabled = false;
+  bool _floatingModeEnabled = false;
+  bool _dockAutohideEnabled = false;
 
   List<Map<String, String>> _wifiNetworks = [];
   List<Map<String, String>> _btDevices = [];
@@ -899,6 +930,8 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
     _bluetoothEnabled = SystemState.bluetoothEnabled.value;
     _nightLightEnabled = SystemState.nightLight.value;
     _airplaneModeEnabled = SystemState.airplaneMode.value;
+    _floatingModeEnabled = SystemState.floatingMode.value;
+    _dockAutohideEnabled = SystemState.dockAutohide.value;
 
     SystemState.brightness.addListener(_onStateChange);
     SystemState.bluetoothEnabled.addListener(_onStateChange);
@@ -906,6 +939,8 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
     SystemState.nightLight.addListener(_onStateChange);
     SystemState.wifiSsid.addListener(_onStateChange);
     SystemState.airplaneMode.addListener(_onStateChange);
+    SystemState.floatingMode.addListener(_onStateChange);
+    SystemState.dockAutohide.addListener(_onStateChange);
   }
 
   @override
@@ -917,6 +952,8 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
     SystemState.nightLight.removeListener(_onStateChange);
     SystemState.wifiSsid.removeListener(_onStateChange);
     SystemState.airplaneMode.removeListener(_onStateChange);
+    SystemState.floatingMode.removeListener(_onStateChange);
+    SystemState.dockAutohide.removeListener(_onStateChange);
     super.dispose();
   }
 
@@ -929,6 +966,8 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
         _wifiEnabled = SystemState.wifiSsid.value != null;
         _bluetoothEnabled = SystemState.bluetoothEnabled.value;
         _airplaneModeEnabled = SystemState.airplaneMode.value;
+        _floatingModeEnabled = SystemState.floatingMode.value;
+        _dockAutohideEnabled = SystemState.dockAutohide.value;
       });
     }
   }
@@ -966,6 +1005,24 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
     } else {
       _runCmd('rfkill', ['unblock', 'all']);
     }
+  }
+
+  void _toggleFloatingMode() {
+    _runCmd('${Platform.environment['HOME']}/.config/fyr/toggle_floating.sh', []);
+  }
+
+  void _toggleDockAutohide() async {
+    final file = File('${Platform.environment['HOME']}/.config/fyrdock/config.json');
+    bool newVal = !SystemState.dockAutohide.value;
+    SystemState.dockAutohide.value = newVal;
+    Map<String, dynamic> data = {};
+    if (await file.exists()) {
+      try { data = jsonDecode(await file.readAsString()); } catch (_) {}
+    } else {
+      await file.create(recursive: true);
+    }
+    data['autohide'] = newVal;
+    await file.writeAsString(jsonEncode(data));
   }
 
   void _setBrightness(double value) {
@@ -1181,6 +1238,20 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
                 label: "Night Light",
                 isActive: _nightLightEnabled,
                 onTap: _toggleNightLight,
+              ),
+              SizedBox(width: 12),
+              _QuickToggle(
+                icon: Icons.layers,
+                label: "Floating",
+                isActive: _floatingModeEnabled,
+                onTap: _toggleFloatingMode,
+              ),
+              SizedBox(width: 12),
+              _QuickToggle(
+                icon: Icons.visibility_off,
+                label: "Dock Autohide",
+                isActive: _dockAutohideEnabled,
+                onTap: _toggleDockAutohide,
               ),
               SizedBox(width: 12),
               ValueListenableBuilder<ThemeMode>(

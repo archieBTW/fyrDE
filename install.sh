@@ -189,6 +189,29 @@ org.freedesktop.impl.portal.FileChooser=termfilechooser
 EOF
 fi
 
+echo "Setting up Floating Mode script..."
+mkdir -p ~/.config/fyr
+mkdir -p ~/.config/sway
+
+cat << 'EOF' > ~/.config/fyr/toggle_floating.sh
+#!/bin/bash
+CONF="$HOME/.config/sway/floating.conf"
+
+if [ -f "$CONF" ] && grep -q "floating enable" "$CONF"; then
+    echo "" > "$CONF"
+    swaymsg '[floating app_id="(?!(fyrtaskbar|fyrdock|fyrsearch|fyroverview|fyrhelp|fyremoji)).*"] floating disable'
+else
+    echo "for_window [class=\".*\"] floating enable" > "$CONF"
+    echo "for_window [app_id=\".*\"] floating enable" >> "$CONF"
+    echo "default_floating_border normal" >> "$CONF"
+    swaymsg '[tiling] floating enable'
+fi
+swaymsg reload
+EOF
+chmod +x ~/.config/fyr/toggle_floating.sh
+
+touch ~/.config/sway/floating.conf
+
 echo "Copying sway configuration..."
 mkdir -p ~/.config/sway
 if [ -f "./sway/config" ]; then
@@ -197,6 +220,11 @@ if [ -f "./sway/config" ]; then
 else
     echo "Warning: ./sway/config not found. Make sure you are running this script from the 'de' directory."
 fi
+
+echo "Setting up Minimize Interceptor..."
+gcc -shared -fPIC -o ~/.config/fyr/libfyr_minimize.so ./minimize_interceptor.c
+mkdir -p ~/.config/environment.d
+echo "LD_PRELOAD=$HOME/.config/fyr/libfyr_minimize.so" > ~/.config/environment.d/fyr_minimize.conf
 
 echo "Installing Tela Icon Theme..."
 if [ ! -d "$HOME/.local/share/icons/Tela-purple-dark" ]; then

@@ -14,6 +14,108 @@ import 'package:window_manager/window_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'fyr_theme.dart';
 
+enum ResizeZoneEdge {
+  left,
+  right,
+  top,
+  bottom,
+  topLeft,
+  topRight,
+  bottomLeft,
+  bottomRight,
+}
+
+class ResizableWindow extends StatelessWidget {
+  final Widget child;
+  const ResizableWindow({super.key, required this.child});
+
+  static const _resizeThickness = 6.0;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        child,
+        _ResizeHandle(edge: ResizeZoneEdge.left, size: _resizeThickness),
+        _ResizeHandle(edge: ResizeZoneEdge.right, size: _resizeThickness),
+        _ResizeHandle(edge: ResizeZoneEdge.top, size: _resizeThickness),
+        _ResizeHandle(edge: ResizeZoneEdge.bottom, size: _resizeThickness),
+        _ResizeHandle(edge: ResizeZoneEdge.topLeft, size: _resizeThickness),
+        _ResizeHandle(edge: ResizeZoneEdge.topRight, size: _resizeThickness),
+        _ResizeHandle(edge: ResizeZoneEdge.bottomLeft, size: _resizeThickness),
+        _ResizeHandle(edge: ResizeZoneEdge.bottomRight, size: _resizeThickness),
+      ],
+    );
+  }
+}
+
+class _ResizeHandle extends StatelessWidget {
+  final ResizeZoneEdge edge;
+  final double size;
+
+  const _ResizeHandle({required this.edge, required this.size});
+
+  SystemMouseCursor get cursor {
+    switch (edge) {
+      case ResizeZoneEdge.left:
+      case ResizeZoneEdge.right:
+        return SystemMouseCursors.resizeLeftRight;
+      case ResizeZoneEdge.top:
+      case ResizeZoneEdge.bottom:
+        return SystemMouseCursors.resizeUpDown;
+      case ResizeZoneEdge.topLeft:
+      case ResizeZoneEdge.bottomRight:
+        return SystemMouseCursors.resizeUpLeftDownRight;
+      case ResizeZoneEdge.topRight:
+      case ResizeZoneEdge.bottomLeft:
+        return SystemMouseCursors.resizeUpRightDownLeft;
+    }
+  }
+
+  ResizeEdge get resizeEdge {
+    switch (edge) {
+      case ResizeZoneEdge.left: return ResizeEdge.left;
+      case ResizeZoneEdge.right: return ResizeEdge.right;
+      case ResizeZoneEdge.top: return ResizeEdge.top;
+      case ResizeZoneEdge.bottom: return ResizeEdge.bottom;
+      case ResizeZoneEdge.topLeft: return ResizeEdge.topLeft;
+      case ResizeZoneEdge.topRight: return ResizeEdge.topRight;
+      case ResizeZoneEdge.bottomLeft: return ResizeEdge.bottomLeft;
+      case ResizeZoneEdge.bottomRight: return ResizeEdge.bottomRight;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    Alignment alignment;
+    double? width;
+    double? height;
+
+    switch (edge) {
+      case ResizeZoneEdge.left: alignment = Alignment.centerLeft; width = size; height = double.infinity; break;
+      case ResizeZoneEdge.right: alignment = Alignment.centerRight; width = size; height = double.infinity; break;
+      case ResizeZoneEdge.top: alignment = Alignment.topCenter; width = double.infinity; height = size; break;
+      case ResizeZoneEdge.bottom: alignment = Alignment.bottomCenter; width = double.infinity; height = size; break;
+      case ResizeZoneEdge.topLeft: alignment = Alignment.topLeft; width = size; height = size; break;
+      case ResizeZoneEdge.topRight: alignment = Alignment.topRight; width = size; height = size; break;
+      case ResizeZoneEdge.bottomLeft: alignment = Alignment.bottomLeft; width = size; height = size; break;
+      case ResizeZoneEdge.bottomRight: alignment = Alignment.bottomRight; width = size; height = size; break;
+    }
+
+    return Align(
+      alignment: alignment,
+      child: MouseRegion(
+        cursor: cursor,
+        child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onPanStart: (_) => windowManager.startResizing(resizeEdge),
+          child: SizedBox(width: width, height: height),
+        ),
+      ),
+    );
+  }
+}
+
 bool isPicker = false;
 
 void main(List<String> args) async {
@@ -698,24 +800,21 @@ class _FyrFilesState extends State<FyrFiles> {
           }
         }
       },
-      child: Scaffold(
-        backgroundColor: FyrTheme.bgColor,
-        appBar: null,
-        body: Stack(
-          children: [
-            Column(
-              children: [
+      child: ResizableWindow(
+        child: Scaffold(
+          backgroundColor: FyrTheme.bgColor,
+          appBar: null,
+          body: Stack(
+            children: [
+              Column(
+                children: [
                 GestureDetector(
                   behavior: HitTestBehavior.translucent,
                   onPanStart: (details) {
                     windowManager.startDragging();
                   },
-                  onDoubleTap: () async {
-                    if (await windowManager.isMaximized()) {
-                      windowManager.unmaximize();
-                    } else {
-                      windowManager.maximize();
-                    }
+                  onDoubleTap: () {
+                    Process.run('swaymsg', ['[pid="$pid"] fullscreen toggle']);
                   },
                   child: Container(
                     height: 55 + getToolbarPadding(),
@@ -729,17 +828,15 @@ class _FyrFilesState extends State<FyrFiles> {
                         ),
                         const SizedBox(width: 8),
                         InkWell(
-                          onTap: () => windowManager.minimize(),
+                          onTap: () {
+                            Process.run('swaymsg', ['[pid="$pid"] move scratchpad']);
+                          },
                           child: Icon(Icons.circle, color: Colors.amber.shade300, size: 16),
                         ),
                         const SizedBox(width: 8),
                         InkWell(
-                          onTap: () async {
-                            if (await windowManager.isMaximized()) {
-                              windowManager.unmaximize();
-                            } else {
-                              windowManager.maximize();
-                            }
+                          onTap: () {
+                            Process.run('swaymsg', ['[pid="$pid"] fullscreen toggle']);
                           },
                           child: Icon(Icons.circle, color: Colors.green.shade300, size: 16),
                         ),
@@ -1222,8 +1319,10 @@ class _FyrFilesState extends State<FyrFiles> {
           ],
         ),
       ),
+    ),
     );
   }
+
 
   Future<dynamic> openIconContextMenuRightClick(
       BuildContext context, PointerDownEvent event, FileSystemEntity file) {

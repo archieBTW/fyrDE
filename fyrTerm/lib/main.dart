@@ -721,13 +721,8 @@ class CustomTitleBar extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       onPanStart: (_) => windowManager.startDragging(),
-      onDoubleTap: () async {
-        final isMax = await windowManager.isMaximized();
-        if (isMax) {
-          await windowManager.unmaximize();
-        } else {
-          await windowManager.maximize();
-        }
+      onDoubleTap: () {
+        Process.run('swaymsg', ['[pid="$pid"] fullscreen toggle']);
       },
       child: Container(
         height: 45,
@@ -748,18 +743,15 @@ class CustomTitleBar extends StatelessWidget {
                 const SizedBox(width: 8),
                 _WindowButton(
                   color: Colors.amber.shade300,
-                  onPressed: () => windowManager.minimize(),
+                  onPressed: () {
+                    Process.run('swaymsg', ['[pid="$pid"] move scratchpad']);
+                  },
                 ),
                 const SizedBox(width: 8),
                 _WindowButton(
                   color: Colors.green.shade300,
-                  onPressed: () async {
-                    final isMax = await windowManager.isMaximized();
-                    if (isMax) {
-                      await windowManager.unmaximize();
-                    } else {
-                      await windowManager.maximize();
-                    }
+                  onPressed: () {
+                    Process.run('swaymsg', ['[pid="$pid"] fullscreen toggle']);
                   },
                 ),
               ],
