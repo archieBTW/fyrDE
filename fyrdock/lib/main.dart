@@ -93,6 +93,7 @@ class _DockScreenState extends State<DockScreen> {
   Timer? _timer;
   bool _isVisible = true;
   bool _autohide = false; // Static by default
+  bool _initializedAutohide = false;
   double _dockWidth = -1.0;
   bool _isHoveredMain = false;
 
@@ -115,8 +116,9 @@ class _DockScreenState extends State<DockScreen> {
         final data = jsonDecode(await file.readAsString());
         if (data['autohide'] != null) {
           bool newAutohide = data['autohide'];
-          if (newAutohide != _autohide) {
+          if (newAutohide != _autohide || !_initializedAutohide) {
             setState(() { _autohide = newAutohide; });
+            _initializedAutohide = true;
             if (!_autohide) {
               waylandLayerShellPlugin.setExclusiveZone(72);
             } else {
@@ -126,7 +128,10 @@ class _DockScreenState extends State<DockScreen> {
         }
       } catch (_) {}
     } else {
-      if (!_autohide) waylandLayerShellPlugin.setExclusiveZone(72);
+      if (!_autohide && !_initializedAutohide) {
+        _initializedAutohide = true;
+        waylandLayerShellPlugin.setExclusiveZone(72);
+      }
     }
   }
 
