@@ -1,0 +1,214 @@
+import 'dart:convert';
+import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import 'fyr_theme.dart';
+import 'main.dart';
+
+class CalendarMenuPopup extends StatefulWidget {
+  final VoidCallback onClose;
+  const CalendarMenuPopup({super.key, required this.onClose});
+
+  @override
+  State<CalendarMenuPopup> createState() => _CalendarMenuPopupState();
+}
+
+class _CalendarMenuPopupState extends State<CalendarMenuPopup>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _animationController;
+  late Animation<Offset> _slideAnimation;
+  DateTime _selectedDate = DateTime.now();
+  final TextEditingController _locationController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _animationController = AnimationController(
+      duration: const Duration(milliseconds: 150),
+      vsync: this,
+    );
+    _slideAnimation =
+        Tween<Offset>(begin: const Offset(0.0, -1.0), end: Offset.zero).animate(
+          CurvedAnimation(
+            parent: _animationController,
+            curve: Curves.easeOutQuart,
+          ),
+        );
+    _animationController.forward();
+    
+    _locationController.text = SystemState.weatherLocation.value;
+  }
+
+  @override
+  void dispose() {
+    _animationController.dispose();
+    _locationController.dispose();
+    super.dispose();
+  }
+
+  void _showLocationDialog() {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: FyrTheme.bgColor,
+          title: Text('Set Location', style: TextStyle(color: FyrTheme.textColor)),
+          content: TextField(
+            controller: _locationController,
+            style: TextStyle(color: FyrTheme.textColor),
+            decoration: InputDecoration(
+              hintText: 'City Name',
+              hintStyle: TextStyle(color: FyrTheme.textColorMuted),
+              enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: FyrTheme.cardColor)),
+              focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: FyrTheme.accentColor)),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text('Cancel', style: TextStyle(color: FyrTheme.textColorMuted)),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                SystemState.saveWeatherLocation(_locationController.text);
+              },
+              child: Text('Save', style: TextStyle(color: FyrTheme.accentColor)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SlideTransition(
+      position: _slideAnimation,
+      child: Container(
+        width: 380,
+        decoration: BoxDecoration(
+          color: FyrTheme.bgColor,
+          borderRadius: BorderRadius.only(
+            bottomLeft: Radius.circular(16),
+            bottomRight: Radius.circular(16),
+          ),
+          border: Border(
+            left: BorderSide(color: FyrTheme.cardColor),
+            right: BorderSide(color: FyrTheme.cardColor),
+            bottom: BorderSide(color: FyrTheme.cardColor),
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Calendar Section
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Theme(
+                data: Theme.of(context).copyWith(
+                  colorScheme: ColorScheme.dark(
+                    primary: FyrTheme.accentColor,
+                    onPrimary: Colors.white,
+                    surface: FyrTheme.bgColor,
+                    onSurface: FyrTheme.textColor,
+                  ),
+                ),
+                child: CalendarDatePicker(
+                  initialDate: _selectedDate,
+                  firstDate: DateTime.now().subtract(const Duration(days: 3650)),
+                  lastDate: DateTime.now().add(const Duration(days: 3650)),
+                  onDateChanged: (date) {
+                    setState(() {
+                      _selectedDate = date;
+                    });
+                  },
+                ),
+              ),
+            ),
+            Divider(height: 1, color: FyrTheme.cardColor),
+            // Weather Section
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: ValueListenableBuilder<String>(
+                valueListenable: SystemState.weatherLocation,
+                builder: (context, location, _) {
+                  return ValueListenableBuilder<double?>(
+                    valueListenable: SystemState.weatherTemp,
+                    builder: (context, temp, _) {
+                      return ValueListenableBuilder<String?>(
+                        valueListenable: SystemState.weatherDesc,
+                        builder: (context, desc, _) {
+                          return ValueListenableBuilder<IconData>(
+                            valueListenable: SystemState.weatherIcon,
+                            builder: (context, icon, _) {
+                              return Row(
+                                children: [
+                                  Icon(
+                                    icon,
+                                    size: 48,
+                                    color: FyrTheme.textColor.withOpacity(0.8),
+                                  ),
+                                  SizedBox(width: 16),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Text(
+                                              location,
+                                              style: TextStyle(
+                                                fontSize: 16,
+                                                fontWeight: FontWeight.bold,
+                                                color: FyrTheme.textColor,
+                                              ),
+                                            ),
+                                            SizedBox(width: 8),
+                                            InkWell(
+                                              onTap: _showLocationDialog,
+                                              child: Icon(
+                                                Icons.edit,
+                                                size: 14,
+                                                color: FyrTheme.textColorMuted,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        SizedBox(height: 4),
+                                        if (temp != null)
+                                          Text(
+                                            '${temp}°F • ${desc ?? "Unknown"}',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              color: FyrTheme.textColor.withOpacity(0.8),
+                                            ),
+                                          )
+                                        else
+                                          Text(
+                                            'Weather unavailable',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              color: FyrTheme.textColorMuted,
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              );
+                            },
+                          );
+                        },
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
