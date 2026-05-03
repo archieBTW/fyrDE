@@ -749,6 +749,10 @@ class _FyrFilesState extends State<FyrFiles> {
         if (event is RawKeyDownEvent) {
           if (event.logicalKey == LogicalKeyboardKey.controlLeft ||
               event.logicalKey == LogicalKeyboardKey.controlRight) {
+          } else if (event.logicalKey == LogicalKeyboardKey.keyA && event.isControlPressed) {
+            setState(() {
+              selectedPaths = files.map((e) => e.path).toSet();
+            });
           } else if (event.logicalKey == LogicalKeyboardKey.keyH &&
               event.isControlPressed) {
             setState(() {
@@ -1114,7 +1118,9 @@ class _FyrFilesState extends State<FyrFiles> {
                                                         isFileContextMenuShown =
                                                             false);
                                               },
-                                              child: Icon(
+                                              child: (!isDir && (file.path.toLowerCase().endsWith('.png') || file.path.toLowerCase().endsWith('.jpg') || file.path.toLowerCase().endsWith('.jpeg') || file.path.toLowerCase().endsWith('.gif') || file.path.toLowerCase().endsWith('.webp')))
+                                                  ? Image.file(File(file.path), width: 48, height: 48, fit: BoxFit.cover)
+                                                  : Icon(
                                                 isDir
                                                     ? Icons.folder
                                                     : Icons.file_copy,
@@ -1129,6 +1135,7 @@ class _FyrFilesState extends State<FyrFiles> {
                                               textAlign: TextAlign.center,
                                               overflow: TextOverflow.ellipsis,
                                               maxLines: 1,
+                                              style: const TextStyle(fontSize: 11),
                                             ),
                                           ],
                                         ),
@@ -1195,7 +1202,9 @@ class _FyrFilesState extends State<FyrFiles> {
                                                 mainAxisAlignment:
                                                     MainAxisAlignment.center,
                                                 children: [
-                                                  Icon(
+                                                  (!isDir && (file.path.toLowerCase().endsWith('.png') || file.path.toLowerCase().endsWith('.jpg') || file.path.toLowerCase().endsWith('.jpeg') || file.path.toLowerCase().endsWith('.gif') || file.path.toLowerCase().endsWith('.webp')))
+                                                      ? Image.file(File(file.path), width: 48, height: 48, fit: BoxFit.cover)
+                                                      : Icon(
                                                     isDir
                                                         ? Icons.folder
                                                         : Icons.file_copy,
@@ -1213,6 +1222,7 @@ class _FyrFilesState extends State<FyrFiles> {
                                                     overflow:
                                                         TextOverflow.ellipsis,
                                                     maxLines: 1,
+                                                    style: const TextStyle(fontSize: 11),
                                                   ),
                                                 ],
                                               ),
@@ -1287,7 +1297,7 @@ class _FyrFilesState extends State<FyrFiles> {
                           ),
                           onPressed: () async {
                             String output = selectedPaths.isNotEmpty 
-                                ? selectedPaths.first 
+                                ? selectedPaths.join('\n') 
                                 : currentDir.path;
                             stdout.writeln(output);
                             await stdout.flush();

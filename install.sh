@@ -91,7 +91,7 @@ fi
 echo "Building and installing Flutter applications..."
 git config --global --add safe.directory /opt/flutter || true
 
-flutter_apps=("fyrdock" "fyroverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrTerm" "fyrFiles" "fyrhelp" "fyremoji")
+flutter_apps=("fyrdock" "fyroverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrTerm" "fyrFiles" "fyrhelp" "fyremoji" "fyrstore")
 
 for app in "${flutter_apps[@]}"; do
     if [ -d "./$app" ]; then
@@ -187,6 +187,25 @@ EOF
 default=wlr;gtk;
 org.freedesktop.impl.portal.FileChooser=termfilechooser
 EOF
+fi
+
+echo "Setting up FyrStore configurations..."
+if [ -d "./fyrstore" ]; then
+    sudo ln -sf /opt/fyrstore/fyrstore /usr/local/bin/fyrstore
+    
+    sudo tee /usr/share/applications/fyrstore.desktop > /dev/null <<'EOF'
+[Desktop Entry]
+Name=FyrStore
+Type=Application
+Exec=/usr/local/bin/fyrstore
+Icon=system-software-install
+Terminal=false
+Categories=System;Settings;
+EOF
+    
+    if command -v update-desktop-database &> /dev/null; then
+        sudo update-desktop-database /usr/share/applications || true
+    fi
 fi
 
 echo "Setting up Floating Mode script..."
