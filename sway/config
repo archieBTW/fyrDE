@@ -149,8 +149,8 @@ for_window [app_id="fyrhelp"] floating enable, border none, resize set 1920 1080
 # Fyremoji Sway Configuration
 # ==========================================
 exec /opt/fyremoji/fyremoji
-for_window [app_id="fyremoji"] floating enable, border none, resize set 1920 1080, move scratchpad
-bindsym $mod+period [app_id="fyremoji"] scratchpad show, resize set 1920 1080, border none, move position mouse
+for_window [app_id="fyremoji"] floating enable, border none, resize set 400 250, move scratchpad
+bindsym $mod+period [app_id="fyremoji"] scratchpad show, resize set 400 250, border none, move position mouse
 
 
 # PRIMARY OUTPUT SETTINGS
