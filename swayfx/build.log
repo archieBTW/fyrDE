@@ -1,0 +1,68 @@
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ninja: Entering directory `build'
+[1/16] Linking target swaymsg/swaymsg
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+[2/16] Generating swaynag.1 with a custom command (wrapped by meson to capture output, to feed input)
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+[3/16] Generating sway-input.5 with a custom command (wrapped by meson to capture output, to feed input)
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+[4/16] Generating sway-output.5 with a custom command (wrapped by meson to capture output, to feed input)
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+[5/16] Generating swaymsg.1 with a custom command (wrapped by meson to capture output, to feed input)
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+[6/16] Generating swaynag.5 with a custom command (wrapped by meson to capture output, to feed input)
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+[7/16] Generating swaybar-protocol.7 with a custom command (wrapped by meson to capture output, to feed input)
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+[8/16] Generating sway-bar.5 with a custom command (wrapped by meson to capture output, to feed input)
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+[9/16] Linking target swaybar/swaybar
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+[10/16] Compiling C object swaynag/swaynag.p/types.c.o
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+[11/16] Generating sway-ipc.7 with a custom command (wrapped by meson to capture output, to feed input)
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+[12/16] Compiling C object swaynag/swaynag.p/render.c.o
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+[13/16] Compiling C object swaynag/swaynag.p/swaynag.c.o
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+[14/16] Linking target swaynag/swaynag
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+[15/16] Compiling C object sway/sway.p/tree_view.c.o
+FAILED: [code=1] sway/sway.p/tree_view.c.o 
+cc -Isway/sway.p -Isway -I../sway -Iinclude -I../include -Iprotocols -I/usr/include/cairo -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/pixman-1 -I/usr/include/libdrm -I/usr/include/json-c -I/usr/include/libevdev-1.0 -I/usr/include/pango-1.0 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/fribidi -I/usr/include/sysprof-6 -I/usr/include/scenefx-0.4 -I/usr/include/wlroots-0.19 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Werror -std=c11 -O0 -g -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -Wno-unused-parameter -Wno-unused-result -Wno-missing-braces -Wno-format-zero-length -Wundef -Wvla '-DSYSCONFDIR="//usr/local/etc"' '-DSWAY_VERSION="0.5.3-1ccec2ae (" __DATE__ ", branch '"'"'master'"'"')"' '-DSWAY_ORIGINAL_VERSION="1.11.0"' '-DSCENEFX_VERSION="0.4.1"' -fmacro-prefix-map=../= -pthread -MD -MQ sway/sway.p/tree_view.c.o -MF sway/sway.p/tree_view.c.o.d -o sway/sway.p/tree_view.c.o -c ../sway/tree/view.c
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/home/archie/.config/fyr/libfyr_minimize.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+../sway/tree/view.c: In function ‘view_save_buffer_iterator’:
+../sway/tree/view.c:1233:9: error: implicit declaration of function ‘wlr_scene_buffer_set_corner_radii’; did you mean ‘wlr_scene_buffer_set_corner_radius’? [-Wimplicit-function-declaration]
+ 1233 |         wlr_scene_buffer_set_corner_radii(sbuf, buffer->corners);
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      |         wlr_scene_buffer_set_corner_radius
+ninja: build stopped: subcommand failed.

@@ -34,13 +34,14 @@ if [ "$OS" = "arch" ] || [ "$OS" = "manjaro" ] || [ "$OS" = "endeavouros" ]; the
         "gtk-layer-shell" "xdg-desktop-portal" "xdg-desktop-portal-gtk"
         "xdg-desktop-portal-wlr" "xclip" "wl-clipboard" "brightnessctl"
         "wireplumber" "wlsunset" "cmake" "cpio" "pkg-config" "gcc" "wf-recorder" "grim" "ninja" "clang"
+        "meson" "scdoc" "wayland-protocols" "pcre2" "json-c" "pango" "cairo" "gdk-pixbuf2"
     )
 
     echo "Installing official dependencies via pacman..."
     sudo pacman -S --needed --noconfirm "${deps[@]}"
 
-    echo "Installing swayfx, flutter, and termfilechooser via yay..."
-    yay -S --needed --noconfirm swayfx xdg-desktop-portal-termfilechooser-hunkyburrito-git # flutter
+    echo "Installing build dependencies, flutter, and termfilechooser via yay..."
+    yay -S --needed --noconfirm scenefx0.4 wlroots0.19 xdg-desktop-portal-termfilechooser-hunkyburrito-git # flutter
 
 elif [ "$OS" = "ubuntu" ] || [ "$OS" = "debian" ]; then
     echo "Updating system..."
@@ -85,6 +86,19 @@ elif [ "$OS" = "fedora" ]; then
 else
     echo "Unsupported OS: $OS"
     echo "Please install dependencies and flutter manually, then run the build steps."
+    exit 1
+fi
+
+echo "Building and installing local swayfx..."
+if [ -d "./swayfx" ]; then
+    cd ./swayfx
+    rm -rf build
+    meson setup build
+    ninja -C build
+    sudo ninja -C build install
+    cd ..
+else
+    echo "Warning: Directory ./swayfx not found! Cannot install local swayfx."
     exit 1
 fi
 
@@ -256,10 +270,7 @@ else
     echo "Warning: ./sway/config not found. Make sure you are running this script from the 'de' directory."
 fi
 
-echo "Setting up Minimize Interceptor..."
-gcc -shared -fPIC -o ~/.config/fyr/libfyr_minimize.so ./minimize_interceptor.c
-mkdir -p ~/.config/environment.d
-echo "LD_PRELOAD=$HOME/.config/fyr/libfyr_minimize.so" > ~/.config/environment.d/fyr_minimize.conf
+
 
 echo "Installing Tela Icon Theme..."
 if [ ! -d "$HOME/.local/share/icons/Tela-purple-dark" ]; then

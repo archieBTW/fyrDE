@@ -106,7 +106,7 @@ bindsym $mod+Shift+Right exec 'swaymsg resize grow right 20px   || swaymsg resiz
 # -------------------------------------------------------------
 # Wayland Environment & Portals
 # -------------------------------------------------------------
-exec dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP=sway LD_PRELOAD=$HOME/.config/fyr/libfyr_minimize.so
+exec dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP=sway
 
 # -------------------------------------------------------------
 # Status Bar
