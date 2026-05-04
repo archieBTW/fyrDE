@@ -232,16 +232,104 @@ CONF="$HOME/.config/sway/floating.conf"
 
 if [ -f "$CONF" ] && grep -q "floating enable" "$CONF"; then
     echo "" > "$CONF"
-    swaymsg '[floating app_id="(?!(fyrtaskbar|fyrdock|fyrsearch|fyroverview|fyrhelp|fyremoji)).*"] floating disable'
+    swaymsg '[floating workspace="^[0-9]+$" app_id="(?!(fyrtaskbar|fyrdock|fyrsearch|fyroverview|fyrhelp|fyremoji)).*"] floating disable'
+    swaymsg '[tiling] border pixel 2'
+    swaymsg 'gaps inner all set 20'
+    swaymsg 'gaps outer all set 20'
 else
-    echo "for_window [class=\".*\"] floating enable" > "$CONF"
-    echo "for_window [app_id=\".*\"] floating enable" >> "$CONF"
-    echo "default_floating_border normal" >> "$CONF"
+    echo 'for_window [class=".*"] floating enable' > "$CONF"
+    echo 'for_window [app_id=".*"] floating enable' >> "$CONF"
+    echo 'for_window [class=".*"] border pixel 4' >> "$CONF"
+    echo 'for_window [app_id="(?!(fyrtaskbar|fyrdock|fyrsearch|fyroverview|fyrhelp|fyremoji)).*"] border pixel 4' >> "$CONF"
+    echo 'default_floating_border pixel 4' >> "$CONF"
+    echo 'gaps inner 0' >> "$CONF"
+    echo 'gaps outer 0' >> "$CONF"
     swaymsg '[tiling] floating enable'
+    swaymsg '[floating workspace="^[0-9]+$" class=".*"] border pixel 4'
+    swaymsg '[floating workspace="^[0-9]+$" app_id="(?!(fyrtaskbar|fyrdock|fyrsearch|fyroverview|fyrhelp|fyremoji)).*"] border pixel 4'
+    swaymsg 'gaps inner all set 0'
+    swaymsg 'gaps outer all set 0'
 fi
 swaymsg reload
 EOF
 chmod +x ~/.config/fyr/toggle_floating.sh
+
+echo "Setting up Retile script..."
+cat << 'EOF' > ~/.config/fyr/retile.py
+#!/usr/bin/env python3
+import subprocess
+import json
+import sys
+
+def run(cmd):
+    try:
+        return subprocess.check_output(cmd, shell=True).decode('utf-8')
+    except subprocess.CalledProcessError:
+        return ""
+
+def main():
+    tree_out = run('swaymsg -t get_tree')
+    if not tree_out:
+        return
+    tree = json.loads(tree_out)
+    
+    ws_out = run('swaymsg -t get_workspaces')
+    if not ws_out:
+        return
+    workspaces = json.loads(ws_out)
+    focused_ws = next((w for w in workspaces if w.get('focused')), None)
+    if not focused_ws:
+        return
+
+    def get_windows(node):
+        wins = []
+        if node.get('app_id') not in ['fyrtaskbar', 'fyrdock', 'fyroverview', 'fyrsearch', 'fyrhelp', 'fyremoji'] and node.get('type') in ['con', 'floating_con'] and (node.get('app_id') or node.get('class') or node.get('name')):
+            if not node.get('nodes'):
+                wins.append(node)
+        for child in node.get('nodes', []) + node.get('floating_nodes', []):
+            wins.extend(get_windows(child))
+        return wins
+
+    def find_ws(node):
+        if node.get('type') == 'workspace' and node.get('name') == focused_ws['name']: return node
+        for c in node.get('nodes', []):
+            res = find_ws(c)
+            if res: return res
+        return None
+
+    ws_node = find_ws(tree)
+    if not ws_node:
+        return
+
+    windows = get_windows(ws_node)
+    if not windows:
+        return
+    
+    windows.sort(key=lambda w: (w['rect']['x'], w['rect']['y']))
+    
+    for w in windows:
+        run(f'swaymsg "[con_id={w["id"]}] move workspace {focused_ws["name"]}"')
+    
+    for w in windows:
+        run(f'swaymsg "[con_id={w["id"]}] floating disable"')
+    
+    run(f'swaymsg "workspace {focused_ws["name"]}; layout splith"')
+    
+    if len(windows) % 2 == 0 and len(windows) > 0:
+        half = len(windows) // 2
+        for i in range(half):
+            w_top = windows[i]
+            w_bot = windows[i + half]
+            run(f'swaymsg "[con_id={w_top["id"]}] focus; splitv"')
+            run(f'swaymsg "[con_id={w_bot["id"]}] move down"')
+            run(f'swaymsg "[con_id={w_top["id"]}] mark target"')
+            run(f'swaymsg "[con_id={w_bot["id"]}] move window to mark target"')
+            run(f'swaymsg "[con_id={w_top["id"]}] unmark target"')
+            
+if __name__ == "__main__":
+    main()
+EOF
+chmod +x ~/.config/fyr/retile.py
 
 touch ~/.config/sway/floating.conf
 

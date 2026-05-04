@@ -11,6 +11,8 @@ class WorkspaceSwitcher extends StatefulWidget {
 }
 
 class _WorkspaceSwitcherState extends State<WorkspaceSwitcher> {
+  int _maxWorkspace = 3;
+
   void _switchWorkspace(String name) {
     Process.start('swaymsg', ['workspace', name]);
   }
@@ -21,15 +23,14 @@ class _WorkspaceSwitcherState extends State<WorkspaceSwitcher> {
       valueListenable: SystemState.workspaces,
       builder: (context, workspaces, _) {
         List<Map<String, dynamic>> allWorkspaces = [];
-        int maxWorkspace = 3;
 
         for (var w in workspaces) {
-          if (w['num'] is int && w['num'] > maxWorkspace) {
-            maxWorkspace = w['num'];
+          if (w['num'] is int && w['num'] > _maxWorkspace) {
+            _maxWorkspace = w['num'];
           }
         }
 
-        for (int i = 1; i <= maxWorkspace; i++) {
+        for (int i = 1; i <= _maxWorkspace; i++) {
           final ws = workspaces.cast<Map<String, dynamic>?>().firstWhere(
             (w) => w != null && w['num'] == i,
             orElse: () => null,
@@ -58,38 +59,65 @@ class _WorkspaceSwitcherState extends State<WorkspaceSwitcher> {
 
         return Row(
           mainAxisSize: MainAxisSize.min,
-          children: allWorkspaces.map((ws) {
-            final bool isFocused = ws['focused'] == true;
-            final bool isEmpty = ws['empty'] == true;
-            final String name = ws['name'].toString();
+          children: [
+            ...allWorkspaces.map((ws) {
+              final bool isFocused = ws['focused'] == true;
+              final bool isEmpty = ws['empty'] == true;
+              final String name = ws['name'].toString();
 
-            return GestureDetector(
-              onTap: () => _switchWorkspace(name),
+              return GestureDetector(
+                onTap: () => _switchWorkspace(name),
+                behavior: HitTestBehavior.opaque,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    curve: Curves.easeOutCubic,
+                    width: isFocused ? 28 : 10,
+                    height: 10,
+                    decoration: BoxDecoration(
+                      color: isFocused
+                          ? Colors.white
+                          : Colors.white.withOpacity(isEmpty ? 0.25 : 0.7),
+                      borderRadius: BorderRadius.circular(5),
+                      boxShadow: isFocused ? [
+                        BoxShadow(
+                          color: Colors.white.withOpacity(0.4),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        )
+                      ] : null,
+                    ),
+                  ),
+                ),
+              );
+            }),
+            GestureDetector(
+              onTap: () => _switchWorkspace((_maxWorkspace + 1).toString()),
               behavior: HitTestBehavior.opaque,
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  curve: Curves.easeOutCubic,
-                  width: isFocused ? 28 : 10,
-                  height: 10,
+                child: Container(
+                  width: 14,
+                  height: 14,
                   decoration: BoxDecoration(
-                    color: isFocused
-                        ? Colors.white
-                        : Colors.white.withOpacity(isEmpty ? 0.25 : 0.7),
-                    borderRadius: BorderRadius.circular(5),
-                    boxShadow: isFocused ? [
-                      BoxShadow(
-                        color: Colors.white.withOpacity(0.4),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      )
-                    ] : null,
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: Colors.white.withOpacity(0.5),
+                      width: 1.5,
+                    ),
+                  ),
+                  child: Center(
+                    child: Icon(
+                      Icons.add,
+                      size: 10,
+                      color: Colors.white.withOpacity(0.5),
+                    ),
                   ),
                 ),
               ),
-            );
-          }).toList(),
+            ),
+          ],
         );
       },
     );

@@ -993,22 +993,24 @@ void container_floating_resize_and_center(struct sway_container *con) {
 
 	floating_natural_resize(con);
 	if (!con->view) {
-		if (con->pending.width > ws->width || con->pending.height > ws->height) {
-			con->pending.x = ob.x + (ob.width - con->pending.width) / 2;
-			con->pending.y = ob.y + (ob.height - con->pending.height) / 2;
-		} else {
-			con->pending.x = ws->x + (ws->width - con->pending.width) / 2;
-			con->pending.y = ws->y + (ws->height - con->pending.height) / 2;
-		}
+		con->pending.width = fmin(con->pending.width, ws->width);
+		con->pending.height = fmin(con->pending.height, ws->height);
+		con->pending.x = ws->x + (ws->width - con->pending.width) / 2;
+		con->pending.y = ws->y + (ws->height - con->pending.height) / 2;
 	} else {
-		if (con->pending.content_width > ws->width
-				|| con->pending.content_height > ws->height) {
-			con->pending.content_x = ob.x + (ob.width - con->pending.content_width) / 2;
-			con->pending.content_y = ob.y + (ob.height - con->pending.content_height) / 2;
-		} else {
-			con->pending.content_x = ws->x + (ws->width - con->pending.content_width) / 2;
-			con->pending.content_y = ws->y + (ws->height - con->pending.content_height) / 2;
+		size_t border_width = 0;
+		size_t top = 0;
+		if (con->pending.border != B_CSD && !con->pending.fullscreen_mode) {
+			border_width = con->pending.border_thickness * (con->pending.border != B_NONE);
+			top = con->pending.border == B_NORMAL ?
+				container_titlebar_height() : border_width;
 		}
+		
+		con->pending.content_width = fmin(con->pending.content_width, fmax(1, ws->width - border_width * 2));
+		con->pending.content_height = fmin(con->pending.content_height, fmax(1, ws->height - top - border_width));
+		
+		con->pending.content_x = ws->x + border_width + (ws->width - (con->pending.content_width + border_width * 2)) / 2;
+		con->pending.content_y = ws->y + top + (ws->height - (con->pending.content_height + top + border_width)) / 2;
 
 		// If the view's border is B_NONE then these properties are ignored.
 		con->pending.border_top = con->pending.border_bottom = true;

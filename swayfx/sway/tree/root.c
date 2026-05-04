@@ -125,6 +125,8 @@ void root_scratchpad_add_container(struct sway_container *con, struct sway_works
 
 	set_container_transform(workspace, con);
 
+
+
 	// Clear the fullscreen mode when sending to the scratchpad
 	if (con->pending.fullscreen_mode != FULLSCREEN_NONE) {
 		container_fullscreen_disable(con);
@@ -254,6 +256,8 @@ void root_scratchpad_hide(struct sway_container *con) {
 		// it should be shown until fullscreen has been disabled
 		return;
 	}
+
+
 
 	// Set minimize state to minimized
 	if (config->scratchpad_minimize) {

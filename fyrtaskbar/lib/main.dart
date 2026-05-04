@@ -22,6 +22,7 @@ import 'workspace_switcher.dart';class SystemState {
   static final ValueNotifier<bool> nightLight = ValueNotifier(false);
   static final ValueNotifier<bool> airplaneMode = ValueNotifier(false);
   static final ValueNotifier<bool> floatingMode = ValueNotifier(false);
+  static final ValueNotifier<bool> windowFloatingMode = ValueNotifier(false);
   static final ValueNotifier<bool> dockAutohide = ValueNotifier(false);
   static final ValueNotifier<List<Map<String, dynamic>>> workspaces = ValueNotifier([]);
   static final ValueNotifier<String> splitLayout = ValueNotifier('none');
@@ -33,13 +34,15 @@ import 'workspace_switcher.dart';class SystemState {
   static int _updateCount = 0;
   static Timer? _timer;
 
-  static String? _findFocusedLayout(Map<String, dynamic> node, [String? parentLayout]) {
-    if (node['focused'] == true) return parentLayout;
-    if (node['nodes'] != null) {
-      for (var child in node['nodes']) {
-        final res = _findFocusedLayout(child, node['layout']);
-        if (res != null) return res;
-      }
+  static List<Map<String, dynamic>>? _findFocusedPath(Map<String, dynamic> node) {
+    if (node['focused'] == true) return [node];
+    for (var child in (node['nodes'] ?? [])) {
+      final res = _findFocusedPath(child);
+      if (res != null) return [node, ...res];
+    }
+    for (var child in (node['floating_nodes'] ?? [])) {
+      final res = _findFocusedPath(child);
+      if (res != null) return [node, ...res];
     }
     return null;
   }
@@ -184,8 +187,19 @@ import 'workspace_switcher.dart';class SystemState {
       final treeResult = await Process.run('swaymsg', ['-t', 'get_tree']);
       if (treeResult.exitCode == 0) {
         final Map<String, dynamic> tree = jsonDecode(treeResult.stdout);
-        String? layout = _findFocusedLayout(tree);
-        splitLayout.value = layout ?? 'none';
+        final path = _findFocusedPath(tree);
+        if (path != null) {
+          bool isFloating = path.any((n) => n['type'] == 'floating_con');
+          windowFloatingMode.value = isFloating;
+          String layout = 'none';
+          for (var n in path.reversed) {
+            if (n['layout'] == 'splith' || n['layout'] == 'splitv') {
+              layout = n['layout'];
+              break;
+            }
+          }
+          splitLayout.value = layout;
+        }
       }
     } catch (_) {}
   }
@@ -280,6 +294,7 @@ void main() async {
   final waylandLayerShellPlugin = WaylandLayerShell();
   bool isSupported = await waylandLayerShellPlugin.initialize(1920, 56);
   if (isSupported) {
+    await waylandLayerShellPlugin.setLayer(ShellLayer.layerTop);
     await waylandLayerShellPlugin.setAnchor(ShellEdge.edgeTop, true);
     await waylandLayerShellPlugin.setAnchor(ShellEdge.edgeLeft, true);
     await waylandLayerShellPlugin.setAnchor(ShellEdge.edgeRight, true);
@@ -526,20 +541,15 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
               decoration: BoxDecoration(color: FyrTheme.bgColor),
               child: Stack(
                 children: [
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    top: 0,
-                    bottom: 0,
-                    child: Center(
-                      child: GestureDetector(
-                        onTap: _toggleCalendar,
-                        behavior: HitTestBehavior.opaque,
-                        child: Container(
-                          padding: EdgeInsets.symmetric(horizontal: 20),
-                          alignment: Alignment.center,
-                          child: const ClockWidget(),
-                        ),
+                  Align(
+                    alignment: Alignment.center,
+                    child: GestureDetector(
+                      onTap: _toggleCalendar,
+                      behavior: HitTestBehavior.opaque,
+                      child: Container(
+                        padding: EdgeInsets.symmetric(horizontal: 20),
+                        color: Colors.transparent,
+                        child: const ClockWidget(),
                       ),
                     ),
                   ),
@@ -571,68 +581,113 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                     right: 0,
                     top: 0,
                     bottom: 0,
-                    child: GestureDetector(
-                      onTap: _toggleQuickSettings,
-                      behavior: HitTestBehavior.opaque,
-                      child: Container(
-                        padding: EdgeInsets.symmetric(horizontal: 20),
-                        alignment: Alignment.center,
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                          ValueListenableBuilder<String?>(
-                            valueListenable: SystemState.wifiSsid,
-                            builder: (context, ssid, _) {
-                              return Icon(
-                                ssid != null ? Icons.wifi : Icons.wifi_off,
-                                color: ssid != null
-                                    ? FyrTheme.textColor.withOpacity(0.9)
-                                    : FyrTheme.textColor.withOpacity(0.4),
-                                size: 18,
-                              );
-                            },
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        GestureDetector(
+                          onTap: () async {
+                            await Process.run('swaymsg', ['[app_id="fyroverview"] scratchpad show, resize set 1920 1080, border none, move absolute position 0 0']);
+                          },
+                          behavior: HitTestBehavior.opaque,
+                          child: Container(
+                            padding: EdgeInsets.symmetric(horizontal: 12),
+                            alignment: Alignment.center,
+                            child: Icon(Icons.dashboard, color: FyrTheme.textColor.withOpacity(0.9), size: 18),
                           ),
-                          SizedBox(width: 12),
-                          ValueListenableBuilder<List<String>>(
-                            valueListenable: SystemState.bluetoothDevices,
-                            builder: (context, devices, _) {
-                              return Icon(
-                                devices.isNotEmpty
-                                    ? Icons.bluetooth_connected
-                                    : Icons.bluetooth,
-                                color: devices.isNotEmpty
-                                    ? FyrTheme.textColor.withOpacity(0.9)
-                                    : FyrTheme.textColor.withOpacity(0.4),
-                                size: 18,
-                              );
-                            },
+                        ),
+                        GestureDetector(
+                          onTap: () async {
+                            await Process.run('${Platform.environment['HOME']}/.config/fyr/retile.py', []);
+                          },
+                          behavior: HitTestBehavior.opaque,
+                          child: Container(
+                            padding: EdgeInsets.symmetric(horizontal: 12),
+                            alignment: Alignment.center,
+                            child: Icon(Icons.sort, color: FyrTheme.textColor.withOpacity(0.9), size: 18),
                           ),
-                          SizedBox(width: 12),
-                          ValueListenableBuilder<bool>(
-                            valueListenable: SystemState.floatingMode,
-                            builder: (context, isFloating, _) {
-                              return Icon(
-                                isFloating ? Icons.layers : Icons.grid_view,
-                                color: FyrTheme.textColor.withOpacity(0.9),
-                                size: 18,
-                              );
-                            },
+                        ),
+                        GestureDetector(
+                          onTap: () async {
+                            await Process.run('${Platform.environment['HOME']}/.config/fyr/toggle_floating.sh', []);
+                            SystemState._updateSwayState();
+                          },
+                          behavior: HitTestBehavior.opaque,
+                          child: Container(
+                            padding: EdgeInsets.symmetric(horizontal: 12),
+                            alignment: Alignment.center,
+                            child: ValueListenableBuilder<bool>(
+                              valueListenable: SystemState.floatingMode,
+                              builder: (context, isFloating, _) {
+                                return Icon(
+                                  isFloating ? Icons.layers : Icons.grid_view,
+                                  color: FyrTheme.textColor.withOpacity(0.9),
+                                  size: 18,
+                                );
+                              },
+                            ),
                           ),
-                          SizedBox(width: 12),
-                          ValueListenableBuilder<String>(
-                            valueListenable: SystemState.splitLayout,
-                            builder: (context, split, _) {
-                              IconData icon = Icons.crop_square;
-                              if (split == 'splitv') icon = Icons.splitscreen;
-                              if (split == 'splith') icon = Icons.vertical_split;
-                              return Icon(
-                                icon,
-                                color: FyrTheme.textColor.withOpacity(0.9),
-                                size: 18,
-                              );
-                            },
+                        ),
+                        GestureDetector(
+                          onTap: () async {
+                            await Process.run('swaymsg', ['layout toggle splitv splith']);
+                            SystemState._updateSwayState();
+                          },
+                          behavior: HitTestBehavior.opaque,
+                          child: Container(
+                            padding: EdgeInsets.symmetric(horizontal: 12),
+                            alignment: Alignment.center,
+                            child: ValueListenableBuilder<String>(
+                              valueListenable: SystemState.splitLayout,
+                              builder: (context, split, _) {
+                                IconData icon = Icons.crop_square;
+                                if (split == 'splitv') icon = Icons.splitscreen;
+                                if (split == 'splith') icon = Icons.vertical_split;
+                                return Icon(
+                                  icon,
+                                  color: FyrTheme.textColor.withOpacity(0.9),
+                                  size: 18,
+                                );
+                              },
+                            ),
                           ),
-                          SizedBox(width: 12),
+                        ),
+                        GestureDetector(
+                          onTap: _toggleQuickSettings,
+                          behavior: HitTestBehavior.opaque,
+                          child: Container(
+                            padding: EdgeInsets.only(left: 12, right: 20),
+                            alignment: Alignment.center,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                ValueListenableBuilder<String?>(
+                                  valueListenable: SystemState.wifiSsid,
+                                  builder: (context, ssid, _) {
+                                    return Icon(
+                                      ssid != null ? Icons.wifi : Icons.wifi_off,
+                                      color: ssid != null
+                                          ? FyrTheme.textColor.withOpacity(0.9)
+                                          : FyrTheme.textColor.withOpacity(0.4),
+                                      size: 18,
+                                    );
+                                  },
+                                ),
+                                SizedBox(width: 12),
+                                ValueListenableBuilder<List<String>>(
+                                  valueListenable: SystemState.bluetoothDevices,
+                                  builder: (context, devices, _) {
+                                    return Icon(
+                                      devices.isNotEmpty
+                                          ? Icons.bluetooth_connected
+                                          : Icons.bluetooth,
+                                      color: devices.isNotEmpty
+                                          ? FyrTheme.textColor.withOpacity(0.9)
+                                          : FyrTheme.textColor.withOpacity(0.4),
+                                      size: 18,
+                                    );
+                                  },
+                                ),
+                                SizedBox(width: 12),
                           ValueListenableBuilder<bool>(
                             valueListenable: SystemState.isCharging,
                             builder: (context, isCharging, _) {
@@ -675,7 +730,9 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                       ),
                     ),
                   ),
-                  ),
+                ],
+              ),
+            ),
                 ],
               ),
             ),
@@ -779,47 +836,45 @@ class _ClockWidgetState extends State<ClockWidget> {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ValueListenableBuilder<double?>(
-            valueListenable: SystemState.weatherTemp,
-            builder: (context, temp, _) {
-              if (temp == null) return const SizedBox();
-              return Row(
-                children: [
-                  ValueListenableBuilder<IconData>(
-                    valueListenable: SystemState.weatherIcon,
-                    builder: (context, icon, _) {
-                      return Icon(icon, color: FyrTheme.textColor, size: 14);
-                    },
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ValueListenableBuilder<double?>(
+          valueListenable: SystemState.weatherTemp,
+          builder: (context, temp, _) {
+            if (temp == null) return const SizedBox();
+            return Row(
+              children: [
+                ValueListenableBuilder<IconData>(
+                  valueListenable: SystemState.weatherIcon,
+                  builder: (context, icon, _) {
+                    return Icon(icon, color: FyrTheme.textColor, size: 14);
+                  },
+                ),
+                SizedBox(width: 4),
+                Text(
+                  '${temp.round()}°F',
+                  style: TextStyle(
+                    color: FyrTheme.textColor,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
                   ),
-                  SizedBox(width: 4),
-                  Text(
-                    '${temp.round()}°F',
-                    style: TextStyle(
-                      color: FyrTheme.textColor,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  SizedBox(width: 12),
-                ],
-              );
-            },
+                ),
+                SizedBox(width: 12),
+              ],
+            );
+          },
+        ),
+        Text(
+          _timeString,
+          style: TextStyle(
+            color: FyrTheme.textColor,
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.5,
           ),
-          Text(
-            _timeString,
-            style: TextStyle(
-              color: FyrTheme.textColor,
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.5,
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }

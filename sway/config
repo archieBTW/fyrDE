@@ -20,7 +20,7 @@ set $mod Mod4
 # Aesthetics & Window Styling
 # -------------------------------------------------------------
 default_border pixel 2
-default_floating_border pixel 2
+default_floating_border pixel 4
 gaps inner 20
 gaps outer 20
 corner_radius 12

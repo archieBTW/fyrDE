@@ -438,25 +438,10 @@ class _DockScreenState extends State<DockScreen> {
 
   void _resumeWindow(Map<String, dynamic> window) {
     if (window['is_minimized']) {
-      String? targetWs;
-      for (var mark in window['marks'] ?? []) {
-        if (mark.toString().startsWith("fyr_minimized_ws_")) {
-          targetWs = mark.toString().substring("fyr_minimized_ws_".length);
-          Process.run('swaymsg', [
-            '[con_id="${window['con_id']}"] unmark "$mark"',
-          ]);
-          break;
-        }
-      }
-      if (targetWs != null) {
-        Process.run('swaymsg', [
-          'workspace $targetWs; [con_id="${window['con_id']}"] scratchpad show',
-        ]);
-      } else {
-        Process.run('swaymsg', [
-          '[con_id="${window['con_id']}"] scratchpad show',
-        ]);
-      }
+
+      Process.run('swaymsg', [
+        '[con_id="${window['con_id']}"] scratchpad show',
+      ]);
     } else {
       Process.run('swaymsg', [
         '[con_id="${window['con_id']}"] focus',

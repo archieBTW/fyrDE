@@ -387,16 +387,31 @@ static void handle_request_maximize(struct wl_listener *listener, void *data) {
 		if (container_is_floating(view->container)) {
 			struct sway_workspace *ws = view->container->pending.workspace;
 			if (ws) {
-				workspace_add_tiling(ws, view->container);
-				container_set_floating(view->container, false);
+				struct wlr_box ws_box;
+				workspace_get_box(ws, &ws_box);
+				if (view->container->saved_width == 0) {
+					view->container->saved_x = view->container->pending.x;
+					view->container->saved_y = view->container->pending.y;
+					view->container->saved_width = view->container->pending.width;
+					view->container->saved_height = view->container->pending.height;
+				}
+				view->container->pending.x = ws_box.x;
+				view->container->pending.y = ws_box.y;
+				view->container->pending.width = ws_box.width;
+				view->container->pending.height = ws_box.height;
+				wlr_xdg_toplevel_set_maximized(view->wlr_xdg_toplevel, true);
 			}
 		}
 	} else {
-		if (!container_is_floating(view->container)) {
-			struct sway_workspace *ws = view->container->pending.workspace;
-			if (ws) {
-				workspace_add_floating(ws, view->container);
+		if (container_is_floating(view->container)) {
+			if (view->container->saved_width > 0) {
+				view->container->pending.x = view->container->saved_x;
+				view->container->pending.y = view->container->saved_y;
+				view->container->pending.width = view->container->saved_width;
+				view->container->pending.height = view->container->saved_height;
+				view->container->saved_width = 0;
 			}
+			wlr_xdg_toplevel_set_maximized(view->wlr_xdg_toplevel, false);
 		}
 	}
 
@@ -530,6 +545,20 @@ static void handle_map(struct wl_listener *listener, void *data) {
 		toplevel->requested.fullscreen,
 		toplevel->requested.fullscreen_output,
 		csd);
+
+	if (toplevel->requested.maximized && container_is_floating(view->container)) {
+		struct sway_workspace *ws = view->container->pending.workspace;
+		if (ws) {
+			struct wlr_box ws_box;
+			workspace_get_box(ws, &ws_box);
+			view->container->pending.x = ws_box.x;
+			view->container->pending.y = ws_box.y;
+			view->container->pending.width = ws_box.width;
+			view->container->pending.height = ws_box.height;
+			wlr_xdg_toplevel_set_maximized(view->wlr_xdg_toplevel, true);
+			arrange_root();
+		}
+	}
 
 	transaction_commit_dirty();
 
