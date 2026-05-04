@@ -29,8 +29,8 @@ if [ "$OS" = "arch" ] || [ "$OS" = "manjaro" ] || [ "$OS" = "endeavouros" ]; the
         echo "yay is already installed."
     fi
 
-    deps=(
-        "swaybg" "swaylock" "swayidle" "xorg-xwayland" "foot" "wmenu"
+    deps=( 
+        "mesa-utils" "swaybg" "swaylock" "swayidle" "xorg-xwayland" "foot" "wmenu"
         "gtk-layer-shell" "xdg-desktop-portal" "xdg-desktop-portal-gtk"
         "xdg-desktop-portal-wlr" "xclip" "wl-clipboard" "brightnessctl"
         "wireplumber" "wlsunset" "cmake" "cpio" "pkg-config" "gcc" "wf-recorder" "grim" "ninja" "clang"
