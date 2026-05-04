@@ -41,7 +41,7 @@ if [ "$OS" = "arch" ] || [ "$OS" = "manjaro" ] || [ "$OS" = "endeavouros" ]; the
     sudo pacman -S --needed --noconfirm "${deps[@]}"
 
     echo "Installing build dependencies, flutter, and termfilechooser via yay..."
-    yay -S --needed --noconfirm scenefx0.4 wlroots0.19 xdg-desktop-portal-termfilechooser-hunkyburrito-git # flutter
+    yay -S --needed --noconfirm scenefx0.4 wlroots0.19 xdg-desktop-portal-termfilechooser-hunkyburrito-git flutter
 
 elif [ "$OS" = "ubuntu" ] || [ "$OS" = "debian" ]; then
     echo "Updating system..."
