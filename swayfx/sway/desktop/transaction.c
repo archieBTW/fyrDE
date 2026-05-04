@@ -653,7 +653,7 @@ static void arrange_fullscreen(struct wlr_scene_tree *tree,
 	wlr_scene_node_set_position(fs_node, 0, 0);
 }
 
-static void arrange_workspace_floating(struct sway_workspace *ws) {
+static void arrange_workspace_floating(struct sway_workspace *ws, int offset_x) {
 	for (int i = 0; i < ws->current.floating->length; i++) {
 		struct sway_container *floater = ws->current.floating->items[i];
 		struct wlr_scene_tree *layer = root->layers.floating;
@@ -680,7 +680,7 @@ static void arrange_workspace_floating(struct sway_workspace *ws) {
 
 		wlr_scene_node_reparent(&floater->scene_tree->node, layer);
 		wlr_scene_node_set_position(&floater->scene_tree->node,
-			floater->current.x, floater->current.y);
+			floater->current.x + offset_x, floater->current.y);
 		wlr_scene_node_set_enabled(&floater->scene_tree->node, true);
 		wlr_scene_node_set_enabled(&floater->shadow->node, container_has_shadow(floater) && floater->view);
 		wlr_scene_node_set_enabled(&floater->border.tree->node, true);
@@ -721,45 +721,64 @@ static void arrange_output(struct sway_output *output, int width, int height) {
 		struct sway_workspace *child = output->current.workspaces->items[i];
 
 		bool activated = output->current.active_workspace == child && output->wlr_output->enabled;
+		bool animating = child->animation_state.animation && child->animation_state.animation->initialized;
 
 		wlr_scene_node_reparent(&child->layers.tiling->node, output->layers.tiling);
 		wlr_scene_node_reparent(&child->layers.fullscreen->node, output->layers.fullscreen);
 
-		for (int i = 0; i < child->current.floating->length; i++) {
-			struct sway_container *floater = child->current.floating->items[i];
+		for (int j = 0; j < child->current.floating->length; j++) {
+			struct sway_container *floater = child->current.floating->items[j];
 			wlr_scene_node_reparent(&floater->scene_tree->node, root->layers.floating);
-			wlr_scene_node_set_enabled(&floater->scene_tree->node, activated);
+			wlr_scene_node_set_enabled(&floater->scene_tree->node, activated || animating);
 		}
 
-		if (activated) {
+		if (activated || animating) {
 			struct sway_container *fs = child->current.fullscreen;
 			wlr_scene_node_set_enabled(&child->layers.tiling->node, !fs);
 			wlr_scene_node_set_enabled(&child->layers.fullscreen->node, fs);
 
-			wlr_scene_node_set_enabled(&output->layers.shell_background->node, !fs);
-			wlr_scene_node_set_enabled(&output->layers.shell_bottom->node, !fs);
-			wlr_scene_node_set_enabled(&output->layers.blur_layer->node, !fs);
-			wlr_scene_node_set_enabled(&output->layers.fullscreen->node, fs);
+			if (activated) {
+				wlr_scene_node_set_enabled(&output->layers.shell_background->node, !fs);
+				wlr_scene_node_set_enabled(&output->layers.shell_bottom->node, !fs);
+				wlr_scene_node_set_enabled(&output->layers.blur_layer->node, !fs);
+				wlr_scene_node_set_enabled(&output->layers.fullscreen->node, fs);
+			}
+
+			struct wlr_box *area = &output->usable_area;
+			struct side_gaps *gaps = &child->current_gaps;
+
+			int target_x = gaps->left + area->x;
+			int target_y = gaps->top + area->y;
+			int offset_x = 0;
+
+			if (animating) {
+				int current_x = get_animated_value(child->animation_state.start_x, child->animation_state.end_x, *child->animation_state.animation);
+				offset_x = current_x - target_x;
+				target_x = current_x;
+			}
+
+			wlr_scene_node_set_position(&child->layers.tiling->node,
+				target_x, target_y);
+			wlr_scene_node_set_position(&child->layers.fullscreen->node,
+				target_x, target_y);
 
 			if (fs) {
-				disable_workspace(child);
+				if (!animating) {
+					disable_workspace(child);
+				}
 
-				wlr_scene_rect_set_size(output->fullscreen_background, width, height);
+				if (activated) {
+					wlr_scene_rect_set_size(output->fullscreen_background, width, height);
+				}
 
-				arrange_workspace_floating(child);
+				arrange_workspace_floating(child, offset_x);
 				arrange_fullscreen(child->layers.fullscreen, fs, child,
 					width, height);
 			} else {
-				struct wlr_box *area = &output->usable_area;
-				struct side_gaps *gaps = &child->current_gaps;
-
-				wlr_scene_node_set_position(&child->layers.tiling->node,
-					gaps->left + area->x, gaps->top + area->y);
-
 				arrange_workspace_tiling(child,
 					area->width - gaps->left - gaps->right,
 					area->height - gaps->top - gaps->bottom);
-				arrange_workspace_floating(child);
+				arrange_workspace_floating(child, offset_x);
 			}
 		} else {
 			wlr_scene_node_set_enabled(&child->layers.tiling->node, false);
@@ -826,7 +845,7 @@ static void arrange_root(struct sway_root *root) {
 
 			// arrange the active workspace
 			if (ws) {
-				arrange_workspace_floating(ws);
+				arrange_workspace_floating(ws, 0);
 			}
 		}
 
@@ -902,9 +921,31 @@ static void transaction_apply(struct sway_transaction *transaction) {
 		switch (node->type) {
 		case N_ROOT:
 			break;
-		case N_OUTPUT:
-			apply_output_state(node->sway_output, &instruction->output_state);
+		case N_OUTPUT: {
+			struct sway_output *output = node->sway_output;
+			struct sway_workspace *old_ws = output->current.active_workspace;
+			struct sway_workspace *new_ws = instruction->output_state.active_workspace;
+			if (old_ws && new_ws && old_ws != new_ws && config->animation_duration_ms > 0) {
+				should_start_new_animation = true;
+
+				int old_idx = list_find(output->current.workspaces, old_ws);
+				int new_idx = list_find(instruction->output_state.workspaces, new_ws);
+				
+				int direction = (new_idx > old_idx) ? 1 : -1;
+				int width = output->width;
+				
+				old_ws->animation_state.start_x = old_ws->layers.tiling->node.x;
+				old_ws->animation_state.end_x = old_ws->animation_state.start_x - (direction * width);
+				
+				new_ws->animation_state.start_x = old_ws->layers.tiling->node.x + (direction * width);
+				new_ws->animation_state.end_x = old_ws->layers.tiling->node.x;
+
+				add_animation(old_ws->animation_state.animation);
+				add_animation(new_ws->animation_state.animation);
+			}
+			apply_output_state(output, &instruction->output_state);
 			break;
+		}
 		case N_WORKSPACE:
 			apply_workspace_state(node->sway_workspace,
 					&instruction->workspace_state);

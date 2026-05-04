@@ -31,6 +31,8 @@ shadow_blur_radius 30
 shadow_color #00000080
 scratchpad_minimize enable
 client.focused #800080 #800080 #ffffff #800080 #800080
+# Set animation duration in milliseconds (e.g., 300ms)
+animation_duration_ms 300
 
 # -------------------------------------------------------------
 # Keybindings

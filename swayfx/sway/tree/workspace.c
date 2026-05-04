@@ -90,6 +90,9 @@ struct sway_workspace *workspace_create(struct sway_output *output,
 	ws->tiling = create_list();
 	ws->output_priority = create_list();
 
+	ws->animation_state.animation = malloc(sizeof(struct animation));
+	*ws->animation_state.animation = init_animation();
+
 	ws->gaps_outer = config->gaps_outer;
 	ws->gaps_inner = config->gaps_inner;
 	if (name) {
@@ -150,6 +153,10 @@ void workspace_destroy(struct sway_workspace *workspace) {
 
 	free(workspace->name);
 	free(workspace->representation);
+	if (workspace->animation_state.animation->initialized) {
+		wl_list_remove(&workspace->animation_state.animation->link);
+	}
+	free(workspace->animation_state.animation);
 	list_free_items_and_destroy(workspace->output_priority);
 	list_free(workspace->floating);
 	list_free(workspace->tiling);
@@ -176,6 +183,10 @@ void workspace_consider_destroy(struct sway_workspace *ws) {
 	}
 
 	if (ws->output && output_get_active_workspace(ws->output) == ws) {
+		return;
+	}
+
+	if (ws->animation_state.animation && ws->animation_state.animation->initialized) {
 		return;
 	}
 

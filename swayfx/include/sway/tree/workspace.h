@@ -50,6 +50,12 @@ struct sway_workspace {
 	list_t *output_priority;
 	bool urgent;
 
+	struct {
+		struct animation *animation;
+		int start_x;
+		int end_x;
+	} animation_state;
+
 	struct sway_workspace_state current;
 };
 
