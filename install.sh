@@ -41,7 +41,7 @@ if [ "$OS" = "arch" ] || [ "$OS" = "manjaro" ] || [ "$OS" = "endeavouros" ]; the
     sudo pacman -S --needed --noconfirm "${deps[@]}"
 
     echo "Installing build dependencies, flutter, and termfilechooser via yay..."
-    yay -S --needed --noconfirm scenefx0.4 wlroots0.19 xdg-desktop-portal-termfilechooser-hunkyburrito-git flutter
+    yay -S --needed --noconfirm scenefx0.4 wlroots0.19 xdg-desktop-portal-termfilechooser-hunkyburrito-git
 
 elif [ "$OS" = "ubuntu" ] || [ "$OS" = "debian" ]; then
     echo "Updating system..."
@@ -58,10 +58,7 @@ elif [ "$OS" = "ubuntu" ] || [ "$OS" = "debian" ]; then
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${deps[@]}"
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y wlsunset wmenu swayfx || echo "Some optional packages (wlsunset, wmenu, swayfx) might not be available, continuing..."
 
-    if ! command -v flutter &> /dev/null; then
-        echo "Flutter not found. Installing via snap..."
-        sudo snap install flutter --classic || echo "Failed to install flutter via snap. Please install flutter manually."
-    fi
+
 
 elif [ "$OS" = "fedora" ]; then
     echo "Updating system..."
@@ -78,16 +75,23 @@ elif [ "$OS" = "fedora" ]; then
     sudo dnf install -y "${deps[@]}"
     sudo dnf install -y wlsunset wmenu swayfx || echo "Some optional packages (wlsunset, wmenu, swayfx) might not be available, continuing..."
 
-    if ! command -v flutter &> /dev/null; then
-        echo "Flutter not found. Please install Flutter manually: https://docs.flutter.dev/get-started/install/linux"
-        exit 1
-    fi
+
 
 else
     echo "Unsupported OS: $OS"
     echo "Please install dependencies and flutter manually, then run the build steps."
     exit 1
 fi
+
+echo "Ensuring Flutter 3.41.9 is installed in /opt/flutter..."
+if [ ! -d "/opt/flutter" ] || [ "$(cat /opt/flutter/version 2>/dev/null)" != "3.41.9" ]; then
+    sudo rm -rf /opt/flutter
+    sudo git clone https://github.com/flutter/flutter.git -b 3.41.9 /opt/flutter
+    sudo chown -R $USER:$USER /opt/flutter
+fi
+export PATH="$PATH:/opt/flutter/bin"
+flutter doctor
+
 
 echo "Building and installing local swayfx..."
 if [ -d "./swayfx" ]; then
