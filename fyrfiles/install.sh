@@ -3,10 +3,10 @@
 # Exit on error
 set -e
 
-echo "Building FyrFiles for Linux..."
+echo "Building fyrfiles for Linux..."
 flutter build linux --release
 
-echo "Installing FyrFiles..."
+echo "Installing fyrfiles..."
 # Remove any previous installation
 sudo rm -rf /opt/fyrfiles
 
@@ -18,7 +18,7 @@ sudo ln -sf /opt/fyrfiles/fyr_files /usr/local/bin/fyrfiles
 
 # Create a desktop entry
 echo "[Desktop Entry]
-Name=FyrFiles
+Name=fyrfiles
 Comment=A modern, custom file manager
 Exec=/usr/local/bin/fyrfiles
 Icon=system-file-manager
@@ -29,7 +29,7 @@ Categories=Utility;System;FileTools;" | sudo tee /usr/share/applications/fyrfile
 echo "Updating desktop database..."
 sudo update-desktop-database || true
 
-echo "Setting up FyrFiles as default file picker for Sway..."
+echo "Setting up fyrfiles as default file picker for Sway..."
 
 sudo bash -c "cat > /usr/local/bin/fyr_files_picker <<EOF
 #!/bin/bash
@@ -57,4 +57,4 @@ EOF
 
 echo "Installation complete!"
 echo "Please ensure xdg-desktop-portal-termfilechooser is installed!"
-echo "You can now run FyrFiles from your application menu or by typing 'fyrfiles' in the terminal."
+echo "You can now run fyrfiles from your application menu or by typing 'fyrfiles' in the terminal."

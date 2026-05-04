@@ -105,7 +105,7 @@ fi
 echo "Building and installing Flutter applications..."
 git config --global --add safe.directory /opt/flutter || true
 flutter config --enable-linux-desktop
-flutter_apps=("fyrdock" "fyroverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrTerm" "fyrFiles" "fyrhelp" "fyremoji" "fyrstore")
+flutter_apps=("fyrdock" "fyroverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrstore")
 
 for app in "${flutter_apps[@]}"; do
     if [ -d "./$app" ]; then
@@ -126,19 +126,19 @@ for app in "${flutter_apps[@]}"; do
     fi
 done
 
-echo "Setting up fyrTerm configurations..."
-if [ -d "./fyrTerm" ]; then
-    sudo ln -sf /opt/fyrTerm/fyrterm /usr/local/bin/fyrterm
+echo "Setting up fyrterm configurations..."
+if [ -d "./fyrterm" ]; then
+    sudo ln -sf /opt/fyrterm/fyrterm /usr/local/bin/fyrterm
     
-    if [ -f "./fyrTerm/assets/icons/fyrterm.png" ]; then
+    if [ -f "./fyrterm/assets/icons/fyrterm.png" ]; then
         sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
-        sudo cp ./fyrTerm/assets/icons/fyrterm.png /usr/share/icons/hicolor/512x512/apps/fyrterm.png
+        sudo cp ./fyrterm/assets/icons/fyrterm.png /usr/share/icons/hicolor/512x512/apps/fyrterm.png
     fi
 
     sudo tee /usr/share/applications/fyrterm.desktop > /dev/null <<'EOF'
 [Desktop Entry]
 Version=1.0
-Name=fyrTerm
+Name=fyrterm
 GenericName=Terminal Emulator
 Comment=A flutter terminal emulator
 Exec=/usr/local/bin/fyrterm
@@ -159,13 +159,13 @@ EOF
     sudo update-alternatives --install /usr/bin/x-terminal-emulator x-terminal-emulator /usr/local/bin/fyrterm 50 || true
 fi
 
-echo "Setting up FyrFiles configurations..."
-if [ -d "./fyrFiles" ]; then
-    sudo ln -sf /opt/fyrFiles/fyr_files /usr/local/bin/fyrfiles
+echo "Setting up fyrfiles configurations..."
+if [ -d "./fyrfiles" ]; then
+    sudo ln -sf /opt/fyrfiles/fyr_files /usr/local/bin/fyrfiles
 
     sudo tee /usr/share/applications/fyrfiles.desktop > /dev/null <<'EOF'
 [Desktop Entry]
-Name=FyrFiles
+Name=fyrfiles
 Comment=A modern, custom file manager
 Exec=/usr/local/bin/fyrfiles
 Icon=system-file-manager
@@ -178,7 +178,7 @@ EOF
         sudo update-desktop-database /usr/share/applications || true
     fi
 
-    echo "Setting up FyrFiles as default file picker for Sway..."
+    echo "Setting up fyrfiles as default file picker for Sway..."
     sudo tee /usr/local/bin/fyr_files_picker > /dev/null <<'EOF'
 #!/bin/bash
 out="$5"

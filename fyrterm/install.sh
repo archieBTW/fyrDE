@@ -3,15 +3,15 @@ set -e
 
 # Ensure we're in the right directory
 if [ ! -f "pubspec.yaml" ]; then
-    echo "Please run this script from the fyrTerm project root."
+    echo "Please run this script from the fyrterm project root."
     exit 1
 fi
 
-echo "Building fyrTerm..."
+echo "Building fyrterm..."
 flutter build linux --release
 
-echo "Installing fyrTerm system-wide (requires sudo)..."
-INSTALL_DIR="/opt/fyrTerm"
+echo "Installing fyrterm system-wide (requires sudo)..."
+INSTALL_DIR="/opt/fyrterm"
 BIN_DIR="/usr/local/bin"
 APP_DIR="/usr/share/applications"
 ICON_DIR="/usr/share/icons/hicolor/512x512/apps"
@@ -37,7 +37,7 @@ fi
 sudo bash -c "cat <<EOF > $APP_DIR/fyrterm.desktop
 [Desktop Entry]
 Version=1.0
-Name=fyrTerm
+Name=fyrterm
 GenericName=Terminal Emulator
 Comment=A flutter terminal emulator
 Exec=$BIN_DIR/fyrterm
@@ -59,5 +59,5 @@ fi
 
 sudo update-alternatives --install /usr/bin/x-terminal-emulator x-terminal-emulator /usr/local/bin/fyrterm 50 || true
 
-echo "fyrTerm installed successfully!"
+echo "fyrterm installed successfully!"
 echo "You can now run 'fyrterm' from the CLI or find it in your application launcher."
