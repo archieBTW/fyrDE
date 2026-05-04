@@ -168,7 +168,6 @@ void main() async {
   WindowOptions windowOptions = WindowOptions(
     size: initialSize,
     center: true,
-    backgroundColor: Colors.transparent,
     skipTaskbar: false,
     titleBarStyle: TitleBarStyle.hidden,
   );
@@ -462,7 +461,6 @@ class _HomeState extends State<Home> with WindowListener {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.transparent,
       body: SafeArea(
         child: ResizableWindow(
           child: Column(

@@ -3,9 +3,14 @@ import 'package:flutter/material.dart';
 import 'main.dart';
 import 'fyr_theme.dart';
 
-class WorkspaceSwitcher extends StatelessWidget {
+class WorkspaceSwitcher extends StatefulWidget {
   const WorkspaceSwitcher({super.key});
 
+  @override
+  State<WorkspaceSwitcher> createState() => _WorkspaceSwitcherState();
+}
+
+class _WorkspaceSwitcherState extends State<WorkspaceSwitcher> {
   void _switchWorkspace(String name) {
     Process.start('swaymsg', ['workspace', name]);
   }
@@ -15,46 +20,71 @@ class WorkspaceSwitcher extends StatelessWidget {
     return ValueListenableBuilder<List<Map<String, dynamic>>>(
       valueListenable: SystemState.workspaces,
       builder: (context, workspaces, _) {
-        if (workspaces.isEmpty) return const SizedBox();
+        List<Map<String, dynamic>> allWorkspaces = [];
+        int maxWorkspace = 3;
 
-        final sortedWorkspaces = List<Map<String, dynamic>>.from(workspaces)
-          ..sort((a, b) => (a['num'] as int).compareTo(b['num'] as int));
+        for (var w in workspaces) {
+          if (w['num'] is int && w['num'] > maxWorkspace) {
+            maxWorkspace = w['num'];
+          }
+        }
+
+        for (int i = 1; i <= maxWorkspace; i++) {
+          final ws = workspaces.cast<Map<String, dynamic>?>().firstWhere(
+            (w) => w != null && w['num'] == i,
+            orElse: () => null,
+          );
+
+          if (ws != null) {
+            allWorkspaces.add(ws);
+          } else {
+            allWorkspaces.add({
+              'num': i,
+              'name': i.toString(),
+              'focused': false,
+              'visible': false,
+              'empty': true,
+            });
+          }
+        }
+
+        for (var w in workspaces) {
+          if (w['num'] is int && w['num'] < 1) {
+            allWorkspaces.add(w);
+          }
+        }
+
+        allWorkspaces.sort((a, b) => (a['num'] as int).compareTo(b['num'] as int));
 
         return Row(
           mainAxisSize: MainAxisSize.min,
-          children: sortedWorkspaces.map((ws) {
+          children: allWorkspaces.map((ws) {
             final bool isFocused = ws['focused'] == true;
-            final bool isVisible = ws['visible'] == true;
+            final bool isEmpty = ws['empty'] == true;
             final String name = ws['name'].toString();
 
-            return InkWell(
+            return GestureDetector(
               onTap: () => _switchWorkspace(name),
-              hoverColor: FyrTheme.hoverColor,
-              borderRadius: BorderRadius.circular(6),
-              child: Container(
-                margin: const EdgeInsets.symmetric(horizontal: 4),
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: isFocused
-                      ? FyrTheme.accentColor.withOpacity(0.2)
-                      : (isVisible ? FyrTheme.cardColor : Colors.transparent),
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(
+              behavior: HitTestBehavior.opaque,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeOutCubic,
+                  width: isFocused ? 28 : 10,
+                  height: 10,
+                  decoration: BoxDecoration(
                     color: isFocused
-                        ? FyrTheme.accentColor.withOpacity(0.5)
-                        : (isVisible
-                            ? FyrTheme.textColor.withOpacity(0.1)
-                            : Colors.transparent),
-                  ),
-                ),
-                child: Text(
-                  name,
-                  style: TextStyle(
-                    color: isFocused
-                        ? FyrTheme.accentColor
-                        : FyrTheme.textColor.withOpacity(isVisible ? 0.9 : 0.6),
-                    fontWeight: isFocused ? FontWeight.bold : FontWeight.w500,
-                    fontSize: 13,
+                        ? Colors.white
+                        : Colors.white.withOpacity(isEmpty ? 0.25 : 0.7),
+                    borderRadius: BorderRadius.circular(5),
+                    boxShadow: isFocused ? [
+                      BoxShadow(
+                        color: Colors.white.withOpacity(0.4),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      )
+                    ] : null,
                   ),
                 ),
               ),

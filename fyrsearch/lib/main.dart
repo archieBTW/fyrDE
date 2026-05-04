@@ -477,11 +477,18 @@ class _LauncherScreenState extends State<LauncherScreen>
 
     return Scaffold(
       backgroundColor: Colors.transparent,
-      body: Focus(
-        canRequestFocus: true,
-        onKeyEvent: (node, event) {
-          if (event is KeyDownEvent) {
-            if (event.logicalKey == LogicalKeyboardKey.backspace) {
+      body: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: _hideLauncher,
+        child: Focus(
+          canRequestFocus: true,
+          onKeyEvent: (node, event) {
+            if (event is KeyDownEvent) {
+              if (event.logicalKey == LogicalKeyboardKey.escape) {
+                _hideLauncher();
+                return KeyEventResult.handled;
+              }
+              if (event.logicalKey == LogicalKeyboardKey.backspace) {
               if (!_focusNode.hasFocus && _searchController.text.isNotEmpty) {
                 _focusNode.requestFocus();
                 _searchController.text = _searchController.text.substring(
@@ -903,6 +910,7 @@ class _LauncherScreenState extends State<LauncherScreen>
             ),
           ],
         ),
+      ),
       ),
     );
   }

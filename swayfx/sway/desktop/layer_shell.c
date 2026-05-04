@@ -115,6 +115,7 @@ static void arrange_surface(struct sway_output *output, const struct wlr_box *fu
 
 			wlr_scene_shadow_set_clipped_region(surface->shadow_node, (struct clipped_region) {
 					.corners = CORNER_LOCATION_ALL,
+					.corner_radius = surface->corner_radius,
 					.area = {
 						.x = -x,
 						.y = -y,
