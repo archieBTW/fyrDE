@@ -1,6 +1,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <time.h>
 #include <wlr/types/wlr_buffer.h>
 #include "scenefx/types/fx/clipped_region.h"
@@ -928,10 +929,14 @@ static void transaction_apply(struct sway_transaction *transaction) {
 			if (old_ws && new_ws && old_ws != new_ws && config->animation_duration_ms > 0) {
 				should_start_new_animation = true;
 
-				int old_idx = list_find(output->current.workspaces, old_ws);
-				int new_idx = list_find(instruction->output_state.workspaces, new_ws);
-				
-				int direction = (new_idx > old_idx) ? 1 : -1;
+				int direction = 0;
+				if (isdigit(old_ws->name[0]) && isdigit(new_ws->name[0])) {
+					int old_num = strtol(old_ws->name, NULL, 10);
+					int new_num = strtol(new_ws->name, NULL, 10);
+					direction = (new_num > old_num) ? 1 : -1;
+				} else {
+					direction = strcmp(new_ws->name, old_ws->name) > 0 ? 1 : -1;
+				}
 				int width = output->width;
 				
 				old_ws->animation_state.start_x = old_ws->layers.tiling->node.x;

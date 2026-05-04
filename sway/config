@@ -86,7 +86,8 @@ bindsym $mod+Shift+8 move container to workspace number 8
 bindsym $mod+Shift+9 move container to workspace number 9
 bindsym $mod+Shift+0 move container to workspace number 10
 
-bindgesture swipe:3:left exec 'curr=$(swaymsg -t get_workspaces | jq -r ".[] | select(.focused==true).num"); swaymsg workspace number $((curr - 1 < 1 ? 1 : curr - 1))'
+#bindgesture swipe:3:left exec 'curr=$(swaymsg -t get_workspaces | jq -r ".[] | select(.focused==true).num"); swaymsg workspace number $((curr - 1 < 1 ? 1 : curr - 1))'
+bindgesture swipe:3:left exec 'curr=$(swaymsg -t get_workspaces | jq -r ".[] | select(.focused==true).num"); [ $curr -gt 1 ] && swaymsg workspace number $((curr - 1))'
 bindgesture swipe:3:right exec 'curr=$(swaymsg -t get_workspaces | jq -r ".[] | select(.focused==true).num"); swaymsg workspace number $((curr + 1))'
 
 # -------------------------------------------------------------
