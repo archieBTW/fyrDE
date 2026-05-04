@@ -104,7 +104,7 @@ fi
 
 echo "Building and installing Flutter applications..."
 git config --global --add safe.directory /opt/flutter || true
-
+flutter config --enable-linux-desktop
 flutter_apps=("fyrdock" "fyroverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrTerm" "fyrFiles" "fyrhelp" "fyremoji" "fyrstore")
 
 for app in "${flutter_apps[@]}"; do
@@ -112,6 +112,7 @@ for app in "${flutter_apps[@]}"; do
         echo "Building $app..."
         cd "./$app"
         flutter clean || true
+        flutter create --platforms=linux .
         flutter pub get
         flutter build linux
         
