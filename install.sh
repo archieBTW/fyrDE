@@ -11,6 +11,16 @@ fi
 
 echo "Detected OS: $OS"
 
+# Get screen resolution early for patching source files
+RES=$(cat /sys/class/drm/*/modes | head -n 1)
+if [ -z "$RES" ]; then
+    RES="1920x1080"
+fi
+WIDTH=$(echo $RES | cut -d'x' -f1)
+HEIGHT=$(echo $RES | cut -d'x' -f2)
+echo "Detected resolution: ${WIDTH}x${HEIGHT}"
+
+
 if [ "$OS" = "arch" ] || [ "$OS" = "manjaro" ] || [ "$OS" = "endeavouros" ]; then
     echo "Updating system..."
     sudo pacman -Syu --noconfirm
@@ -109,7 +119,19 @@ fi
 echo "Building and installing Flutter applications..."
 git config --global --add safe.directory /opt/flutter || true
 flutter config --enable-linux-desktop
+echo "Patching Flutter applications with detected resolution..."
+find . -maxdepth 2 -name "lib" -type d | while read dir; do
+    find "$dir" -name "*.dart" -exec sed -i "s/1920/$WIDTH/g" {} +
+    find "$dir" -name "*.dart" -exec sed -i "s/1080/$HEIGHT/g" {} +
+done
+
+if [ -f "./fyrdock/tree.json" ]; then
+    sed -i "s/1920/$WIDTH/g" ./fyrdock/tree.json
+    sed -i "s/1080/$HEIGHT/g" ./fyrdock/tree.json
+fi
+
 flutter_apps=("fyrdock" "fyroverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrstore")
+
 
 for app in "${flutter_apps[@]}"; do
     if [ -d "./$app" ]; then
@@ -392,14 +414,7 @@ mkdir -p ~/.config/sway
 if [ -f "./sway/config" ]; then
     cp ./sway/config ~/.config/sway/config
     
-    # Get screen resolution
-    RES=$(cat /sys/class/drm/*/modes | head -n 1)
-    if [ -z "$RES" ]; then
-        RES="1920x1080"
-    fi
-    WIDTH=$(echo $RES | cut -d'x' -f1)
-    HEIGHT=$(echo $RES | cut -d'x' -f2)
-    
+    # Get screen resolution (already detected at top, but just in case we're using a cached config)
     sed -i "s/1920 1080/$WIDTH $HEIGHT/g" ~/.config/sway/config
     sed -i "s/1920x1080/${WIDTH}x${HEIGHT}/g" ~/.config/sway/config
     
