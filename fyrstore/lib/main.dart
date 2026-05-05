@@ -116,6 +116,8 @@ void main() async {
   await windowManager.ensureInitialized();
   WindowOptions windowOptions = const WindowOptions(
     size: Size(1000, 700),
+    center: true,
+    backgroundColor: Colors.transparent,
     titleBarStyle: TitleBarStyle.hidden,
   );
   windowManager.waitUntilReadyToShow(windowOptions, () async {
@@ -137,13 +139,13 @@ class FyrStoreApp extends StatelessWidget {
           debugShowCheckedModeBanner: false,
           themeMode: FyrTheme.themeMode,
           theme: ThemeData.light().copyWith(
-            useMaterial3: false,
+            useMaterial3: true,
             primaryColor: FyrTheme.accentColor,
-            scaffoldBackgroundColor: const Color(0xFFF0F0F0),
+            scaffoldBackgroundColor: Colors.white,
             colorScheme: ColorScheme.light(primary: FyrTheme.accentColor),
           ),
           darkTheme: ThemeData.dark().copyWith(
-            useMaterial3: false,
+            useMaterial3: true,
             scaffoldBackgroundColor: const Color(0xFF2A282C),
             primaryColor: FyrTheme.accentColor,
             colorScheme: ColorScheme.dark(primary: FyrTheme.accentColor),
@@ -171,62 +173,59 @@ class _FyrStoreHomeState extends State<FyrStoreHome> {
 
   final Map<String, List<Map<String, String>>> defaultApps = {
     'Recommended': [
-      {'name': 'firefox', 'description': 'Standalone web browser from mozilla.org', 'source': 'Arch', 'url': 'https://www.mozilla.org/firefox/'},
-      {'name': 'visual-studio-code-bin', 'description': 'Visual Studio Code (vscode): Editor for building and debugging modern web and cloud applications', 'source': 'AUR', 'url': 'https://code.visualstudio.com/'},
-      {'name': 'vlc', 'description': 'Multi-platform MPEG, VCD/DVD, and DivX player', 'source': 'Arch', 'url': 'https://www.videolan.org/'},
-      {'name': 'discord', 'description': 'All-in-one voice and text chat for gamers', 'source': 'Arch', 'url': 'https://discord.com/'},
-      {'name': 'steam', 'description': 'Valve distribution utility', 'source': 'Arch', 'url': 'https://store.steampowered.com/'},
-      {'name': 'spotify', 'description': 'A proprietary music streaming service', 'source': 'AUR', 'url': 'https://www.spotify.com/'},
+      {'name': 'firefox', 'friendlyName': 'Firefox Browser', 'description': 'Standalone web browser from mozilla.org', 'source': 'Arch', 'url': 'https://www.mozilla.org/firefox/'},
+      {'name': 'visual-studio-code-bin', 'friendlyName': 'VS Code', 'description': 'Code Editor for building and debugging modern web and cloud applications', 'source': 'AUR', 'url': 'https://code.visualstudio.com/'},
+      {'name': 'vlc', 'friendlyName': 'VLC Media Player', 'description': 'Multi-platform MPEG, VCD/DVD, and DivX player', 'source': 'Arch', 'url': 'https://www.videolan.org/'},
+      {'name': 'discord', 'friendlyName': 'Discord', 'description': 'All-in-one voice and text chat for gamers', 'source': 'Arch', 'url': 'https://discord.com/'},
+      {'name': 'steam', 'friendlyName': 'Steam', 'description': 'Valve distribution utility', 'source': 'Arch', 'url': 'https://store.steampowered.com/'},
+      {'name': 'spotify', 'friendlyName': 'Spotify', 'description': 'A proprietary music streaming service', 'source': 'AUR', 'url': 'https://www.spotify.com/'},
     ],
     'Web Browsers': [
-      {'name': 'firefox', 'description': 'Standalone web browser from mozilla.org', 'source': 'Arch', 'url': 'https://www.mozilla.org/firefox/'},
-      {'name': 'chromium', 'description': 'A web browser built for speed, simplicity, and security', 'source': 'Arch', 'url': 'https://www.chromium.org/Home'},
-      {'name': 'brave-bin', 'description': 'Web browser that blocks ads and trackers by default', 'source': 'AUR', 'url': 'https://brave.com/'},
-      {'name': 'google-chrome', 'description': 'The popular web browser by Google', 'source': 'AUR', 'url': 'https://www.google.com/chrome/'},
+      {'name': 'firefox', 'friendlyName': 'Firefox', 'description': 'Standalone web browser from mozilla.org', 'source': 'Arch', 'url': 'https://www.mozilla.org/firefox/'},
+      {'name': 'chromium', 'friendlyName': 'Chromium', 'description': 'A web browser built for speed, simplicity, and security', 'source': 'Arch', 'url': 'https://www.chromium.org/Home'},
+      {'name': 'brave-bin', 'friendlyName': 'Brave', 'description': 'Web browser that blocks ads and trackers by default', 'source': 'AUR', 'url': 'https://brave.com/'},
+      {'name': 'google-chrome', 'friendlyName': 'Google Chrome', 'description': 'The popular web browser by Google', 'source': 'AUR', 'url': 'https://www.google.com/chrome/'},
     ],
     'Development': [
-      {'name': 'visual-studio-code-bin', 'description': 'Visual Studio Code', 'source': 'AUR', 'url': 'https://code.visualstudio.com/'},
-      {'name': 'intellij-idea-community-edition', 'description': 'IntelliJ IDEA Community Edition', 'source': 'Arch', 'url': 'https://www.jetbrains.com/idea/'},
-      {'name': 'neovim', 'description': 'Fork of Vim aiming to improve user experience, plugins, and GUIs', 'source': 'Arch', 'url': 'https://neovim.io/'},
-      {'name': 'git', 'description': 'the fast distributed version control system', 'source': 'Arch', 'url': 'https://git-scm.com/'},
-      {'name': 'docker', 'description': 'Pack, ship and run any application as a lightweight container', 'source': 'Arch', 'url': 'https://www.docker.com/'},
-      {'name': 'postman-bin', 'description': 'Build, test, and document your APIs faster', 'source': 'AUR', 'url': 'https://www.postman.com/'},
+      {'name': 'visual-studio-code-bin', 'friendlyName': 'VS Code', 'description': 'Visual Studio Code', 'source': 'AUR', 'url': 'https://code.visualstudio.com/'},
+      {'name': 'intellij-idea-community-edition', 'friendlyName': 'IntelliJ IDEA', 'description': 'IntelliJ IDEA Community Edition', 'source': 'Arch', 'url': 'https://www.jetbrains.com/idea/'},
+      {'name': 'neovim', 'friendlyName': 'Neovim', 'description': 'Fork of Vim aiming to improve user experience', 'source': 'Arch', 'url': 'https://neovim.io/'},
+      {'name': 'git', 'friendlyName': 'Git', 'description': 'Distributed version control system', 'source': 'Arch', 'url': 'https://git-scm.com/'},
+      {'name': 'docker', 'friendlyName': 'Docker', 'description': 'Pack, ship and run any application as a lightweight container', 'source': 'Arch', 'url': 'https://www.docker.com/'},
     ],
     'Multimedia': [
-      {'name': 'vlc', 'description': 'Multi-platform MPEG, VCD/DVD, and DivX player', 'source': 'Arch', 'url': 'https://www.videolan.org/'},
-      {'name': 'spotify', 'description': 'A proprietary music streaming service', 'source': 'AUR', 'url': 'https://www.spotify.com/'},
-      {'name': 'obs-studio', 'description': 'Free and open source software for video recording and live streaming', 'source': 'Arch', 'url': 'https://obsproject.com/'},
-      {'name': 'gimp', 'description': 'GNU Image Manipulation Program', 'source': 'Arch', 'url': 'https://www.gimp.org/'},
-      {'name': 'blender', 'description': 'A fully integrated 3D graphics creation suite', 'source': 'Arch', 'url': 'https://www.blender.org/'},
+      {'name': 'vlc', 'friendlyName': 'VLC', 'description': 'Multi-platform player', 'source': 'Arch', 'url': 'https://www.videolan.org/'},
+      {'name': 'spotify', 'friendlyName': 'Spotify', 'description': 'Music streaming service', 'source': 'AUR', 'url': 'https://www.spotify.com/'},
+      {'name': 'obs-studio', 'friendlyName': 'OBS Studio', 'description': 'Video recording and live streaming', 'source': 'Arch', 'url': 'https://obsproject.com/'},
+      {'name': 'gimp', 'friendlyName': 'GIMP', 'description': 'GNU Image Manipulation Program', 'source': 'Arch', 'url': 'https://www.gimp.org/'},
+      {'name': 'blender', 'friendlyName': 'Blender', 'description': '3D graphics creation suite', 'source': 'Arch', 'url': 'https://www.blender.org/'},
     ],
     'System': [
-      {'name': 'htop', 'description': 'Interactive process viewer', 'source': 'Arch', 'url': 'https://htop.dev/'},
-      {'name': 'neofetch', 'description': 'A CLI system information tool written in BASH that supports displaying images.', 'source': 'Arch', 'url': 'https://github.com/dylanaraps/neofetch'},
-      {'name': 'timeshift', 'description': 'A system restore utility for Linux', 'source': 'Arch', 'url': 'https://github.com/linuxmint/timeshift'},
-      {'name': 'alacritty', 'description': 'A cross-platform, GPU-accelerated terminal emulator', 'source': 'Arch', 'url': 'https://alacritty.org/'},
-      {'name': 'gparted', 'description': 'A Partition Magic clone, frontend to GNU Parted', 'source': 'Arch', 'url': 'https://gparted.org/'},
+      {'name': 'htop', 'friendlyName': 'Htop', 'description': 'Interactive process viewer', 'source': 'Arch', 'url': 'https://htop.dev/'},
+      {'name': 'neofetch', 'friendlyName': 'Neofetch', 'description': 'CLI system information tool', 'source': 'Arch', 'url': 'https://github.com/dylanaraps/neofetch'},
+      {'name': 'timeshift', 'friendlyName': 'Timeshift', 'description': 'System restore utility', 'source': 'Arch', 'url': 'https://github.com/linuxmint/timeshift'},
+      {'name': 'alacritty', 'friendlyName': 'Alacritty', 'description': 'GPU-accelerated terminal emulator', 'source': 'Arch', 'url': 'https://alacritty.org/'},
     ],
     'Games': [
-      {'name': 'steam', 'description': 'Valve distribution utility', 'source': 'Arch', 'url': 'https://store.steampowered.com/'},
-      {'name': 'lutris', 'description': 'Open gaming platform for Linux', 'source': 'Arch', 'url': 'https://lutris.net/'},
-      {'name': 'heroic-games-launcher-bin', 'description': 'An Open Source Epic Games and GOG Launcher', 'source': 'AUR', 'url': 'https://heroicgameslauncher.com/'},
-      {'name': 'minecraft-launcher', 'description': 'Official Minecraft Launcher', 'source': 'AUR', 'url': 'https://www.minecraft.net/'},
+      {'name': 'steam', 'friendlyName': 'Steam', 'description': 'Valve distribution utility', 'source': 'Arch', 'url': 'https://store.steampowered.com/'},
+      {'name': 'lutris', 'friendlyName': 'Lutris', 'description': 'Open gaming platform for Linux', 'source': 'Arch', 'url': 'https://lutris.net/'},
+      {'name': 'heroic-games-launcher-bin', 'friendlyName': 'Heroic Launcher', 'description': 'Epic/GOG Launcher', 'source': 'AUR', 'url': 'https://heroicgameslauncher.com/'},
     ],
     'Office': [
-      {'name': 'libreoffice-fresh', 'description': 'LibreOffice branch which contains new features and program enhancements', 'source': 'Arch', 'url': 'https://www.libreoffice.org/'},
-      {'name': 'onlyoffice-bin', 'description': 'Office suite that combines text, spreadsheet and presentation editors', 'source': 'AUR', 'url': 'https://www.onlyoffice.com/'},
-      {'name': 'obsidian', 'description': 'A powerful knowledge base that works on top of a local folder of plain text Markdown files', 'source': 'Arch', 'url': 'https://obsidian.md/'},
+      {'name': 'libreoffice-fresh', 'friendlyName': 'LibreOffice', 'description': 'LibreOffice branch with new features', 'source': 'Arch', 'url': 'https://www.libreoffice.org/'},
+      {'name': 'onlyoffice-bin', 'friendlyName': 'ONLYOFFICE', 'description': 'Office suite for documents, spreadsheets, presentations', 'source': 'AUR', 'url': 'https://www.onlyoffice.com/'},
+      {'name': 'obsidian', 'friendlyName': 'Obsidian', 'description': 'Powerful knowledge base on Markdown', 'source': 'Arch', 'url': 'https://obsidian.md/'},
     ]
   };
 
   final Map<String, IconData> categoryIcons = {
-    'Recommended': Icons.star,
-    'Web Browsers': Icons.language,
-    'Development': Icons.code,
-    'Multimedia': Icons.music_video,
-    'System': Icons.settings_system_daydream,
-    'Games': Icons.sports_esports,
-    'Office': Icons.work,
+    'Recommended': Icons.star_rounded,
+    'Web Browsers': Icons.language_rounded,
+    'Development': Icons.code_rounded,
+    'Multimedia': Icons.music_video_rounded,
+    'System': Icons.settings_system_daydream_rounded,
+    'Games': Icons.sports_esports_rounded,
+    'Office': Icons.work_rounded,
   };
 
   Future<void> _searchApps(String query) async {
@@ -256,6 +255,7 @@ class _FyrStoreHomeState extends State<FyrStoreHome> {
           var desc = i + 1 < lines.length ? lines[i + 1].trim() : '';
           temp.add({
             'name': name,
+            'friendlyName': name,
             'description': desc,
             'source': 'Arch',
           });
@@ -273,6 +273,7 @@ class _FyrStoreHomeState extends State<FyrStoreHome> {
         for (var item in json['results']) {
           temp.add({
             'name': item['Name'],
+            'friendlyName': item['Name'],
             'description': item['Description'] ?? '',
             'source': 'AUR',
           });
@@ -313,42 +314,59 @@ class _FyrStoreHomeState extends State<FyrStoreHome> {
         width: 32,
         height: 32,
         errorBuilder: (context, error, stackTrace) => Icon(
-          isAUR ? Icons.cloud_download : Icons.computer,
-          color: isAUR ? Colors.blueAccent : Colors.green,
+          isAUR ? Icons.cloud_download_rounded : Icons.computer_rounded,
+          color: isAUR ? Colors.blueAccent : FyrTheme.accentColor,
           size: 28,
         ),
       );
     } else {
       iconWidget = Icon(
-        isAUR ? Icons.cloud_download : Icons.computer,
-        color: isAUR ? Colors.blueAccent : Colors.green,
+        isAUR ? Icons.cloud_download_rounded : Icons.computer_rounded,
+        color: isAUR ? Colors.blueAccent : FyrTheme.accentColor,
         size: 28,
       );
     }
 
     return Card(
       elevation: 0,
-      color: FyrTheme.isDark ? const Color(0xFF3B393D) : Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      color: FyrTheme.cardColor,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: FyrTheme.dividerColor),
+      ),
       margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
         leading: Container(
-          width: 50,
-          height: 50,
+          width: 54,
+          height: 54,
           decoration: BoxDecoration(
-            color: isAUR ? Colors.blueAccent.withOpacity(0.2) : Colors.green.withOpacity(0.2),
+            color: (isAUR ? Colors.blueAccent : FyrTheme.accentColor).withOpacity(0.1),
             borderRadius: BorderRadius.circular(12),
           ),
           child: Center(child: iconWidget),
         ),
-        title: Text(item['name'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+        title: Text(
+          item['friendlyName'] ?? item['name'],
+          style: TextStyle(color: FyrTheme.textColor, fontWeight: FontWeight.bold, fontSize: 18),
+        ),
         subtitle: Padding(
           padding: const EdgeInsets.only(top: 4.0),
-          child: Text(
-            item['description'],
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                item['description'],
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: FyrTheme.textColorMuted),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '${item['source']} Repository' + (item['friendlyName'] != item['name'] ? ' (${item['name']})' : ''),
+                style: TextStyle(color: FyrTheme.accentColor.withOpacity(0.7), fontSize: 10, fontWeight: FontWeight.bold),
+              ),
+            ],
           ),
         ),
         trailing: ElevatedButton(
@@ -356,8 +374,8 @@ class _FyrStoreHomeState extends State<FyrStoreHome> {
             backgroundColor: FyrTheme.accentColor,
             foregroundColor: Colors.white,
             elevation: 0,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
           ),
           onPressed: () => _installApp(item['name']),
           child: const Text('Install', style: TextStyle(fontWeight: FontWeight.bold)),
@@ -369,6 +387,7 @@ class _FyrStoreHomeState extends State<FyrStoreHome> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: FyrTheme.bgColor,
       body: ResizableWindow(
         child: Column(
           children: [
@@ -379,15 +398,17 @@ class _FyrStoreHomeState extends State<FyrStoreHome> {
                   // Sidebar
                   Container(
                     width: 220,
-                    color: FyrTheme.isDark ? const Color(0xFF222124) : const Color(0xFFE5E7EB),
+                    decoration: BoxDecoration(
+                      border: Border(right: BorderSide(color: FyrTheme.dividerColor)),
+                    ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Padding(
-                          padding: EdgeInsets.fromLTRB(24, 24, 24, 12),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
                           child: Text(
-                            'Categories',
-                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.grey),
+                            'CATEGORIES',
+                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: FyrTheme.textColorMuted, letterSpacing: 1.2),
                           ),
                         ),
                         Expanded(
@@ -399,17 +420,19 @@ class _FyrStoreHomeState extends State<FyrStoreHome> {
                               return ListTile(
                                 leading: Icon(
                                   categoryIcons[category],
-                                  color: isSelected ? FyrTheme.accentColor : Colors.grey,
+                                  color: isSelected ? FyrTheme.accentColor : FyrTheme.textColorMuted,
+                                  size: 20,
                                 ),
                                 title: Text(
                                   category,
                                   style: TextStyle(
                                     fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                    color: isSelected ? FyrTheme.accentColor : (FyrTheme.isDark ? Colors.white70 : Colors.black87),
+                                    color: isSelected ? FyrTheme.textColor : FyrTheme.textColorMuted,
+                                    fontSize: 14,
                                   ),
                                 ),
                                 selected: isSelected,
-                                selectedTileColor: FyrTheme.accentColor.withOpacity(0.1),
+                                selectedTileColor: FyrTheme.hoverColor,
                                 onTap: () {
                                   setState(() {
                                     _isSearching = false;
@@ -433,18 +456,29 @@ class _FyrStoreHomeState extends State<FyrStoreHome> {
                           padding: const EdgeInsets.all(24.0),
                           child: TextField(
                             controller: _searchController,
+                            style: TextStyle(color: FyrTheme.textColor),
                             decoration: InputDecoration(
-                              hintText: 'Search for apps (Arch/AUR)...',
+                              hintText: 'Search for apps...',
+                              hintStyle: TextStyle(color: FyrTheme.textColorMuted),
                               filled: true,
-                              fillColor: FyrTheme.isDark ? const Color(0xFF3B393D) : Colors.white,
+                              fillColor: FyrTheme.cardColor,
                               border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide.none,
+                                borderRadius: BorderRadius.circular(16),
+                                borderSide: BorderSide(color: FyrTheme.dividerColor),
                               ),
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                              prefixIcon: const Icon(Icons.search),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(16),
+                                borderSide: BorderSide(color: FyrTheme.dividerColor),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(16),
+                                borderSide: BorderSide(color: FyrTheme.accentColor),
+                              ),
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
+                              prefixIcon: Icon(Icons.search_rounded, color: FyrTheme.accentColor),
                               suffixIcon: _searchController.text.isNotEmpty ? IconButton(
-                                icon: const Icon(Icons.clear),
+                                icon: const Icon(Icons.clear_rounded),
+                                color: FyrTheme.textColorMuted,
                                 onPressed: () {
                                   _searchController.clear();
                                   setState(() {
@@ -454,7 +488,7 @@ class _FyrStoreHomeState extends State<FyrStoreHome> {
                               ) : null,
                             ),
                             onChanged: (val) {
-                              setState(() {}); // Update suffix icon
+                              setState(() {}); 
                             },
                             onSubmitted: _searchApps,
                           ),
@@ -465,12 +499,14 @@ class _FyrStoreHomeState extends State<FyrStoreHome> {
                               ? (_isLoading
                                   ? const Center(child: CircularProgressIndicator())
                                   : _searchResults.isEmpty
-                                      ? const Center(child: Text('No applications found.'))
+                                      ? Center(child: Text('No applications found.', style: TextStyle(color: FyrTheme.textColorMuted)))
                                       : ListView.builder(
+                                          padding: const EdgeInsets.only(bottom: 24),
                                           itemCount: _searchResults.length,
                                           itemBuilder: (context, index) => _buildAppCard(_searchResults[index]),
                                         ))
                               : ListView.builder(
+                                  padding: const EdgeInsets.only(bottom: 24),
                                   itemCount: defaultApps[_selectedCategory]!.length,
                                   itemBuilder: (context, index) => _buildAppCard(defaultApps[_selectedCategory]![index]),
                                 ),
@@ -492,73 +528,40 @@ class CustomTitleBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
+      behavior: HitTestBehavior.translucent,
       onPanStart: (_) => windowManager.startDragging(),
       onDoubleTap: () {
         Process.run('swaymsg', ['[pid="$pid"] fullscreen toggle']);
       },
       child: Container(
-        height: 45,
-        color: FyrTheme.isDark ? const Color.fromARGB(255, 0, 0, 0) : const Color(0xFFeff1f5),
-        padding: const EdgeInsets.symmetric(horizontal: 12),
+        height: 55,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
         child: Row(
           children: [
-            Row(
-              children: [
-                _WindowButton(
-                  color: Colors.red.shade300,
-                  onPressed: () => windowManager.close(),
-                ),
-                const SizedBox(width: 8),
-                _WindowButton(
-                  color: Colors.amber.shade300,
-                  onPressed: () {
-                    Process.run('swaymsg', ['[pid="$pid"] move scratchpad']);
-                  },
-                ),
-                const SizedBox(width: 8),
-                _WindowButton(
-                  color: Colors.green.shade300,
-                  onPressed: () {
-                    Process.run('swaymsg', ['[pid="$pid"] fullscreen toggle']);
-                  },
-                ),
-              ],
+            InkWell(
+              onTap: () => windowManager.close(),
+              child: Icon(Icons.circle, color: Colors.red.shade300, size: 16),
             ),
-            Expanded(
-              child: Center(
-                child: Text(
-                  'FyrStore',
-                  style: TextStyle(
-                    color: FyrTheme.isDark ? const Color(0xFFcdd6f4) : const Color(0xFF4c4f69),
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
+            const SizedBox(width: 8),
+            InkWell(
+              onTap: () => Process.run('swaymsg', ['[pid="$pid"] move scratchpad']),
+              child: Icon(Icons.circle, color: Colors.amber.shade300, size: 16),
+            ),
+            const SizedBox(width: 8),
+            InkWell(
+              onTap: () => Process.run('swaymsg', ['[pid="$pid"] fullscreen toggle']),
+              child: Icon(Icons.circle, color: Colors.green.shade300, size: 16),
+            ),
+            const SizedBox(width: 24),
+            Text(
+              'FyrStore',
+              style: TextStyle(
+                color: FyrTheme.textColor,
+                fontWeight: FontWeight.bold,
+                fontSize: 16,
               ),
             ),
-            const SizedBox(width: 60),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-class _WindowButton extends StatelessWidget {
-  final Color color;
-  final VoidCallback onPressed;
-
-  const _WindowButton({required this.color, required this.onPressed});
-
-  @override
-  Widget build(BuildContext context) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: onPressed,
-        child: Container(
-          width: 12,
-          height: 12,
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
       ),
     );
@@ -626,16 +629,17 @@ echo "Installation process finished. You can close this dialog."
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: FyrTheme.isDark ? const Color(0xFF2A282C) : Colors.white,
-      title: Text('Installing ${widget.appName}'),
+      backgroundColor: const Color(0xFF2A282C),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      title: Text('Installing ${widget.appName}', style: const TextStyle(color: Colors.white)),
       content: SizedBox(
-        width: 600,
-        height: 400,
+        width: 700,
+        height: 450,
         child: TerminalView(
           terminal,
           controller: terminalController,
           autofocus: true,
-          theme: FyrTheme.isDark ? TerminalThemes.defaultTheme : TerminalThemes.whiteOnBlack,
+          theme: TerminalThemes.defaultTheme,
         ),
       ),
       actions: [

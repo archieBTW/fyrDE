@@ -11,7 +11,9 @@ import 'package:wayland_layer_shell/types.dart';
 import 'dart:convert';
 import 'fyr_theme.dart';
 import 'calendar_weather.dart';
-import 'workspace_switcher.dart';class SystemState {
+import 'workspace_switcher.dart';
+
+class SystemState {
   static final ValueNotifier<int> batteryLevel = ValueNotifier(100);
   static final ValueNotifier<bool> isCharging = ValueNotifier(false);
   static final ValueNotifier<String?> wifiSsid = ValueNotifier(null);
@@ -24,7 +26,9 @@ import 'workspace_switcher.dart';class SystemState {
   static final ValueNotifier<bool> floatingMode = ValueNotifier(false);
   static final ValueNotifier<bool> windowFloatingMode = ValueNotifier(false);
   static final ValueNotifier<bool> dockAutohide = ValueNotifier(false);
-  static final ValueNotifier<List<Map<String, dynamic>>> workspaces = ValueNotifier([]);
+  static final ValueNotifier<bool> isRecording = ValueNotifier(false);
+  static final ValueNotifier<List<Map<String, dynamic>>> workspaces =
+      ValueNotifier([]);
   static final ValueNotifier<String> splitLayout = ValueNotifier('none');
   static final ValueNotifier<String> weatherLocation = ValueNotifier('London');
   static final ValueNotifier<double?> weatherTemp = ValueNotifier(null);
@@ -34,7 +38,9 @@ import 'workspace_switcher.dart';class SystemState {
   static int _updateCount = 0;
   static Timer? _timer;
 
-  static List<Map<String, dynamic>>? _findFocusedPath(Map<String, dynamic> node) {
+  static List<Map<String, dynamic>>? _findFocusedPath(
+    Map<String, dynamic> node,
+  ) {
     if (node['focused'] == true) return [node];
     for (var child in (node['nodes'] ?? [])) {
       final res = _findFocusedPath(child);
@@ -58,16 +64,19 @@ import 'workspace_switcher.dart';class SystemState {
         _fetchWeather();
       }
     });
-    
+
     Process.start('swaymsg', [
       '-t',
       'subscribe',
       '-m',
       '["workspace", "window", "binding"]',
     ]).then((process) {
-      process.stdout.transform(utf8.decoder).transform(const LineSplitter()).listen((line) {
-        _updateSwayState();
-      });
+      process.stdout
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen((line) {
+            _updateSwayState();
+          });
     });
   }
 
@@ -156,7 +165,9 @@ import 'workspace_switcher.dart';class SystemState {
             !output.contains('Soft blocked: no');
       }
 
-      final floatingFile = File('${Platform.environment['HOME']}/.config/sway/floating.conf');
+      final floatingFile = File(
+        '${Platform.environment['HOME']}/.config/sway/floating.conf',
+      );
       if (await floatingFile.exists()) {
         final content = await floatingFile.readAsString();
         floatingMode.value = content.contains('floating enable');
@@ -164,13 +175,18 @@ import 'workspace_switcher.dart';class SystemState {
         floatingMode.value = false;
       }
 
-      final dockConfigFile = File('${Platform.environment['HOME']}/.config/fyrdock/config.json');
+      final dockConfigFile = File(
+        '${Platform.environment['HOME']}/.config/fyrdock/config.json',
+      );
       if (await dockConfigFile.exists()) {
         try {
           final data = jsonDecode(await dockConfigFile.readAsString());
           dockAutohide.value = data['autohide'] ?? false;
         } catch (_) {}
       }
+
+      final recResult = await Process.run('pgrep', ['wf-recorder']);
+      isRecording.value = recResult.exitCode == 0;
 
       _updateSwayState();
     } catch (_) {}
@@ -205,7 +221,9 @@ import 'workspace_switcher.dart';class SystemState {
   }
 
   static Future<void> _loadWeatherLocation() async {
-    final file = File('${Platform.environment['HOME']}/.config/fyrtaskbar/weather.json');
+    final file = File(
+      '${Platform.environment['HOME']}/.config/fyrtaskbar/weather.json',
+    );
     if (await file.exists()) {
       try {
         final data = jsonDecode(await file.readAsString());
@@ -218,7 +236,9 @@ import 'workspace_switcher.dart';class SystemState {
   }
 
   static Future<void> saveWeatherLocation(String loc) async {
-    final file = File('${Platform.environment['HOME']}/.config/fyrtaskbar/weather.json');
+    final file = File(
+      '${Platform.environment['HOME']}/.config/fyrtaskbar/weather.json',
+    );
     if (!await file.parent.exists()) {
       await file.parent.create(recursive: true);
     }
@@ -230,14 +250,20 @@ import 'workspace_switcher.dart';class SystemState {
   static Future<void> _fetchWeather() async {
     try {
       final loc = weatherLocation.value;
-      final geoResult = await Process.run('curl', ['-s', 'https://geocoding-api.open-meteo.com/v1/search?name=${Uri.encodeComponent(loc)}&count=1&language=en&format=json']);
+      final geoResult = await Process.run('curl', [
+        '-s',
+        'https://geocoding-api.open-meteo.com/v1/search?name=${Uri.encodeComponent(loc)}&count=1&language=en&format=json',
+      ]);
       if (geoResult.exitCode == 0) {
         final geoData = jsonDecode(geoResult.stdout);
         if (geoData['results'] != null && geoData['results'].isNotEmpty) {
           final lat = geoData['results'][0]['latitude'];
           final lon = geoData['results'][0]['longitude'];
-          
-          final weatherResult = await Process.run('curl', ['-s', 'https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon&current_weather=true&temperature_unit=fahrenheit']);
+
+          final weatherResult = await Process.run('curl', [
+            '-s',
+            'https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon&current_weather=true&temperature_unit=fahrenheit',
+          ]);
           if (weatherResult.exitCode == 0) {
             final weatherData = jsonDecode(weatherResult.stdout);
             if (weatherData['current_weather'] != null) {
@@ -586,29 +612,45 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                       children: [
                         GestureDetector(
                           onTap: () async {
-                            await Process.run('swaymsg', ['[app_id="fyroverview"] scratchpad show, resize set 1920 1080, border none, move absolute position 0 0']);
+                            await Process.run('swaymsg', [
+                              '[app_id="fyroverview"] scratchpad show, resize set 1920 1080, border none, move absolute position 0 0',
+                            ]);
                           },
                           behavior: HitTestBehavior.opaque,
                           child: Container(
                             padding: EdgeInsets.symmetric(horizontal: 12),
                             alignment: Alignment.center,
-                            child: Icon(Icons.dashboard, color: FyrTheme.textColor.withOpacity(0.9), size: 18),
+                            child: Icon(
+                              Icons.dashboard,
+                              color: FyrTheme.textColor.withOpacity(0.9),
+                              size: 18,
+                            ),
                           ),
                         ),
                         GestureDetector(
                           onTap: () async {
-                            await Process.run('${Platform.environment['HOME']}/.config/fyr/retile.py', []);
+                            await Process.run(
+                              '${Platform.environment['HOME']}/.config/fyr/retile.py',
+                              [],
+                            );
                           },
                           behavior: HitTestBehavior.opaque,
                           child: Container(
                             padding: EdgeInsets.symmetric(horizontal: 12),
                             alignment: Alignment.center,
-                            child: Icon(Icons.sort, color: FyrTheme.textColor.withOpacity(0.9), size: 18),
+                            child: Icon(
+                              Icons.sort,
+                              color: FyrTheme.textColor.withOpacity(0.9),
+                              size: 18,
+                            ),
                           ),
                         ),
                         GestureDetector(
                           onTap: () async {
-                            await Process.run('${Platform.environment['HOME']}/.config/fyr/toggle_floating.sh', []);
+                            await Process.run(
+                              '${Platform.environment['HOME']}/.config/fyr/toggle_floating.sh',
+                              [],
+                            );
                             SystemState._updateSwayState();
                           },
                           behavior: HitTestBehavior.opaque,
@@ -629,7 +671,9 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                         ),
                         GestureDetector(
                           onTap: () async {
-                            await Process.run('swaymsg', ['layout toggle splitv splith']);
+                            await Process.run('swaymsg', [
+                              'layout toggle splitv splith',
+                            ]);
                             SystemState._updateSwayState();
                           },
                           behavior: HitTestBehavior.opaque,
@@ -641,7 +685,8 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                               builder: (context, split, _) {
                                 IconData icon = Icons.crop_square;
                                 if (split == 'splitv') icon = Icons.splitscreen;
-                                if (split == 'splith') icon = Icons.vertical_split;
+                                if (split == 'splith')
+                                  icon = Icons.vertical_split;
                                 return Icon(
                                   icon,
                                   color: FyrTheme.textColor.withOpacity(0.9),
@@ -660,11 +705,56 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
+                                ValueListenableBuilder<bool>(
+                                  valueListenable: SystemState.isRecording,
+                                  builder: (context, isRecording, _) {
+                                    if (!isRecording)
+                                      return const SizedBox.shrink();
+                                    return GestureDetector(
+                                      onTap: () async {
+                                        await Process.run('killall', [
+                                          '-s',
+                                          'SIGINT',
+                                          'wf-recorder',
+                                        ]);
+                                        Process.run('notify-send', [
+                                          'Recording Stopped',
+                                          'Video saved to Videos/recordings',
+                                        ]);
+                                      },
+                                      child: Padding(
+                                        padding: const EdgeInsets.only(
+                                          right: 12,
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            Icon(
+                                              Icons.circle,
+                                              color: Colors.redAccent,
+                                              size: 10,
+                                            ),
+                                            SizedBox(width: 4),
+                                            Text(
+                                              "REC",
+                                              style: TextStyle(
+                                                color: Colors.redAccent,
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
                                 ValueListenableBuilder<String?>(
                                   valueListenable: SystemState.wifiSsid,
                                   builder: (context, ssid, _) {
                                     return Icon(
-                                      ssid != null ? Icons.wifi : Icons.wifi_off,
+                                      ssid != null
+                                          ? Icons.wifi
+                                          : Icons.wifi_off,
                                       color: ssid != null
                                           ? FyrTheme.textColor.withOpacity(0.9)
                                           : FyrTheme.textColor.withOpacity(0.4),
@@ -688,51 +778,53 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                                   },
                                 ),
                                 SizedBox(width: 12),
-                          ValueListenableBuilder<bool>(
-                            valueListenable: SystemState.isCharging,
-                            builder: (context, isCharging, _) {
-                              return ValueListenableBuilder<int>(
-                                valueListenable: SystemState.batteryLevel,
-                                builder: (context, level, _) {
-                                  IconData batteryIcon = isCharging
-                                      ? Icons.battery_charging_full
-                                      : (level > 20
-                                            ? Icons.battery_full
-                                            : Icons.battery_alert);
-                                  Color batteryColor =
-                                      level <= 20 && !isCharging
-                                      ? Colors.redAccent
-                                      : FyrTheme.textColor.withOpacity(0.9);
+                                ValueListenableBuilder<bool>(
+                                  valueListenable: SystemState.isCharging,
+                                  builder: (context, isCharging, _) {
+                                    return ValueListenableBuilder<int>(
+                                      valueListenable: SystemState.batteryLevel,
+                                      builder: (context, level, _) {
+                                        IconData batteryIcon = isCharging
+                                            ? Icons.battery_charging_full
+                                            : (level > 20
+                                                  ? Icons.battery_full
+                                                  : Icons.battery_alert);
+                                        Color batteryColor =
+                                            level <= 20 && !isCharging
+                                            ? Colors.redAccent
+                                            : FyrTheme.textColor.withOpacity(
+                                                0.9,
+                                              );
 
-                                  return Row(
-                                    children: [
-                                      Icon(
-                                        batteryIcon,
-                                        color: batteryColor,
-                                        size: 18,
-                                      ),
-                                      SizedBox(width: 4),
-                                      Text(
-                                        "${level}%",
-                                        style: TextStyle(
-                                          color: batteryColor,
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ],
-                                  );
-                                },
-                              );
-                            },
+                                        return Row(
+                                          children: [
+                                            Icon(
+                                              batteryIcon,
+                                              color: batteryColor,
+                                              size: 18,
+                                            ),
+                                            SizedBox(width: 4),
+                                            Text(
+                                              "${level}%",
+                                              style: TextStyle(
+                                                color: batteryColor,
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ],
+                                        );
+                                      },
+                                    );
+                                  },
+                                ),
+                              ],
+                            ),
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
                   ),
-                ],
-              ),
-            ),
                 ],
               ),
             ),
@@ -1178,7 +1270,7 @@ class _PowerButton extends StatelessWidget {
   }
 }
 
-enum QuickSettingsMenu { main, wifi, bluetooth }
+enum QuickSettingsMenu { main, wifi, bluetooth, screenshot }
 
 class QuickSettingsPopup extends StatefulWidget {
   final VoidCallback onClose;
@@ -1197,8 +1289,8 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
   bool _bluetoothEnabled = true;
   bool _nightLightEnabled = false;
   bool _airplaneModeEnabled = false;
-  bool _floatingModeEnabled = false;
   bool _dockAutohideEnabled = false;
+  bool _isRecording = false;
 
   List<Map<String, String>> _wifiNetworks = [];
   List<Map<String, String>> _btDevices = [];
@@ -1229,8 +1321,9 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
     _bluetoothEnabled = SystemState.bluetoothEnabled.value;
     _nightLightEnabled = SystemState.nightLight.value;
     _airplaneModeEnabled = SystemState.airplaneMode.value;
-    _floatingModeEnabled = SystemState.floatingMode.value;
     _dockAutohideEnabled = SystemState.dockAutohide.value;
+    _isRecording = SystemState.isRecording.value;
+    _checkRecordingStatus();
 
     SystemState.brightness.addListener(_onStateChange);
     SystemState.bluetoothEnabled.addListener(_onStateChange);
@@ -1238,7 +1331,7 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
     SystemState.nightLight.addListener(_onStateChange);
     SystemState.wifiSsid.addListener(_onStateChange);
     SystemState.airplaneMode.addListener(_onStateChange);
-    SystemState.floatingMode.addListener(_onStateChange);
+    SystemState.isRecording.addListener(_onStateChange);
     SystemState.dockAutohide.addListener(_onStateChange);
   }
 
@@ -1251,7 +1344,7 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
     SystemState.nightLight.removeListener(_onStateChange);
     SystemState.wifiSsid.removeListener(_onStateChange);
     SystemState.airplaneMode.removeListener(_onStateChange);
-    SystemState.floatingMode.removeListener(_onStateChange);
+    SystemState.isRecording.removeListener(_onStateChange);
     SystemState.dockAutohide.removeListener(_onStateChange);
     super.dispose();
   }
@@ -1265,7 +1358,7 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
         _wifiEnabled = SystemState.wifiSsid.value != null;
         _bluetoothEnabled = SystemState.bluetoothEnabled.value;
         _airplaneModeEnabled = SystemState.airplaneMode.value;
-        _floatingModeEnabled = SystemState.floatingMode.value;
+        _isRecording = SystemState.isRecording.value;
         _dockAutohideEnabled = SystemState.dockAutohide.value;
       });
     }
@@ -1306,17 +1399,90 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
     }
   }
 
-  void _toggleFloatingMode() {
-    _runCmd('${Platform.environment['HOME']}/.config/fyr/toggle_floating.sh', []);
+  void _checkRecordingStatus() async {
+    final result = await Process.run('pgrep', ['wf-recorder']);
+    if (mounted) {
+      setState(() => _isRecording = result.exitCode == 0);
+    }
+  }
+
+  void _takeScreenshot(bool cropped) async {
+    widget.onClose();
+    await Future.delayed(const Duration(milliseconds: 200));
+
+    final timestamp = DateFormat('yyyy-MM-dd_HH-mm-ss').format(DateTime.now());
+    final directory = Directory(
+      '${Platform.environment['HOME']}/Pictures/screenshots',
+    );
+    if (!await directory.exists()) {
+      await directory.create(recursive: true);
+    }
+    final filePath = '${directory.path}/screenshot_$timestamp.png';
+
+    List<String> args = [];
+    if (cropped) {
+      final slurpResult = await Process.run('slurp', []);
+      if (slurpResult.exitCode != 0) return;
+      args = ['-g', slurpResult.stdout.toString().trim(), filePath];
+    } else {
+      args = [filePath];
+    }
+
+    final result = await Process.run('grim', args);
+    if (result.exitCode == 0) {
+      Process.run('canberra-gtk-play', ['-i', 'screen-capture']);
+      Process.run('sh', ['-c', 'wl-copy < "$filePath"']);
+      Process.run('notify-send', [
+        'Screenshot Taken',
+        'Saved to Pictures/screenshots',
+        '-i',
+        filePath,
+      ]);
+    }
+  }
+
+  void _toggleRecording() async {
+    if (_isRecording) {
+      await Process.run('killall', ['-s', 'SIGINT', 'wf-recorder']);
+      if (mounted) setState(() => _isRecording = false);
+      SystemState.isRecording.value = false;
+      Process.run('notify-send', [
+        'Recording Stopped',
+        'Video saved to Videos/recordings',
+      ]);
+    } else {
+      widget.onClose();
+      await Future.delayed(const Duration(milliseconds: 200));
+
+      final timestamp = DateFormat(
+        'yyyy-MM-dd_HH-mm-ss',
+      ).format(DateTime.now());
+      final directory = Directory(
+        '${Platform.environment['HOME']}/Videos/recordings',
+      );
+      if (!await directory.exists()) {
+        await directory.create(recursive: true);
+      }
+      final filePath = '${directory.path}/recording_$timestamp.mp4';
+
+      Process.start('wf-recorder', ['-f', filePath]);
+      if (mounted) setState(() => _isRecording = true);
+      SystemState.isRecording.value = true;
+      Process.run('notify-send', ['Recording Started', 'Capturing screen...']);
+    }
   }
 
   void _toggleDockAutohide() async {
-    final file = File('${Platform.environment['HOME']}/.config/fyrdock/config.json');
+    final file = File(
+      '${Platform.environment['HOME']}/.config/fyrdock/config.json',
+    );
     bool newVal = !SystemState.dockAutohide.value;
     SystemState.dockAutohide.value = newVal;
     Map<String, dynamic> data = {};
     if (await file.exists()) {
-      try { data = jsonDecode(await file.readAsString()); } catch (_) {}
+      try {
+        data = jsonDecode(await file.readAsString());
+      } catch (_) {}
     } else {
       await file.create(recursive: true);
     }
@@ -1419,7 +1585,10 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
       builder: (context) {
         return AlertDialog(
           backgroundColor: FyrTheme.bgColor,
-          title: Text('Connect to $ssid', style: TextStyle(color: FyrTheme.textColor)),
+          title: Text(
+            'Connect to $ssid',
+            style: TextStyle(color: FyrTheme.textColor),
+          ),
           content: TextField(
             controller: _passwordController,
             obscureText: true,
@@ -1427,21 +1596,31 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
             decoration: InputDecoration(
               hintText: 'Password',
               hintStyle: TextStyle(color: FyrTheme.textColorMuted),
-              enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: FyrTheme.cardColor)),
-              focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: FyrTheme.accentColor)),
+              enabledBorder: UnderlineInputBorder(
+                borderSide: BorderSide(color: FyrTheme.cardColor),
+              ),
+              focusedBorder: UnderlineInputBorder(
+                borderSide: BorderSide(color: FyrTheme.accentColor),
+              ),
             ),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: Text('Cancel', style: TextStyle(color: FyrTheme.textColorMuted)),
+              child: Text(
+                'Cancel',
+                style: TextStyle(color: FyrTheme.textColorMuted),
+              ),
             ),
             TextButton(
               onPressed: () {
                 Navigator.pop(context);
                 _connectWifi(ssid, _passwordController.text);
               },
-              child: Text('Connect', style: TextStyle(color: FyrTheme.accentColor)),
+              child: Text(
+                'Connect',
+                style: TextStyle(color: FyrTheme.accentColor),
+              ),
             ),
           ],
         );
@@ -1482,6 +1661,8 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
         return _buildWifiMenu();
       case QuickSettingsMenu.bluetooth:
         return _buildBluetoothMenu();
+      case QuickSettingsMenu.screenshot:
+        return _buildScreenshotMenu();
       case QuickSettingsMenu.main:
       default:
         return _buildMainMenu();
@@ -1543,10 +1724,12 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 _QuickToggle(
-                  icon: Icons.layers,
-                  label: "Floating",
-                  isActive: _floatingModeEnabled,
-                  onTap: _toggleFloatingMode,
+                  icon: Icons.screenshot_monitor,
+                  label: "Screenshot",
+                  isActive: false,
+                  onTap: () {
+                    setState(() => _currentMenu = QuickSettingsMenu.screenshot);
+                  },
                 ),
                 _QuickToggle(
                   icon: Icons.visibility_off,
@@ -1652,7 +1835,9 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
                   color: FyrTheme.textColor.withOpacity(0.7),
                 ),
                 onTap: () {
-                  if (net['security'] != null && net['security'] != '' && net['security'] != '--') {
+                  if (net['security'] != null &&
+                      net['security'] != '' &&
+                      net['security'] != '--') {
                     _showWifiPasswordDialog(net['ssid']!);
                   } else {
                     _connectWifi(net['ssid']!);
@@ -1723,6 +1908,109 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildScreenshotMenu() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            IconButton(
+              icon: Icon(Icons.arrow_back, color: FyrTheme.textColor, size: 20),
+              onPressed: () =>
+                  setState(() => _currentMenu = QuickSettingsMenu.main),
+            ),
+            Text(
+              "Capture Screen",
+              style: TextStyle(
+                color: FyrTheme.textColor,
+                fontWeight: FontWeight.bold,
+                fontSize: 14,
+              ),
+            ),
+          ],
+        ),
+        SizedBox(height: 16),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            _ScreenshotButton(
+              icon: Icons.fullscreen,
+              label: "Full Screen",
+              onTap: () => _takeScreenshot(false),
+            ),
+            _ScreenshotButton(
+              icon: Icons.crop_free,
+              label: "Crop Region",
+              onTap: () => _takeScreenshot(true),
+            ),
+            _ScreenshotButton(
+              icon: _isRecording ? Icons.stop_circle : Icons.videocam,
+              label: _isRecording ? "Stop Record" : "Screen Record",
+              isActive: _isRecording,
+              onTap: _toggleRecording,
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _ScreenshotButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool isActive;
+
+  const _ScreenshotButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.isActive = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        width: 100,
+        padding: EdgeInsets.symmetric(vertical: 16),
+        decoration: BoxDecoration(
+          color: isActive
+              ? FyrTheme.accentColor.withOpacity(0.2)
+              : FyrTheme.textColor.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isActive
+                ? FyrTheme.accentColor.withOpacity(0.5)
+                : Colors.transparent,
+          ),
+        ),
+        child: Column(
+          children: [
+            Icon(
+              icon,
+              color: isActive ? FyrTheme.accentColor : FyrTheme.textColor,
+              size: 32,
+            ),
+            SizedBox(height: 8),
+            Text(
+              label,
+              style: TextStyle(
+                color: FyrTheme.textColor,
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

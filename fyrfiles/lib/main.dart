@@ -872,7 +872,7 @@ class _FyrFilesState extends State<FyrFiles> {
                                   return TextSpan(
                                     text: displayText(dir, currentDir, selectedTag != null),
                                     style: TextStyle(
-                                      color: MediaQuery.of(context).platformBrightness == Brightness.dark
+                                      color: FyrTheme.isDark
                                           ? Colors.white
                                           : Colors.black,
                                     ),
@@ -968,7 +968,7 @@ class _FyrFilesState extends State<FyrFiles> {
                     children: [
                       Container(
                         width: isSidebarCollapsed ? 64 : 200,
-                        color: MediaQuery.of(context).platformBrightness == Brightness.dark
+                        color: FyrTheme.isDark
                             ? FyrTheme.bgColor
                             : const Color(0xFFF0F0F0),
                         child: Column(
@@ -1014,7 +1014,7 @@ class _FyrFilesState extends State<FyrFiles> {
                           ],
                         ),
                       ),
-                      if (MediaQuery.of(context).platformBrightness == Brightness.dark)
+                      if (FyrTheme.isDark)
                         VerticalDivider(width: 1, thickness: 1, color: Colors.white.withOpacity(0.1)),
                       Expanded(
                         child: StreamBuilder<List<FileSystemEntity>>(
@@ -1283,7 +1283,7 @@ class _FyrFilesState extends State<FyrFiles> {
                           child: Text(
                             'Cancel',
                             style: TextStyle(
-                              color: MediaQuery.of(context).platformBrightness == Brightness.dark 
+                              color: FyrTheme.isDark 
                                 ? Colors.white 
                                 : Colors.black
                             )

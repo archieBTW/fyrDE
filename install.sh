@@ -44,7 +44,7 @@ if [ "$OS" = "arch" ] || [ "$OS" = "manjaro" ] || [ "$OS" = "endeavouros" ]; the
         "gtk-layer-shell" "xdg-desktop-portal" "xdg-desktop-portal-gtk"
         "xdg-desktop-portal-wlr" "xclip" "wl-clipboard" "brightnessctl"
         "wireplumber" "wlsunset" "cmake" "cpio" "pkg-config" "gcc" "wf-recorder" "grim" "ninja" "clang"
-        "meson" "scdoc" "wayland-protocols" "pcre2" "json-c" "pango" "cairo" "gdk-pixbuf2" "unzip"
+        "meson" "scdoc" "wayland-protocols" "pcre2" "json-c" "pango" "cairo" "gdk-pixbuf2" "unzip" "virt-viewer" "libvirt" "virt-install"
     )
 
     echo "Installing official dependencies via pacman..."
@@ -61,7 +61,7 @@ elif [ "$OS" = "ubuntu" ] || [ "$OS" = "debian" ]; then
         "swaybg" "swaylock" "swayidle" "xwayland" "foot" "libgtk-layer-shell-dev"
         "xdg-desktop-portal" "xdg-desktop-portal-gtk" "xdg-desktop-portal-wlr"
         "xclip" "wl-clipboard" "brightnessctl" "wireplumber" "cmake" "cpio"
-        "pkg-config" "gcc" "wf-recorder" "grim" "ninja-build" "clang" "curl" "git" "unzip" "xz-utils" "zip" "libglu1-mesa" "sway"
+        "pkg-config" "gcc" "wf-recorder" "grim" "ninja-build" "clang" "curl" "git" "unzip" "xz-utils" "zip" "libglu1-mesa" "sway" "virt-viewer" "libvirt-clients" "libvirt-daemon-system" "virtinst"
     )
 
     echo "Installing official dependencies via apt..."
@@ -78,7 +78,7 @@ elif [ "$OS" = "fedora" ]; then
         "swaybg" "swaylock" "swayidle" "xorg-x11-server-Xwayland" "foot" "gtk-layer-shell-devel"
         "xdg-desktop-portal" "xdg-desktop-portal-gtk" "xdg-desktop-portal-wlr"
         "xclip" "wl-clipboard" "brightnessctl" "wireplumber" "cmake" "cpio"
-        "pkgconf" "gcc" "wf-recorder" "grim" "ninja-build" "clang" "curl" "git" "unzip" "zip" "mesa-libGLU" "sway"
+        "pkgconf" "gcc" "wf-recorder" "grim" "ninja-build" "clang" "curl" "git" "unzip" "zip" "mesa-libGLU" "sway" "virt-viewer" "libvirt" "virt-install"
     )
 
     echo "Installing official dependencies via dnf..."
@@ -130,7 +130,7 @@ if [ -f "./fyrdock/tree.json" ]; then
     sed -i "s/1080/$HEIGHT/g" ./fyrdock/tree.json
 fi
 
-flutter_apps=("fyrdock" "fyroverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrstore")
+flutter_apps=("fyrdock" "fyroverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrstore" "fyrvirt" "fyrtext" "fyrdaw")
 
 
 for app in "${flutter_apps[@]}"; do
@@ -263,6 +263,51 @@ Terminal=false
 Type=Application
 Categories=System;Settings;
 EOF
+    
+    if command -v update-desktop-database &> /dev/null; then
+        sudo update-desktop-database /usr/share/applications || true
+    fi
+fi
+
+echo "Setting up FyrVirt configurations..."
+if [ -d "./fyrvirt" ]; then
+    sudo ln -sf /opt/fyrvirt/fyrvirt /usr/local/bin/fyrvirt
+    
+    sudo tee /usr/share/applications/fyrvirt.desktop > /dev/null <<'EOF'
+[Desktop Entry]
+Name=FyrVirt
+Comment=Virtual Machine Manager for FyrDE
+Exec=/usr/local/bin/fyrvirt
+Icon=virt-manager
+Terminal=false
+Type=Application
+Categories=System;Virtualization;
+EOF
+    
+    if command -v update-desktop-database &> /dev/null; then
+        sudo update-desktop-database /usr/share/applications || true
+    fi
+fi
+
+echo "Setting up FyrText configurations..."
+if [ -d "./fyrtext" ]; then
+    sudo ln -sf /opt/fyrtext/fyrtext /usr/local/bin/fyrtext
+    
+    sudo cp ./fyrtext/fyrtext.desktop /usr/share/applications/fyrtext.desktop
+    
+    if command -v update-desktop-database &> /dev/null; then
+        sudo update-desktop-database /usr/share/applications || true
+    fi
+    
+    # Set as default for text files
+    xdg-mime default fyrtext.desktop text/plain || true
+fi
+
+echo "Setting up FyrDAW configurations..."
+if [ -d "./fyrdaw" ]; then
+    sudo ln -sf /opt/fyrdaw/fyrdaw /usr/local/bin/fyrdaw
+    
+    sudo cp ./fyrdaw/fyrdaw.desktop /usr/share/applications/fyrdaw.desktop
     
     if command -v update-desktop-database &> /dev/null; then
         sudo update-desktop-database /usr/share/applications || true

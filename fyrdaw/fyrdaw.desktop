@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=FyrDAW
+Comment=Digital Audio Workstation for FyrDE
+Exec=/usr/local/bin/fyrdaw
+Icon=audio-x-generic
+Terminal=false
+Type=Application
+Categories=AudioVideo;Audio;

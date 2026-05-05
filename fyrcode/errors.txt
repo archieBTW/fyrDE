@@ -1,0 +1,82 @@
+Resolving dependencies...
+Downloading packages...
+  google_fonts 8.0.2 (8.1.0 available)
+  isolate_contactor 4.1.0 (4.2.0 available)
+  isolate_manager 4.1.5+1 (6.3.2 available)
+  matcher 0.12.18 (0.12.20 available)
+  meta 1.17.0 (1.18.2 available)
+  native_toolchain_c 0.17.6 (0.18.0 available)
+  test_api 0.7.9 (0.7.12 available)
+  vector_math 2.2.0 (2.3.0 available)
+  vm_service 15.1.0 (15.2.0 available)
+  win32 5.15.0 (6.1.0 available)
+  xml 6.6.1 (7.0.1 available)
+Got dependencies!
+11 packages have newer versions incompatible with dependency constraints.
+Try `flutter pub outdated` for more information.
+Analyzing fyrcode...                                            
+
+  error • Invalid constant value • lib/code_editor_pane.dart:16:22 • invalid_constant
+  error • Invalid constant value • lib/code_editor_pane.dart:21:12 • invalid_constant
+  error • Invalid constant value • lib/code_editor_pane.dart:46:38 • invalid_constant
+   info • Statements in an if should be enclosed in a block • lib/code_editor_pane.dart:625:11 • curly_braces_in_flow_control_structures
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/code_editor_pane.dart:912:39 • deprecated_member_use
+   info • Statements in an if should be enclosed in a block • lib/code_editor_pane.dart:943:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/code_editor_pane.dart:964:9 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/code_editor_pane.dart:966:9 • curly_braces_in_flow_control_structures
+  error • Invalid constant value • lib/code_editor_pane.dart:1218:16 • invalid_constant
+  error • Invalid constant value • lib/code_editor_pane.dart:1225:53 • invalid_constant
+  error • Invalid constant value • lib/code_editor_pane.dart:1237:45 • invalid_constant
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/code_editor_pane.dart:1534:33 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/code_editor_pane.dart:1568:25 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/code_editor_pane.dart:1580:58 • deprecated_member_use
+  error • Invalid constant value • lib/editor_screen.dart:221:41 • invalid_constant
+   info • 'activeColor' is deprecated and shouldn't be used. Use activeThumbColor instead. This feature was deprecated after v3.31.0-2.0.pre • lib/editor_screen.dart:233:23 • deprecated_member_use
+   info • 'activeColor' is deprecated and shouldn't be used. Use activeThumbColor instead. This feature was deprecated after v3.31.0-2.0.pre • lib/editor_screen.dart:250:23 • deprecated_member_use
+  error • Invalid constant value • lib/editor_screen.dart:294:38 • invalid_constant
+  error • Invalid constant value • lib/editor_screen.dart:312:38 • invalid_constant
+  error • Invalid constant value • lib/editor_screen.dart:334:45 • invalid_constant
+  error • Invalid constant value • lib/editor_screen.dart:391:38 • invalid_constant
+  error • Invalid constant value • lib/editor_screen.dart:398:65 • invalid_constant
+  error • Invalid constant value • lib/editor_screen.dart:523:56 • invalid_constant
+  error • Invalid constant value • lib/editor_screen.dart:569:67 • invalid_constant
+warning • The value of the local variable 'start' isn't used • lib/editor_toolbar.dart:32:21 • unused_local_variable
+warning • The value of the local variable 'end' isn't used • lib/editor_toolbar.dart:33:21 • unused_local_variable
+   info • Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check • lib/editor_toolbar.dart:47:31 • use_build_context_synchronously
+  error • Invalid constant value • lib/editor_toolbar.dart:73:39 • invalid_constant
+  error • Invalid constant value • lib/editor_toolbar.dart:86:55 • invalid_constant
+  error • Invalid constant value • lib/editor_toolbar.dart:104:56 • invalid_constant
+  error • Invalid constant value • lib/editor_toolbar.dart:142:66 • invalid_constant
+   info • Statements in an if should be enclosed in a block • lib/file_tree.dart:59:7 • curly_braces_in_flow_control_structures
+warning • The value of the field '_watchTimer' isn't used • lib/fyr_theme.dart:14:17 • unused_field
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/fyr_theme.dart:70:29 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/fyr_theme.dart:70:62 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/fyr_theme.dart:72:29 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/fyr_theme.dart:72:62 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/fyr_theme.dart:74:29 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/fyr_theme.dart:74:61 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/fyr_theme.dart:76:29 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/fyr_theme.dart:76:61 • deprecated_member_use
+   info • 'value' is deprecated and shouldn't be used. Use component accessors like .r or .g, or toARGB32 for an explicit conversion • lib/fyr_theme.dart:85:38 • deprecated_member_use
+   info • 'value' is deprecated and shouldn't be used. Use component accessors like .r or .g, or toARGB32 for an explicit conversion • lib/fyr_theme.dart:90:36 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/global_search_view.dart:167:37 • deprecated_member_use
+  error • Invalid constant value • lib/global_search_view.dart:187:61 • invalid_constant
+  error • Invalid constant value • lib/global_search_view.dart:188:71 • invalid_constant
+  error • Invalid constant value • lib/global_search_view.dart:192:91 • invalid_constant
+  error • Invalid constant value • lib/global_search_view.dart:197:65 • invalid_constant
+  error • Invalid constant value • lib/global_search_view.dart:201:65 • invalid_constant
+  error • Invalid constant value • lib/global_search_view.dart:205:65 • invalid_constant
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/global_search_view.dart:225:75 • deprecated_member_use
+  error • Invalid constant value • lib/global_search_view.dart:241:60 • invalid_constant
+  error • Invalid constant value • lib/global_search_view.dart:254:57 • invalid_constant
+  error • Invalid constant value • lib/global_search_view.dart:285:71 • invalid_constant
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/global_search_view.dart:293:65 • deprecated_member_use
+warning • Unused import: 'fyr_theme.dart' • lib/lsp_client.dart:7:8 • unused_import
+   info • Don't invoke 'print' in production code • lib/lsp_client.dart:23:5 • avoid_print
+warning • The value of the local variable 'initResult' isn't used • lib/lsp_client.dart:60:11 • unused_local_variable
+   info • Use the null-aware marker '?' rather than a null check via an 'if' • lib/lsp_client.dart:208:9 • use_null_aware_elements
+   info • 'useMaterial3' is deprecated and shouldn't be used. Use a ThemeData constructor (.from, .light, or .dark) instead. These constructors all have a useMaterial3 argument, and they set appropriate default values based on its value. See the useMaterial3 API documentation for full details. This feature was deprecated after v3.13.0-0.2.pre • lib/main.dart:50:9 • deprecated_member_use
+   info • 'useMaterial3' is deprecated and shouldn't be used. Use a ThemeData constructor (.from, .light, or .dark) instead. These constructors all have a useMaterial3 argument, and they set appropriate default values based on its value. See the useMaterial3 API documentation for full details. This feature was deprecated after v3.13.0-0.2.pre • lib/main.dart:58:9 • deprecated_member_use
+  error • The name 'MyApp' isn't a class • test/widget_test.dart:16:35 • creation_with_non_type
+
+62 issues found. (ran in 1.5s)

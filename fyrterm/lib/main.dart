@@ -205,10 +205,11 @@ class Flutterm extends StatelessWidget {
           debugShowCheckedModeBanner: false,
           themeMode: FyrTheme.themeMode,
           theme: ThemeData.light().copyWith(
+            scaffoldBackgroundColor: const Color(0xFFeff1f5),
             colorScheme: ColorScheme.light(primary: FyrTheme.accentColor, secondary: FyrTheme.accentColor),
           ),
           darkTheme: ThemeData.dark().copyWith(
-            scaffoldBackgroundColor: const Color(0xFF2A282C),
+            scaffoldBackgroundColor: const Color(0xFF000000),
             colorScheme: ColorScheme.dark(primary: FyrTheme.accentColor, secondary: FyrTheme.accentColor),
           ),
           home: Home(),
@@ -469,6 +470,9 @@ class _HomeState extends State<Home> with WindowListener {
               if (_tabs.length > 1)
                 Container(
                   height: 36,
+                  color: FyrTheme.isDark
+                      ? const Color.fromARGB(255, 0, 0, 0)
+                      : const Color(0xFFeff1f5),
                   child: Row(
                     children: [
                       Expanded(

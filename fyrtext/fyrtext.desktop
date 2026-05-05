@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=FyrText
+Comment=A basic notepad style text editor for FyrDE
+Exec=fyrtext %F
+Icon=text-x-generic
+Terminal=false
+Type=Application
+Categories=Utility;TextEditor;
+MimeType=text/plain;
+Keywords=Text;Editor;Notepad;
