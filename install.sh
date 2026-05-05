@@ -227,8 +227,30 @@ EOF
     fi
 fi
 
+echo "Setting up FyrSettings configurations..."
+if [ -d "./fyrsettings" ]; then
+    sudo ln -sf /opt/fyrsettings/fyrsettings /usr/local/bin/fyrsettings
+    
+    sudo tee /usr/share/applications/fyrsettings.desktop > /dev/null <<'EOF'
+[Desktop Entry]
+Name=FyrSettings
+Comment=System settings for FyrDE
+Exec=/usr/local/bin/fyrsettings
+Icon=preferences-system
+Terminal=false
+Type=Application
+Categories=System;Settings;
+EOF
+    
+    if command -v update-desktop-database &> /dev/null; then
+        sudo update-desktop-database /usr/share/applications || true
+    fi
+fi
+
 echo "Setting up Floating Mode script..."
 mkdir -p ~/.config/fyr
+cp ./backgrounds/space.jpg ~/.config/fyr/space.jpg
+
 mkdir -p ~/.config/sway
 
 cat << 'EOF' > ~/.config/fyr/toggle_floating.sh
@@ -288,7 +310,18 @@ def main():
 
     def get_windows(node):
         wins = []
-        if node.get('app_id') not in ['fyrtaskbar', 'fyrdock', 'fyroverview', 'fyrsearch', 'fyrhelp', 'fyremoji'] and node.get('type') in ['con', 'floating_con'] and (node.get('app_id') or node.get('class') or node.get('name')):
+        app_id = node.get('app_id')
+        class_name = node.get('window_properties', {}).get('class')
+        name = node.get('name')
+        
+        excluded = ['fyrtaskbar', 'fyrdock', 'fyroverview', 'fyrsearch', 'fyrhelp', 'fyremoji']
+        
+        is_internal = False
+        if app_id in excluded: is_internal = True
+        if class_name in excluded: is_internal = True
+        if name in excluded: is_internal = True
+        
+        if not is_internal and node.get('type') in ['con', 'floating_con'] and (app_id or class_name or name):
             if not node.get('nodes'):
                 wins.append(node)
         for child in node.get('nodes', []) + node.get('floating_nodes', []):
@@ -358,7 +391,19 @@ echo "Copying sway configuration..."
 mkdir -p ~/.config/sway
 if [ -f "./sway/config" ]; then
     cp ./sway/config ~/.config/sway/config
-    echo "Sway config successfully copied to ~/.config/sway/config"
+    
+    # Get screen resolution
+    RES=$(cat /sys/class/drm/*/modes | head -n 1)
+    if [ -z "$RES" ]; then
+        RES="1920x1080"
+    fi
+    WIDTH=$(echo $RES | cut -d'x' -f1)
+    HEIGHT=$(echo $RES | cut -d'x' -f2)
+    
+    sed -i "s/1920 1080/$WIDTH $HEIGHT/g" ~/.config/sway/config
+    sed -i "s/1920x1080/${WIDTH}x${HEIGHT}/g" ~/.config/sway/config
+    
+    echo "Sway config successfully copied and updated with resolution ${WIDTH}x${HEIGHT} to ~/.config/sway/config"
 else
     echo "Warning: ./sway/config not found. Make sure you are running this script from the 'de' directory."
 fi

@@ -1,4 +1,4 @@
-output * bg /home/archie/Pictures/space.jpg fill
+output * bg ~/.config/fyr/space.jpg fill
 
 exec /opt/fyrtaskbar/fyrtaskbar
 exec /opt/fyrdock/fyrdock
