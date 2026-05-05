@@ -34,7 +34,7 @@ if [ "$OS" = "arch" ] || [ "$OS" = "manjaro" ] || [ "$OS" = "endeavouros" ]; the
         "gtk-layer-shell" "xdg-desktop-portal" "xdg-desktop-portal-gtk"
         "xdg-desktop-portal-wlr" "xclip" "wl-clipboard" "brightnessctl"
         "wireplumber" "wlsunset" "cmake" "cpio" "pkg-config" "gcc" "wf-recorder" "grim" "ninja" "clang"
-        "meson" "scdoc" "wayland-protocols" "pcre2" "json-c" "pango" "cairo" "gdk-pixbuf2"
+        "meson" "scdoc" "wayland-protocols" "pcre2" "json-c" "pango" "cairo" "gdk-pixbuf2" "unzip"
     )
 
     echo "Installing official dependencies via pacman..."
