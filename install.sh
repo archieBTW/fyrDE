@@ -384,8 +384,8 @@ if [ -d "./themes" ]; then
     
     # Install GTK 4.0 / Libadwaita Themes
     mkdir -p ~/.config/gtk-4.0
-    cp ~/.themes/Fyr-Dark/gtk-4.0/gtk.css ~/.config/gtk-4.0/gtk-dark.css
-    cp ~/.themes/Fyr-Light/gtk-4.0/gtk.css ~/.config/gtk-4.0/gtk-light.css
+    cp ./themes/gtk-4.0/gtk-dark.css ~/.config/gtk-4.0/gtk-dark.css
+    cp ./themes/gtk-4.0/gtk-light.css ~/.config/gtk-4.0/gtk-light.css
     
     # By default apply the dark theme
     cp ~/.config/gtk-4.0/gtk-dark.css ~/.config/gtk-4.0/gtk.css
