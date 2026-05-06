@@ -48,13 +48,12 @@ Rectangle {
             Image {
                 id: avatar
                 anchors.fill: parent
-                source: userModel.lastUserAvatar || "face.png"
+                source: (userModel.lastUserAvatar && userModel.lastUserAvatar !== "") ? userModel.lastUserAvatar : "face.png"
                 fillMode: Image.PreserveAspectCrop
                 visible: false
                 onStatusChanged: {
                     if (status == Image.Error) {
-                        // Try to look for ~/.face directly if SDDM doesn't provide it
-                        source = "file://" + userModel.homeDir + "/.face"
+                        source = "face.png"
                     }
                 }
             }

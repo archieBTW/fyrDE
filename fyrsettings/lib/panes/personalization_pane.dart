@@ -175,6 +175,7 @@ class _PersonalizationPaneState extends State<PersonalizationPane> {
         final path = result.stdout.toString().trim();
         if (path.isNotEmpty) {
           final home = Platform.environment['HOME'];
+          final user = Platform.environment['USER'];
           final target1 = File('$home/.face');
           final target2 = File('$home/.face.icon');
           await File(path).copy(target1.path);
@@ -183,6 +184,12 @@ class _PersonalizationPaneState extends State<PersonalizationPane> {
           // Set permissions to 644 (rw-r--r--) so SDDM can read it
           await Process.run('chmod', ['644', target1.path]);
           await Process.run('chmod', ['644', target2.path]);
+
+          if (user != null) {
+            // Copy to SDDM system faces directory so it can be read regardless of home dir permissions
+            await Process.run('pkexec', ['cp', path, '/usr/share/sddm/faces/$user.face.icon']);
+            await Process.run('pkexec', ['chmod', '644', '/usr/share/sddm/faces/$user.face.icon']);
+          }
           
           setState(() {
             _profilePicPath = target1.path;

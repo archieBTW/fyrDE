@@ -110,6 +110,7 @@ bindsym $mod+Shift+Right exec 'swaymsg resize grow right 20px   || swaymsg resiz
 # Wayland Environment & Portals
 # -------------------------------------------------------------
 exec dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP=sway
+exec --no-startup-id /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1 || /usr/libexec/polkit-gnome-authentication-agent-1 || /usr/lib/policykit-1-gnome/polkit-gnome-authentication-agent-1 || /usr/bin/lxqt-policykit-agent
 
 # -------------------------------------------------------------
 # Status Bar
