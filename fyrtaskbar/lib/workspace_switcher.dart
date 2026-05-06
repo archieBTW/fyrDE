@@ -14,7 +14,7 @@ class _WorkspaceSwitcherState extends State<WorkspaceSwitcher> {
   int _maxWorkspace = 3;
 
   void _switchWorkspace(String name) {
-    Process.start('swaymsg', ['workspace', name]);
+    Process.start('swaymsg', ['workspace', name], mode: ProcessStartMode.detached);
   }
 
   @override

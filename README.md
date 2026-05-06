@@ -83,6 +83,7 @@ FyrDE relies on standard Sway keyboard shortcuts, with a few custom additions. T
 | Action | Shortcut |
 |---|---|
 | **System** | |
+| Lock Screen | `Super + L` |
 | Close Window | `Super + Q` |
 | Open Application Launcher (Fyrsearch) | `Super + Space` |
 | Toggle Overview (Fyroverview) | `Super + Tab` |

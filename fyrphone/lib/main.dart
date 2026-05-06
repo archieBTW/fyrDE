@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
@@ -379,10 +380,34 @@ class _PhoneHomePageState extends State<PhoneHomePage> {
             spacing: 12,
             runSpacing: 12,
             children: [
-              _buildActionCard(Icons.notifications, 'Ping', 'Ring your device', () {}),
-              _buildActionCard(Icons.file_present, 'Files', 'Browse device files', () {}),
+              _buildActionCard(Icons.notifications, 'Ping', 'Ring your device', () {
+                _kdeService.ping(device.id);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Pinging ${device.name}...')),
+                );
+              }),
+              _buildActionCard(Icons.file_present, 'Files', 'Browse device files', () async {
+                await _kdeService.mountSftp(device.id);
+                final mountPoint = await _kdeService.getSftpMountPoint(device.id);
+                if (mountPoint != null && mountPoint.isNotEmpty) {
+                  Process.run('fyrfiles', [mountPoint]);
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Could not mount device storage.')),
+                  );
+                }
+              }),
               _buildActionCard(Icons.mouse, 'Remote Input', 'Use phone as touchpad', () {}),
-              _buildActionCard(Icons.content_paste, 'Clipboard', 'Sync clipboard', () {}),
+              _buildActionCard(Icons.content_paste, 'Clipboard', 'Sync clipboard', () async {
+                final result = await Process.run('xclip', ['-o', '-selection', 'clipboard']);
+                if (result.exitCode == 0) {
+                  final text = result.stdout.toString();
+                  await _kdeService.shareText(device.id, text);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Clipboard synced to phone.')),
+                  );
+                }
+              }),
             ],
           ),
         ],

@@ -186,7 +186,8 @@ class _DockScreenState extends State<DockScreen> {
                 !appId.contains('fyroverview') &&
                 !appId.contains('fyrhelp') &&
                 !appId.contains('fyremoji') &&
-                !appId.contains('sway_launcher')) {
+                !appId.contains('sway_launcher') &&
+                !appId.contains('fyrwindowoverview')) {
               windows.add({
                 'app_id': appId,
                 'name': node['name'],

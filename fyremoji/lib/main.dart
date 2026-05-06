@@ -2,9 +2,30 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
+import 'package:window_manager/window_manager.dart';
 import 'fyr_theme.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await windowManager.ensureInitialized();
+  
+  WindowOptions windowOptions = const WindowOptions(
+    size: Size(400, 250),
+    minimumSize: Size(400, 250),
+    maximumSize: Size(400, 250),
+    center: true,
+    backgroundColor: Colors.transparent,
+    skipTaskbar: true,
+    titleBarStyle: TitleBarStyle.hidden,
+  );
+  
+  windowManager.waitUntilReadyToShow(windowOptions, () async {
+    await windowManager.setAsFrameless();
+    await windowManager.setBackgroundColor(Colors.transparent);
+    await windowManager.setResizable(false);
+    await windowManager.show();
+  });
+
   FyrTheme.initialize();
   runApp(const FyrEmojiApp());
 }

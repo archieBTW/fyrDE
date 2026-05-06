@@ -347,7 +347,7 @@ class _FyrVirtState extends State<FyrVirt> {
                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Creating VM...')));
 
                   try {
-                    await Process.run('virt-install', [
+                    final result = await Process.run('virt-install', [
                       '--name', name,
                       '--ram', ram,
                       '--vcpus', cpus,
@@ -358,6 +358,11 @@ class _FyrVirtState extends State<FyrVirt> {
                       '--connect', 'qemu:///session',
                       '--noautoconsole'
                     ]);
+                    
+                    if (result.exitCode != 0) {
+                      throw Exception(result.stderr.toString().trim());
+                    }
+                    
                     refreshVMs();
                   } catch (e) {
                     if (context.mounted) {

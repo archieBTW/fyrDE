@@ -9,6 +9,39 @@ Rectangle {
     height: Screen.height
     color: "black"
 
+    function updateUserAssets() {
+        var selectedUser = "";
+        
+        if (userModel.count === 1) {
+            selectedUser = userModel.data(userModel.index(0, 0), Qt.UserRole + 1);
+        } else {
+            selectedUser = usernameBox.currentText;
+        }
+
+        for (var i = 0; i < userModel.count; ++i) {
+            if (userModel.data(userModel.index(i, 0), Qt.UserRole + 1) === selectedUser) {
+                var userHome = userModel.data(userModel.index(i, 0), Qt.UserRole + 4) || "";
+                var iconFromModel = userModel.data(userModel.index(i, 0), Qt.UserRole + 3) || "";
+                var cleanHome = userHome.replace(/^file:\/\//, "");
+                
+                var timestamp = new Date().getTime();
+                
+                if (iconFromModel !== "") {
+                    avatar.source = (iconFromModel.startsWith("/") ? "file://" + iconFromModel : iconFromModel) + "?nocache=" + timestamp;
+                } else if (userHome !== "") {
+                    avatar.source = "file://" + cleanHome + "/.face.icon?nocache=" + timestamp;
+                } else {
+                    avatar.source = "face.png";
+                }
+
+                bg.source = "file://" + cleanHome + "/.config/fyr/lockscreen.jpg?nocache=" + timestamp;
+                break;
+            }
+        }
+    }
+
+    Component.onCompleted: updateUserAssets()
+
     // Background Image
     Image {
         id: bg
@@ -16,6 +49,12 @@ Rectangle {
         source: config.background || "space.jpg"
         fillMode: Image.PreserveAspectCrop
         visible: false
+        cache: false
+        onStatusChanged: {
+            if (status == Image.Error) {
+                source = config.background || "space.jpg";
+            }
+        }
     }
 
     // Blurred Background
@@ -48,9 +87,10 @@ Rectangle {
             Image {
                 id: avatar
                 anchors.fill: parent
-                source: (userModel.lastUserAvatar && userModel.lastUserAvatar !== "") ? userModel.lastUserAvatar : "face.png"
+                source: "face.png"
                 fillMode: Image.PreserveAspectCrop
                 visible: false
+                cache: false
                 onStatusChanged: {
                     if (status == Image.Error) {
                         source = "face.png"
@@ -86,21 +126,68 @@ Rectangle {
             width: parent.width
             spacing: 10
 
-            TextField {
-                id: username
+            ComboBox {
+                id: usernameBox
                 width: parent.width
-                placeholderText: "Username"
-                text: userModel.lastUser
+                model: userModel
+                textRole: "name"
+                currentIndex: userModel.lastIndex
                 font.pointSize: 14
-                color: "white"
-                selectionColor: "#6200EE"
-                selectedTextColor: "white"
-                renderType: Text.NativeRendering
+                visible: userModel.count > 1
+                onCurrentTextChanged: updateUserAssets()
+                
+                popup: Popup {
+                    y: usernameBox.height - 1
+                    width: usernameBox.width
+                    height: contentItem.implicitHeight
+                    padding: 1
+                    
+                    contentItem: ListView {
+                        clip: true
+                        implicitHeight: contentHeight
+                        model: usernameBox.delegateModel
+                        currentIndex: usernameBox.highlightedIndex
+                        highlightMoveDuration: 0
+                    }
+                    
+                    background: Rectangle {
+                        color: "#1A1A1A"
+                        border.color: "white"
+                        border.width: 1
+                        radius: 12
+                    }
+                }
+                
                 background: Rectangle {
                     color: "white"
                     opacity: 0.1
                     radius: 12
-                    border.color: parent.activeFocus ? "#6200EE" : "transparent"
+                    border.color: usernameBox.activeFocus ? "#6200EE" : "transparent"
+                    border.width: 2
+                }
+                
+                contentItem: Text {
+                    leftPadding: 15
+                    text: usernameBox.displayText
+                    font: usernameBox.font
+                    color: "white"
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+
+            TextField {
+                id: singleUsername
+                width: parent.width
+                text: userModel.count === 1 ? userModel.data(userModel.index(0, 0), Qt.UserRole + 1) : ""
+                font.pointSize: 14
+                color: "white"
+                readOnly: true
+                visible: userModel.count === 1
+                background: Rectangle {
+                    color: "white"
+                    opacity: 0.1
+                    radius: 12
+                    border.color: "transparent"
                     border.width: 2
                 }
             }
@@ -123,7 +210,7 @@ Rectangle {
                     border.color: parent.activeFocus ? "#6200EE" : "transparent"
                     border.width: 2
                 }
-                onAccepted: sddm.login(username.text, password.text, sessionBox.currentIndex)
+                onAccepted: sddm.login(userModel.count > 1 ? usernameBox.currentText : singleUsername.text, password.text, sessionBox.currentIndex)
             }
         }
 
@@ -133,7 +220,7 @@ Rectangle {
             height: 40
             anchors.horizontalCenter: parent.horizontalCenter
             text: "Login"
-            onClicked: sddm.login(username.text, password.text, sessionBox.currentIndex)
+            onClicked: sddm.login(userModel.count > 1 ? usernameBox.currentText : singleUsername.text, password.text, sessionBox.currentIndex)
             
             contentItem: Text {
                 text: loginButton.text

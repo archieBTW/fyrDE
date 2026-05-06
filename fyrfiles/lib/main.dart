@@ -1420,6 +1420,17 @@ class _FyrFilesState extends State<FyrFiles> {
             },
           ),
         ),
+        if (!FileSystemEntity.isDirectorySync(file.path))
+          PopupMenuItem(
+            child: ListTile(
+              leading: const Icon(Icons.open_in_new),
+              title: const Text('Open With...'),
+              onTap: () {
+                Navigator.pop(context);
+                _showOpenWithDialog(context, file.path);
+              },
+            ),
+          ),
         PopupMenuItem(
           child: Column(
             children: [
@@ -1871,6 +1882,72 @@ class _FyrFilesState extends State<FyrFiles> {
               )),
         )),
       ],
+    );
+  }
+
+  Future<void> _showOpenWithDialog(BuildContext context, String filePath) async {
+    final searchPaths = [
+      '/usr/share/applications',
+      '${Platform.environment['HOME']}/.local/share/applications',
+    ];
+    List<Map<String, String>> apps = [];
+    for (var p in searchPaths) {
+      final dir = Directory(p);
+      if (await dir.exists()) {
+        for (var file in dir.listSync()) {
+          if (file.path.endsWith('.desktop')) {
+            try {
+              final content = await File(file.path).readAsString();
+              String? name;
+              String? exec;
+              for (var line in content.split('\n')) {
+                if (line.startsWith('Name=') && name == null) name = line.substring(5);
+                if (line.startsWith('Exec=') && exec == null) exec = line.substring(5);
+              }
+              if (name != null && exec != null) {
+                exec = exec.replaceAll(RegExp(r' %[fFuU]'), '');
+                apps.add({'name': name, 'exec': exec});
+              }
+            } catch (_) {}
+          }
+        }
+      }
+    }
+    apps.sort((a, b) => a['name']!.compareTo(b['name']!));
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: FyrTheme.bgColor,
+          title: Text('Open With...', style: TextStyle(color: FyrTheme.textColor)),
+          content: SizedBox(
+            width: 400,
+            height: 400,
+            child: ListView.builder(
+              itemCount: apps.length,
+              itemBuilder: (context, index) {
+                return ListTile(
+                  title: Text(apps[index]['name']!, style: TextStyle(color: FyrTheme.textColor)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    final parts = apps[index]['exec']!.trim().split(' ').where((s) => s.isNotEmpty).toList();
+                    if (parts.isNotEmpty) {
+                      Process.start(parts[0], [...parts.sublist(1), filePath], mode: ProcessStartMode.detached);
+                    }
+                  },
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text('Cancel', style: TextStyle(color: FyrTheme.accentColor)),
+            )
+          ],
+        );
+      }
     );
   }
 }

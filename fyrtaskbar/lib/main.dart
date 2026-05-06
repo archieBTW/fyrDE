@@ -13,6 +13,7 @@ import 'fyr_theme.dart';
 import 'calendar_weather.dart';
 import 'workspace_switcher.dart';
 import 'notification_service.dart';
+import 'phone_service.dart';
 
 class FyrNotification {
   final int id;
@@ -39,6 +40,8 @@ class FyrNotification {
 class SystemState {
   static final ValueNotifier<int> batteryLevel = ValueNotifier(100);
   static final ValueNotifier<bool> isCharging = ValueNotifier(false);
+  static int screenWidth = 1920;
+  static int screenHeight = 1080;
   static final ValueNotifier<String?> wifiSsid = ValueNotifier(null);
   static final ValueNotifier<List<String>> bluetoothDevices = ValueNotifier([]);
   static final ValueNotifier<bool> bluetoothEnabled = ValueNotifier(false);
@@ -57,6 +60,7 @@ class SystemState {
   static final ValueNotifier<double?> weatherTemp = ValueNotifier(null);
   static final ValueNotifier<String?> weatherDesc = ValueNotifier(null);
   static final ValueNotifier<IconData> weatherIcon = ValueNotifier(Icons.cloud);
+  static final ValueNotifier<PhoneInfo?> primaryPhone = ValueNotifier(null);
 
   static final ValueNotifier<List<FyrNotification>> notifications =
       ValueNotifier([]);
@@ -64,6 +68,8 @@ class SystemState {
       ValueNotifier([]);
   static int _nextNotificationId = 1;
 
+  static bool _isUpdating = false;
+  static bool _isUpdatingSway = false;
   static int _updateCount = 0;
   static Timer? _timer;
 
@@ -82,11 +88,28 @@ class SystemState {
     return null;
   }
 
+  static Future<ProcessResult> _runWithTimeout(
+    String cmd,
+    List<String> args, {
+    Duration timeout = const Duration(seconds: 3),
+  }) async {
+    final process = await Process.start(cmd, args);
+    final timer = Timer(timeout, () {
+      process.kill();
+    });
+    final stdout = process.stdout.transform(utf8.decoder).join();
+    final stderr = process.stderr.transform(utf8.decoder).join();
+    final exitCode = await process.exitCode;
+    timer.cancel();
+    return ProcessResult(process.pid, exitCode, await stdout, await stderr);
+  }
+
   static void init() {
     _update();
     _updateSwayState();
     _loadWeatherLocation();
     NotificationService.init();
+    PhoneService.init();
     _timer = Timer.periodic(const Duration(seconds: 5), (_) {
       _update();
       _updateCount++;
@@ -94,7 +117,10 @@ class SystemState {
         _fetchWeather();
       }
     });
+    _startSwaySubscription();
+  }
 
+  static void _startSwaySubscription() {
     Process.start('swaymsg', [
       '-t',
       'subscribe',
@@ -106,11 +132,18 @@ class SystemState {
           .transform(const LineSplitter())
           .listen((line) {
             _updateSwayState();
+          }, onDone: () {
+            Future.delayed(const Duration(seconds: 2), _startSwaySubscription);
+          }, onError: (_) {
+            Future.delayed(const Duration(seconds: 2), _startSwaySubscription);
           });
+      process.stderr.listen((_) {});
     });
   }
 
   static Future<void> _update() async {
+    if (_isUpdating) return;
+    _isUpdating = true;
     try {
       final capacityFile = File('/sys/class/power_supply/BAT0/capacity');
       if (await capacityFile.exists()) {
@@ -124,7 +157,7 @@ class SystemState {
             (await statusFile.readAsString()).trim() == 'Charging';
       }
 
-      final wifiResult = await Process.run('nmcli', [
+      final wifiResult = await _runWithTimeout('nmcli', [
         '-t',
         '-f',
         'active,ssid',
@@ -143,14 +176,14 @@ class SystemState {
         wifiSsid.value = ssid;
       }
 
-      final btShowResult = await Process.run('bluetoothctl', ['show']);
+      final btShowResult = await _runWithTimeout('bluetoothctl', ['show']);
       if (btShowResult.exitCode == 0) {
         bluetoothEnabled.value = btShowResult.stdout.toString().contains(
           'Powered: yes',
         );
       }
 
-      final btResult = await Process.run('bluetoothctl', [
+      final btResult = await _runWithTimeout('bluetoothctl', [
         'devices',
         'Connected',
       ]);
@@ -162,7 +195,7 @@ class SystemState {
             .toList();
       }
 
-      final volResult = await Process.run('wpctl', [
+      final volResult = await _runWithTimeout('wpctl', [
         'get-volume',
         '@DEFAULT_AUDIO_SINK@',
       ]);
@@ -174,7 +207,7 @@ class SystemState {
         }
       }
 
-      final brightResult = await Process.run('brightnessctl', ['-m']);
+      final brightResult = await _runWithTimeout('brightnessctl', ['-m']);
       if (brightResult.exitCode == 0) {
         final output = brightResult.stdout.toString().trim();
         final parts = output.split(',');
@@ -184,10 +217,10 @@ class SystemState {
         }
       }
 
-      final nlResult = await Process.run('pgrep', ['wlsunset']);
+      final nlResult = await _runWithTimeout('pgrep', ['wlsunset']);
       nightLight.value = nlResult.exitCode == 0;
 
-      final rfkillResult = await Process.run('rfkill', ['list', 'all']);
+      final rfkillResult = await _runWithTimeout('rfkill', ['list', 'all']);
       if (rfkillResult.exitCode == 0) {
         final output = rfkillResult.stdout.toString();
         airplaneMode.value =
@@ -215,22 +248,26 @@ class SystemState {
         } catch (_) {}
       }
 
-      final recResult = await Process.run('pgrep', ['wf-recorder']);
+      final recResult = await _runWithTimeout('pgrep', ['wf-recorder']);
       isRecording.value = recResult.exitCode == 0;
 
-      _updateSwayState();
-    } catch (_) {}
+      await _updateSwayState();
+    } catch (_) {} finally {
+      _isUpdating = false;
+    }
   }
 
   static Future<void> _updateSwayState() async {
+    if (_isUpdatingSway) return;
+    _isUpdatingSway = true;
     try {
-      final wsResult = await Process.run('swaymsg', ['-t', 'get_workspaces']);
+      final wsResult = await _runWithTimeout('swaymsg', ['-t', 'get_workspaces']);
       if (wsResult.exitCode == 0) {
         final List<dynamic> wss = jsonDecode(wsResult.stdout);
         workspaces.value = wss.map((w) => w as Map<String, dynamic>).toList();
       }
 
-      final treeResult = await Process.run('swaymsg', ['-t', 'get_tree']);
+      final treeResult = await _runWithTimeout('swaymsg', ['-t', 'get_tree']);
       if (treeResult.exitCode == 0) {
         final Map<String, dynamic> tree = jsonDecode(treeResult.stdout);
         final path = _findFocusedPath(tree);
@@ -247,7 +284,9 @@ class SystemState {
           splitLayout.value = layout;
         }
       }
-    } catch (_) {}
+    } catch (_) {} finally {
+      _isUpdatingSway = false;
+    }
   }
 
   static Future<void> _loadWeatherLocation() async {
@@ -280,8 +319,9 @@ class SystemState {
   static Future<void> _fetchWeather() async {
     try {
       final loc = weatherLocation.value;
-      final geoResult = await Process.run('curl', [
+      final geoResult = await _runWithTimeout('curl', [
         '-s',
+        '--max-time', '5',
         'https://geocoding-api.open-meteo.com/v1/search?name=${Uri.encodeComponent(loc)}&count=1&language=en&format=json',
       ]);
       if (geoResult.exitCode == 0) {
@@ -290,8 +330,9 @@ class SystemState {
           final lat = geoData['results'][0]['latitude'];
           final lon = geoData['results'][0]['longitude'];
 
-          final weatherResult = await Process.run('curl', [
+          final weatherResult = await _runWithTimeout('curl', [
             '-s',
+            '--max-time', '5',
             'https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon&current_weather=true&temperature_unit=fahrenheit',
           ]);
           if (weatherResult.exitCode == 0) {
@@ -339,6 +380,7 @@ class SystemState {
     required String body,
     String? icon,
     int? timeout,
+    List<String> actions = const [],
   }) {
     final notification = FyrNotification(
       id: _nextNotificationId++,
@@ -348,6 +390,7 @@ class SystemState {
       icon: icon ?? '',
       timestamp: DateTime.now(),
       timeout: timeout ?? 5000,
+      actions: actions,
     );
 
     notifications.value = [notification, ...notifications.value];
@@ -389,8 +432,23 @@ void main() async {
 
   await AppService.getInstalledApps();
 
+  int screenWidth = 1920;
+  int screenHeight = 1080;
+  
+  try {
+    final res = await Process.run('sh', ['-c', 'cat /sys/class/drm/*/modes | head -n 1']);
+    if (res.exitCode == 0 && res.stdout.toString().trim().isNotEmpty) {
+      final parts = res.stdout.toString().trim().split('x');
+      screenWidth = int.parse(parts[0]);
+      screenHeight = int.parse(parts[1]);
+    }
+  } catch (_) {}
+
+  SystemState.screenWidth = screenWidth;
+  SystemState.screenHeight = screenHeight;
+
   final waylandLayerShellPlugin = WaylandLayerShell();
-  bool isSupported = await waylandLayerShellPlugin.initialize(1920, 56);
+  bool isSupported = await waylandLayerShellPlugin.initialize(screenWidth, 56);
   if (isSupported) {
     await waylandLayerShellPlugin.setLayer(ShellLayer.layerTop);
     await waylandLayerShellPlugin.setAnchor(ShellEdge.edgeTop, true);
@@ -402,8 +460,8 @@ void main() async {
     );
   }
 
-  WindowOptions windowOptions = const WindowOptions(
-    size: Size(1920, 56),
+  WindowOptions windowOptions = WindowOptions(
+    size: Size(screenWidth.toDouble(), 56),
     center: false,
     backgroundColor: Colors.transparent,
     skipTaskbar: true,
@@ -576,6 +634,7 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
   bool _isStartMenuOpen = false;
   bool _isQuickSettingsOpen = false;
   bool _isCalendarOpen = false;
+  bool _isPhoneMenuOpen = false;
 
   void _toggleStartMenu() async {
     setState(() {
@@ -583,6 +642,7 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
       if (_isStartMenuOpen) {
         _isQuickSettingsOpen = false;
         _isCalendarOpen = false;
+        _isPhoneMenuOpen = false;
       }
     });
     _updateWindowSize();
@@ -594,6 +654,7 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
       if (_isQuickSettingsOpen) {
         _isStartMenuOpen = false;
         _isCalendarOpen = false;
+        _isPhoneMenuOpen = false;
       }
     });
     _updateWindowSize();
@@ -605,20 +666,34 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
       if (_isCalendarOpen) {
         _isStartMenuOpen = false;
         _isQuickSettingsOpen = false;
+        _isPhoneMenuOpen = false;
       }
     });
     _updateWindowSize();
   }
 
   void _closeMenus() {
-    if (_isStartMenuOpen || _isQuickSettingsOpen || _isCalendarOpen) {
+    if (_isStartMenuOpen || _isQuickSettingsOpen || _isCalendarOpen || _isPhoneMenuOpen) {
       setState(() {
         _isStartMenuOpen = false;
         _isQuickSettingsOpen = false;
         _isCalendarOpen = false;
+        _isPhoneMenuOpen = false;
       });
       _updateWindowSize();
     }
+  }
+
+  void _togglePhoneMenu() async {
+    setState(() {
+      _isPhoneMenuOpen = !_isPhoneMenuOpen;
+      if (_isPhoneMenuOpen) {
+        _isStartMenuOpen = false;
+        _isQuickSettingsOpen = false;
+        _isCalendarOpen = false;
+      }
+    });
+    _updateWindowSize();
   }
 
   void _updateWindowSize() async {
@@ -626,16 +701,17 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
     if (_isStartMenuOpen ||
         _isQuickSettingsOpen ||
         _isCalendarOpen ||
+        _isPhoneMenuOpen ||
         SystemState.activePopups.value.isNotEmpty) {
       try {
-        await channel.invokeMethod('setSize', {'width': 1920, 'height': 1080});
+        await channel.invokeMethod('setSize', {'width': SystemState.screenWidth, 'height': SystemState.screenHeight});
       } catch (_) {}
-      await windowManager.setSize(Size(1920, 1080));
+      await windowManager.setSize(Size(SystemState.screenWidth.toDouble(), SystemState.screenHeight.toDouble()));
     } else {
       try {
-        await channel.invokeMethod('setSize', {'width': 1920, 'height': 56});
+        await channel.invokeMethod('setSize', {'width': SystemState.screenWidth, 'height': 56});
       } catch (_) {}
-      await windowManager.setSize(Size(1920, 56));
+      await windowManager.setSize(Size(SystemState.screenWidth.toDouble(), 56));
     }
   }
 
@@ -707,7 +783,7 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                         GestureDetector(
                           onTap: () async {
                             await Process.run('swaymsg', [
-                              '[app_id="fyroverview"] scratchpad show, resize set 1920 1080, border none, move absolute position 0 0',
+                              '[app_id="fyroverview"] scratchpad show, resize set ${SystemState.screenWidth} ${SystemState.screenHeight}, border none, move absolute position 0 0',
                             ]);
                           },
                           behavior: HitTestBehavior.opaque,
@@ -842,6 +918,46 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                                     );
                                   },
                                 ),
+                                ValueListenableBuilder<PhoneInfo?>(
+                                  valueListenable: SystemState.primaryPhone,
+                                  builder: (context, phone, _) {
+                                    return GestureDetector(
+                                      onTap: () {
+                                        if (phone == null || !phone.isPaired) {
+                                          Process.run('fyrphone', []);
+                                        } else {
+                                          _togglePhoneMenu();
+                                        }
+                                      },
+                                      behavior: HitTestBehavior.opaque,
+                                      child: Row(
+                                        children: [
+                                          Icon(
+                                            phone != null && phone.isConnected
+                                                ? Icons.smartphone
+                                                : Icons.phonelink_erase,
+                                            color: phone != null && phone.isConnected
+                                                ? FyrTheme.textColor.withOpacity(0.9)
+                                                : FyrTheme.textColor.withOpacity(0.4),
+                                            size: 18,
+                                          ),
+                                          if (phone != null && phone.isConnected) ...[
+                                            const SizedBox(width: 4),
+                                            Text(
+                                              "${phone.batteryLevel}%",
+                                              style: TextStyle(
+                                                color: FyrTheme.textColor.withOpacity(0.7),
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ],
+                                          const SizedBox(width: 12),
+                                        ],
+                                      ),
+                                    );
+                                  },
+                                ),
                                 ValueListenableBuilder<String?>(
                                   valueListenable: SystemState.wifiSsid,
                                   builder: (context, ssid, _) {
@@ -957,6 +1073,15 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                                 onClose: _toggleCalendar,
                               ),
                             ),
+                          ),
+                        ),
+                      if (_isPhoneMenuOpen)
+                        Positioned(
+                          top: 0,
+                          right: 60,
+                          child: GestureDetector(
+                            onTap: () {},
+                            child: PhoneMenuPopup(onClose: _togglePhoneMenu),
                           ),
                         ),
                       if (_isQuickSettingsOpen)
@@ -1149,7 +1274,7 @@ class _StartMenuPopupState extends State<StartMenuPopup>
     final parts = exec.split(' ');
     if (parts.isNotEmpty) {
       try {
-        Process.start(parts[0], parts.sublist(1));
+        Process.start(parts[0], parts.sublist(1), mode: ProcessStartMode.detached);
       } catch (e) {
         print('Failed to launch: \$e');
       }
@@ -1158,7 +1283,7 @@ class _StartMenuPopupState extends State<StartMenuPopup>
 
   void _runCommand(String command, List<String> args) {
     widget.onClose();
-    Process.start(command, args);
+    Process.start(command, args, mode: ProcessStartMode.detached);
   }
 
   void _pinApp(DesktopApp app) async {
@@ -1378,7 +1503,7 @@ class _PowerButton extends StatelessWidget {
   }
 }
 
-enum QuickSettingsMenu { main, wifi, bluetooth, screenshot }
+enum QuickSettingsMenu { main, wifi, bluetooth, screenshot, audio }
 
 class QuickSettingsPopup extends StatefulWidget {
   final VoidCallback onClose;
@@ -1403,6 +1528,11 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
   List<Map<String, String>> _wifiNetworks = [];
   List<Map<String, String>> _btDevices = [];
   bool _isScanning = false;
+
+  List<dynamic> _sinks = [];
+  List<dynamic> _sources = [];
+  String _defaultSink = '';
+  String _defaultSource = '';
 
   late AnimationController _animationController;
   late Animation<Offset> _slideAnimation;
@@ -1473,7 +1603,7 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
   }
 
   void _runCmd(String cmd, List<String> args) {
-    Process.start(cmd, args);
+    Process.start(cmd, args, mode: ProcessStartMode.detached);
   }
 
   void _toggleWifi() {
@@ -1573,7 +1703,10 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
       }
       final filePath = '${directory.path}/recording_$timestamp.mp4';
 
-      Process.start('wf-recorder', ['-f', filePath]);
+      Process.start('wf-recorder', ['-f', filePath]).then((p) {
+        p.stdout.listen((_) {});
+        p.stderr.listen((_) {});
+      });
       if (mounted) setState(() => _isRecording = true);
       SystemState.isRecording.value = true;
       Process.run('notify-send', ['Recording Started', 'Capturing screen...']);
@@ -1686,6 +1819,40 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
     setState(() => _currentMenu = QuickSettingsMenu.main);
   }
 
+  Future<void> _loadAudioDevices() async {
+    setState(() => _isScanning = true);
+    try {
+      final sinksRes = await Process.run('pactl', ['-f', 'json', 'list', 'sinks']);
+      final sourcesRes = await Process.run('pactl', ['-f', 'json', 'list', 'sources']);
+      
+      final defaultSinkRes = await Process.run('pactl', ['get-default-sink']);
+      final defaultSourceRes = await Process.run('pactl', ['get-default-source']);
+
+      if (mounted) {
+        setState(() {
+          _sinks = jsonDecode(sinksRes.stdout);
+          _sources = (jsonDecode(sourcesRes.stdout) as List)
+              .where((s) => !s['name'].toString().contains('.monitor'))
+              .toList();
+          _defaultSink = defaultSinkRes.stdout.toString().trim();
+          _defaultSource = defaultSourceRes.stdout.toString().trim();
+        });
+      }
+    } catch (_) {} finally {
+      if (mounted) setState(() => _isScanning = false);
+    }
+  }
+
+  void _setDefaultSink(String name) {
+    Process.run('pactl', ['set-default-sink', name]);
+    setState(() => _defaultSink = name);
+  }
+
+  void _setDefaultSource(String name) {
+    Process.run('pactl', ['set-default-source', name]);
+    setState(() => _defaultSource = name);
+  }
+
   void _showWifiPasswordDialog(String ssid) {
     final TextEditingController _passwordController = TextEditingController();
     showDialog(
@@ -1771,6 +1938,8 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
         return _buildBluetoothMenu();
       case QuickSettingsMenu.screenshot:
         return _buildScreenshotMenu();
+      case QuickSettingsMenu.audio:
+        return _buildAudioMenu();
       case QuickSettingsMenu.main:
       default:
         return _buildMainMenu();
@@ -1886,6 +2055,13 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
           value: _volume,
           onChanged: _setVolume,
           onChangeEnd: (_) => _playVolumeSound(),
+          trailing: IconButton(
+            icon: Icon(Icons.keyboard_arrow_right, color: FyrTheme.textColor),
+            onPressed: () {
+              _loadAudioDevices();
+              setState(() => _currentMenu = QuickSettingsMenu.audio);
+            },
+          ),
         ),
       ],
     );
@@ -2065,6 +2241,98 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
       ],
     );
   }
+  Widget _buildAudioMenu() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            IconButton(
+              icon: Icon(Icons.arrow_back, color: FyrTheme.textColor, size: 20),
+              onPressed: () =>
+                  setState(() => _currentMenu = QuickSettingsMenu.main),
+            ),
+            Text(
+              "Audio Devices",
+              style: TextStyle(
+                color: FyrTheme.textColor,
+                fontWeight: FontWeight.bold,
+                fontSize: 14,
+              ),
+            ),
+            const Spacer(),
+            if (_isScanning)
+              SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: FyrTheme.accentColor,
+                ),
+              ),
+          ],
+        ),
+        SizedBox(height: 8),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 250),
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                  child: Text("Output (Speakers)", style: TextStyle(color: FyrTheme.textColorMuted, fontSize: 12, fontWeight: FontWeight.bold)),
+                ),
+                ..._sinks.map((s) {
+                  bool isDefault = s['name'] == _defaultSink;
+                  return ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.symmetric(horizontal: 16),
+                    leading: Icon(
+                      Icons.speaker,
+                      size: 16,
+                      color: isDefault ? FyrTheme.accentColor : FyrTheme.textColorMuted,
+                    ),
+                    title: Text(
+                      s['description'] ?? s['name'],
+                      style: TextStyle(fontSize: 13, color: FyrTheme.textColor),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    trailing: isDefault ? Icon(Icons.check, color: FyrTheme.accentColor, size: 16) : null,
+                    onTap: () => _setDefaultSink(s['name']),
+                  );
+                }).toList(),
+                Divider(color: FyrTheme.textColor.withOpacity(0.1)),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                  child: Text("Input (Microphone)", style: TextStyle(color: FyrTheme.textColorMuted, fontSize: 12, fontWeight: FontWeight.bold)),
+                ),
+                ..._sources.map((s) {
+                  bool isDefault = s['name'] == _defaultSource;
+                  return ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.symmetric(horizontal: 16),
+                    leading: Icon(
+                      Icons.mic,
+                      size: 16,
+                      color: isDefault ? FyrTheme.accentColor : FyrTheme.textColorMuted,
+                    ),
+                    title: Text(
+                      s['description'] ?? s['name'],
+                      style: TextStyle(fontSize: 13, color: FyrTheme.textColor),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    trailing: isDefault ? Icon(Icons.check, color: FyrTheme.accentColor, size: 16) : null,
+                    onTap: () => _setDefaultSource(s['name']),
+                  );
+                }).toList(),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 class _ScreenshotButton extends StatelessWidget {
@@ -2179,12 +2447,14 @@ class _SliderRow extends StatelessWidget {
   final double value;
   final ValueChanged<double> onChanged;
   final ValueChanged<double>? onChangeEnd;
+  final Widget? trailing;
 
   const _SliderRow({
     required this.icon,
     required this.value,
     required this.onChanged,
     this.onChangeEnd,
+    this.trailing,
   });
 
   @override
@@ -2210,6 +2480,10 @@ class _SliderRow extends StatelessWidget {
             ),
           ),
         ),
+        if (trailing != null) ...[
+          SizedBox(width: 8),
+          trailing!,
+        ],
       ],
     );
   }
@@ -2256,129 +2530,143 @@ class NotificationCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 320,
-      decoration: BoxDecoration(
-        color: FyrTheme.bgColor.withOpacity(0.9),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: FyrTheme.cardColor),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.2),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-        child: Padding(
-          padding: const EdgeInsets.all(12.0),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildIcon(),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Expanded(
-                          child: Text(
-                            notification.appName.toUpperCase(),
+    return GestureDetector(
+      onTap: () {
+        if (notification.actions.contains('default')) {
+          NotificationService.sendActionInvoked(notification.id, 'default');
+          SystemState.dismissNotification(notification.id);
+        }
+      },
+      child: Container(
+        width: 320,
+        decoration: BoxDecoration(
+          color: FyrTheme.bgColor.withOpacity(0.9),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: FyrTheme.cardColor),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.2),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+          child: Padding(
+            padding: const EdgeInsets.all(12.0),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildIcon(),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              notification.appName.toUpperCase(),
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: FyrTheme.accentColor,
+                                letterSpacing: 1.2,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          Text(
+                            DateFormat('HH:mm').format(notification.timestamp),
                             style: TextStyle(
                               fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                              color: FyrTheme.accentColor,
-                              letterSpacing: 1.2,
+                              color: FyrTheme.textColorMuted,
                             ),
-                            overflow: TextOverflow.ellipsis,
                           ),
-                        ),
-                        Text(
-                          DateFormat('HH:mm').format(notification.timestamp),
-                          style: TextStyle(
-                            fontSize: 10,
-                            color: FyrTheme.textColorMuted,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      notification.title,
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: FyrTheme.textColor,
+                        ],
                       ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      notification.body,
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: FyrTheme.textColor.withOpacity(0.8),
+                      const SizedBox(height: 4),
+                      Text(
+                        notification.title,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: FyrTheme.textColor,
+                        ),
                       ),
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    if (notification.actions.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: Row(
-                          children: notification.actions
-                              .asMap()
-                              .entries
-                              .map((entry) {
-                            if (entry.key % 2 != 0) return const SizedBox.shrink();
-                            final key = entry.value;
-                            final label = notification.actions[entry.key + 1];
-                            return Padding(
-                              padding: const EdgeInsets.only(right: 8),
-                              child: TextButton(
+                      const SizedBox(height: 2),
+                      Text(
+                        notification.body,
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: FyrTheme.textColor.withOpacity(0.8),
+                        ),
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      if (notification.actions.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Wrap(
+                            spacing: 8,
+                            runSpacing: 4,
+                            children: notification.actions
+                                .asMap()
+                                .entries
+                                .where((entry) => entry.key % 2 == 0 && entry.value != 'default')
+                                .map((entry) {
+                              final key = entry.value;
+                              final label = notification.actions[entry.key + 1];
+                              return TextButton(
                                 onPressed: () {
                                   NotificationService.sendActionInvoked(notification.id, key);
                                   SystemState.dismissNotification(notification.id);
                                 },
                                 style: TextButton.styleFrom(
+                                  backgroundColor: FyrTheme.accentColor.withOpacity(0.1),
                                   foregroundColor: FyrTheme.accentColor,
                                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                                   minimumSize: Size.zero,
                                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
                                 ),
-                                child: Text(label),
-                              ),
-                            );
-                          }).toList(),
+                                child: Text(
+                                  label,
+                                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                                ),
+                              );
+                            }).toList(),
+                          ),
                         ),
-                      ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              IconButton(
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-                icon: Icon(
-                  Icons.close,
-                  size: 16,
-                  color: FyrTheme.textColorMuted,
+                const SizedBox(width: 8),
+                IconButton(
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  icon: Icon(
+                    Icons.close,
+                    size: 16,
+                    color: FyrTheme.textColorMuted,
+                  ),
+                  onPressed: () {
+                    if (isPopup) {
+                      SystemState.dismissPopup(notification.id);
+                    } else {
+                      SystemState.dismissNotification(notification.id);
+                    }
+                  },
                 ),
-                onPressed: () {
-                  if (isPopup) {
-                    SystemState.dismissPopup(notification.id);
-                  } else {
-                    SystemState.dismissNotification(notification.id);
-                  }
-                },
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -2434,6 +2722,146 @@ class NotificationCard extends StatelessWidget {
         Icons.notifications,
         color: FyrTheme.accentColor,
         size: 24,
+      ),
+    );
+  }
+}
+
+class PhoneMenuPopup extends StatefulWidget {
+  final VoidCallback onClose;
+  const PhoneMenuPopup({super.key, required this.onClose});
+
+  @override
+  State<PhoneMenuPopup> createState() => _PhoneMenuPopupState();
+}
+
+class _PhoneMenuPopupState extends State<PhoneMenuPopup> with SingleTickerProviderStateMixin {
+  late AnimationController _animationController;
+  late Animation<Offset> _slideAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _animationController = AnimationController(
+      duration: const Duration(milliseconds: 150),
+      vsync: this,
+    );
+    _slideAnimation = Tween<Offset>(begin: const Offset(0.0, -1.0), end: Offset.zero).animate(
+      CurvedAnimation(
+        parent: _animationController,
+        curve: Curves.easeOutQuart,
+      ),
+    );
+    _animationController.forward();
+  }
+
+  @override
+  void dispose() {
+    _animationController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SlideTransition(
+      position: _slideAnimation,
+      child: Container(
+        width: 300,
+        decoration: BoxDecoration(
+          color: FyrTheme.bgColor,
+          borderRadius: const BorderRadius.only(
+            bottomLeft: Radius.circular(16),
+            bottomRight: Radius.circular(16),
+          ),
+          border: Border.all(color: FyrTheme.cardColor),
+        ),
+        child: ValueListenableBuilder<PhoneInfo?>(
+          valueListenable: SystemState.primaryPhone,
+          builder: (context, phone, _) {
+            if (phone == null) return const SizedBox.shrink();
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Row(
+                    children: [
+                      Icon(Icons.smartphone, color: FyrTheme.accentColor, size: 32),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              phone.name,
+                              style: TextStyle(
+                                color: FyrTheme.textColor,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                            ),
+                            Text(
+                              phone.isConnected ? "Connected • ${phone.batteryLevel}%" : "Disconnected",
+                              style: TextStyle(color: FyrTheme.textColorMuted, fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.settings, size: 20),
+                        onPressed: () {
+                          widget.onClose();
+                          Process.run('fyrphone', []);
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+                _buildMenuItem(
+                  icon: Icons.notifications,
+                  label: "Ping Phone",
+                  onTap: () => PhoneService.ping(phone.id),
+                ),
+                _buildMenuItem(
+                  icon: Icons.folder_open,
+                  label: "Browse Files",
+                  onTap: () => PhoneService.mountSftp(phone.id),
+                ),
+                _buildMenuItem(
+                  icon: Icons.content_paste,
+                  label: "Sync Clipboard",
+                  onTap: () async {
+                    final res = await Process.run('xclip', ['-o', '-selection', 'clipboard']);
+                    if (res.exitCode == 0) {
+                      PhoneService.shareText(phone.id, res.stdout.toString());
+                    }
+                  },
+                ),
+                const SizedBox(height: 8),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMenuItem({required IconData icon, required String label, required VoidCallback onTap}) {
+    return InkWell(
+      onTap: () {
+        onTap();
+        widget.onClose();
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Icon(icon, color: FyrTheme.textColor.withOpacity(0.7), size: 20),
+            const SizedBox(width: 16),
+            Text(label, style: TextStyle(color: FyrTheme.textColor, fontSize: 14)),
+          ],
+        ),
       ),
     );
   }

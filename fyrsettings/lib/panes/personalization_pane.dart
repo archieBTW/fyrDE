@@ -175,24 +175,59 @@ class _PersonalizationPaneState extends State<PersonalizationPane> {
         final path = result.stdout.toString().trim();
         if (path.isNotEmpty) {
           final home = Platform.environment['HOME'];
-          final user = Platform.environment['USER'];
           final target1 = File('$home/.face');
           final target2 = File('$home/.face.icon');
-          await File(path).copy(target1.path);
-          await File(path).copy(target2.path);
+          
+          // Evict from cache before copying to ensure UI updates
+          await FileImage(target1).evict();
+          await FileImage(target2).evict();
+          
+          // Use ffmpeg to resize to 128x128 (very safe for Accountsservice)
+          // We output to a .png extension first so ffmpeg knows the format
+          final tempIcon = File('$home/.face_temp.png');
+          await Process.run('ffmpeg', [
+            '-y',
+            '-i', path,
+            '-frames:v', '1',
+            '-vf', 'scale=128:128:force_original_aspect_ratio=decrease,pad=128:128:(ow-iw)/2:(oh-ih)/2',
+            tempIcon.path
+          ]);
+          
+          if (await tempIcon.exists()) {
+            await tempIcon.copy(target1.path);
+            await tempIcon.rename(target2.path);
+          }
           
           // Set permissions to 644 (rw-r--r--) so SDDM can read it
           await Process.run('chmod', ['644', target1.path]);
           await Process.run('chmod', ['644', target2.path]);
-
-          if (user != null) {
-            // Copy to SDDM system faces directory so it can be read regardless of home dir permissions
-            await Process.run('pkexec', ['cp', path, '/usr/share/sddm/faces/$user.face.icon']);
-            await Process.run('pkexec', ['chmod', '644', '/usr/share/sddm/faces/$user.face.icon']);
-          }
           
+          // Ensure ACLs are preserved/re-applied
+          await Process.run('setfacl', ['-m', 'u:sddm:r', target1.path]);
+          await Process.run('setfacl', ['-m', 'u:sddm:r', target2.path]);
+
+          // Notify Accountsservice
+          final uidResult = await Process.run('id', ['-u']);
+          final uid = uidResult.stdout.toString().trim();
+          await Process.run('dbus-send', [
+            '--system',
+            '--dest=org.freedesktop.Accounts',
+            '--type=method_call',
+            '/org/freedesktop/Accounts/User$uid',
+            'org.freedesktop.Accounts.User.SetIconFile',
+            'string:${target2.path}'
+          ]);
+
           setState(() {
-            _profilePicPath = target1.path;
+            _profilePicPath = ''; // Clear briefly to trigger rebuild
+          });
+          
+          Future.delayed(const Duration(milliseconds: 50), () {
+            if (mounted) {
+              setState(() {
+                _profilePicPath = target1.path;
+              });
+            }
           });
         }
       }
@@ -210,14 +245,16 @@ class _PersonalizationPaneState extends State<PersonalizationPane> {
         if (path.isNotEmpty) {
           final prefs = await SharedPreferences.getInstance();
           await prefs.setString('lock_screen_bg_path', path);
+          final home = Platform.environment['HOME'];
+          final target = File('$home/.config/fyr/lockscreen.jpg');
+          if (!await target.parent.exists()) {
+            await target.parent.create(recursive: true);
+          }
+          await File(path).copy(target.path);
+          await Process.run('chmod', ['644', target.path]);
           setState(() {
             _lockScreenBgPath = path;
           });
-          
-          // Use pkexec for GUI password prompt to copy to system directory
-          await Process.run('pkexec', ['cp', path, '/usr/share/sddm/themes/fyr/space.jpg']);
-          // Also set permissions so SDDM can read it
-          await Process.run('pkexec', ['chmod', '644', '/usr/share/sddm/themes/fyr/space.jpg']);
         }
       }
     } catch (e) {}

@@ -188,6 +188,12 @@ class KdeConnectService {
       final text = (await remote.getProperty('org.kde.kdeconnect.device.notifications.notification', 'text') as DBusString).value;
       final appName = (await remote.getProperty('org.kde.kdeconnect.device.notifications.notification', 'appName') as DBusString).value;
       
+      List<String> actions = [];
+      try {
+        final actionsRes = await remote.getProperty('org.kde.kdeconnect.device.notifications.notification', 'actions');
+        actions = (actionsRes as DBusArray).children.map((v) => (v as DBusString).value).toList();
+      } catch (_) {}
+
       // Forward to desktop notifications
       final desktopNotify = DBusRemoteObject(_client,
           name: 'org.freedesktop.Notifications',
@@ -199,7 +205,7 @@ class KdeConnectService {
         const DBusString('phone'),
         DBusString('$title (from phone)'),
         DBusString(text),
-        DBusArray(DBusSignature('s'), []),
+        DBusArray.string(actions),
         DBusDict(DBusSignature('s'), DBusSignature('v'), {}),
         const DBusInt32(5000),
       ]);
@@ -213,6 +219,7 @@ class KdeConnectService {
         name: 'org.kde.kdeconnect',
         path: DBusObjectPath('/modules/kdeconnect/devices/$id'));
     await remote.callMethod('org.kde.kdeconnect.device', 'requestPairing', []);
+    await _updateDeviceState(id);
   }
 
   Future<void> acceptPairing(String id) async {
@@ -220,6 +227,7 @@ class KdeConnectService {
         name: 'org.kde.kdeconnect',
         path: DBusObjectPath('/modules/kdeconnect/devices/$id'));
     await remote.callMethod('org.kde.kdeconnect.device', 'acceptPairing', []);
+    await _updateDeviceState(id);
   }
 
   Future<void> cancelPairing(String id) async {
@@ -227,6 +235,7 @@ class KdeConnectService {
         name: 'org.kde.kdeconnect',
         path: DBusObjectPath('/modules/kdeconnect/devices/$id'));
     await remote.callMethod('org.kde.kdeconnect.device', 'cancelPairing', []);
+    await _updateDeviceState(id);
   }
 
   Future<void> unpair(String id) async {
@@ -234,12 +243,42 @@ class KdeConnectService {
         name: 'org.kde.kdeconnect',
         path: DBusObjectPath('/modules/kdeconnect/devices/$id'));
     await remote.callMethod('org.kde.kdeconnect.device', 'unpair', []);
+    await _updateDeviceState(id);
   }
 
   Future<void> addDeviceByIp(String ip) async {
     final remote = DBusRemoteObject(_client,
         name: 'org.kde.kdeconnect', path: DBusObjectPath('/modules/kdeconnect'));
     await remote.callMethod('org.kde.kdeconnect.daemon', 'addDeviceByIp', [DBusString(ip)]);
+  }
+
+  Future<void> ping(String id) async {
+    final remote = DBusRemoteObject(_client,
+        name: 'org.kde.kdeconnect',
+        path: DBusObjectPath('/modules/kdeconnect/devices/$id/ping'));
+    await remote.callMethod('org.kde.kdeconnect.device.ping', 'sendPing', []);
+  }
+
+  Future<void> mountSftp(String id) async {
+    final remote = DBusRemoteObject(_client,
+        name: 'org.kde.kdeconnect',
+        path: DBusObjectPath('/modules/kdeconnect/devices/$id/sftp'));
+    await remote.callMethod('org.kde.kdeconnect.device.sftp', 'mount', []);
+  }
+
+  Future<String?> getSftpMountPoint(String id) async {
+    final remote = DBusRemoteObject(_client,
+        name: 'org.kde.kdeconnect',
+        path: DBusObjectPath('/modules/kdeconnect/devices/$id/sftp'));
+    final res = await remote.getProperty('org.kde.kdeconnect.device.sftp', 'mountPoint');
+    return (res as DBusString).value;
+  }
+
+  Future<void> shareText(String id, String text) async {
+    final remote = DBusRemoteObject(_client,
+        name: 'org.kde.kdeconnect',
+        path: DBusObjectPath('/modules/kdeconnect/devices/$id/share'));
+    await remote.callMethod('org.kde.kdeconnect.device.share', 'shareText', [DBusString(text)]);
   }
 
   void dispose() {

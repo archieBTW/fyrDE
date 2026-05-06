@@ -51,6 +51,7 @@ bindsym $mod+Print exec ~/.config/fyr/toggle_recording.sh
 bindsym $mod+t exec fyrterm
 bindsym $mod+f exec fyrfiles
 bindsym $mod+m exec ~/.config/fyr/toggle_floating.sh
+bindsym $mod+l exec dbus-send --system --type=method_call --dest=org.freedesktop.DisplayManager /org/freedesktop/DisplayManager/Seat0 org.freedesktop.DisplayManager.Seat.SwitchToGreeter
 
 # -------------------------------------------------------------
 # Window Splits
@@ -129,13 +130,21 @@ bindsym $mod+space [app_id="(?i).*fyrsearch.*"] scratchpad show, border none, re
 
 
 # ==========================================
-# Fyroverview Sway Configuration
+# Fyroverview & Fyrwindowoverview Sway Configuration
 # ==========================================
 exec /opt/fyroverview/fyroverview
-for_window [app_id="fyroverview"] floating enable, border none, resize set 1920 1080, move position 0 0, move scratchpad
-bindsym $mod+Tab [app_id="fyroverview"] scratchpad show, resize set 1920 1080, border none, move absolute position 0 0
-bindgesture swipe:3:down [app_id="fyroverview"] scratchpad show, resize set 1920 1080, border none, move absolute position 0 0
-bindgesture swipe:3:up [app_id="fyroverview"] move scratchpad
+exec /opt/fyrwindowoverview/fyrwindowoverview
+
+for_window [app_id="fyroverview"] floating enable, border none, resize set 1920 1024, move position 0 56, blur enable, move scratchpad
+for_window [app_id="fyrwindowoverview"] floating enable, border none, resize set 1920 1024, move position 0 56, blur enable, move scratchpad
+
+# Super + Tab and Super + W
+bindsym $mod+Tab exec ~/.config/fyr/overview_toggle.sh
+bindsym $mod+w exec ~/.config/fyr/overview_toggle.sh workspace
+
+# Gestures
+bindgesture swipe:3:down exec ~/.config/fyr/overview_toggle.sh back
+bindgesture swipe:3:up exec ~/.config/fyr/overview_toggle.sh hide
 
 
 # ==========================================

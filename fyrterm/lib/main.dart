@@ -346,38 +346,7 @@ class _HomeState extends State<Home> with WindowListener {
 
   @override
   void onWindowClose() async {
-    bool shouldClose =
-        await showDialog<bool>(
-          context: context,
-          builder: (context) {
-            return AlertDialog(
-              title: const Text('Close Terminal?'),
-              content: Text(
-                _tabs.length > 1
-                    ? 'You have multiple tabs open. Are you sure you want to close the terminal? All running processes will be terminated.'
-                    : 'Are you sure you want to close the terminal? Any running process will be terminated.',
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(false),
-                  child: const Text('Cancel'),
-                ),
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(true),
-                  child: const Text(
-                    'Close',
-                    style: TextStyle(color: Colors.red),
-                  ),
-                ),
-              ],
-            );
-          },
-        ) ??
-        false;
-
-    if (shouldClose) {
-      await windowManager.destroy();
-    }
+    await windowManager.destroy();
   }
 
   void _startPty(TerminalTab tab) {

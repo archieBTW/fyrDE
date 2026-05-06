@@ -163,6 +163,7 @@ class _HelpScreenState extends State<HelpScreen> {
                 Expanded(
                   child: ListView(
                     children: [
+                      _buildShortcut('Super + L', 'Lock Screen'),
                       _buildShortcut('Super + Q', 'Close Focused Window'),
                       _buildShortcut('Alt + Tab', 'Focus Next Window'),
                       _buildShortcut('Alt + Shift + Tab', 'Focus Previous Window'),

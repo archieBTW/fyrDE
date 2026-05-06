@@ -113,6 +113,10 @@ class NotificationService extends DBusObject {
     final appIcon = (methodCall.values[2] as DBusString).value;
     final summary = (methodCall.values[3] as DBusString).value;
     final body = (methodCall.values[4] as DBusString).value;
+    final actions = (methodCall.values[5] as DBusArray)
+        .children
+        .map((v) => (v as DBusString).value)
+        .toList();
     final expireTimeout = (methodCall.values[7] as DBusInt32).value;
 
     SystemState.addNotification(
@@ -121,6 +125,7 @@ class NotificationService extends DBusObject {
       body: body,
       icon: appIcon,
       timeout: expireTimeout > 0 ? expireTimeout : 5000,
+      actions: actions,
     );
 
     return DBusMethodSuccessResponse([DBusUint32(1)]);
