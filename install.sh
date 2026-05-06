@@ -40,11 +40,12 @@ if [ "$OS" = "arch" ] || [ "$OS" = "manjaro" ] || [ "$OS" = "endeavouros" ]; the
     fi
 
     deps=( 
-        "mesa-utils" "swaybg" "swaylock" "swayidle" "xorg-xwayland" "foot" "wmenu"
+        "jq" "mesa-utils" "swaybg" "swaylock" "swayidle" "xorg-xwayland" "foot" "wmenu"
         "gtk-layer-shell" "xdg-desktop-portal" "xdg-desktop-portal-gtk"
         "xdg-desktop-portal-wlr" "xclip" "wl-clipboard" "brightnessctl"
-        "wireplumber" "wlsunset" "cmake" "cpio" "pkg-config" "gcc" "wf-recorder" "grim" "ninja" "clang"
+        "wireplumber" "pipewire" "pipewire-pulse" "wlsunset" "cmake" "cpio" "pkg-config" "gcc" "wf-recorder" "grim" "ninja" "clang"
         "meson" "scdoc" "wayland-protocols" "pcre2" "json-c" "pango" "cairo" "gdk-pixbuf2" "unzip" "virt-viewer" "libvirt" "virt-install"
+        "bluez" "bluez-utils" "xdg-utils" "slurp" "libnotify" "mako" "polkit-gnome" "network-manager-applet" "pavucontrol" "playerctl" "jq" "libcanberra" "psmisc" "pamixer"
     )
 
     echo "Installing official dependencies via pacman..."
@@ -60,8 +61,9 @@ elif [ "$OS" = "ubuntu" ] || [ "$OS" = "debian" ]; then
     deps=(
         "swaybg" "swaylock" "swayidle" "xwayland" "foot" "libgtk-layer-shell-dev"
         "xdg-desktop-portal" "xdg-desktop-portal-gtk" "xdg-desktop-portal-wlr"
-        "xclip" "wl-clipboard" "brightnessctl" "wireplumber" "cmake" "cpio"
+        "xclip" "wl-clipboard" "brightnessctl" "wireplumber" "pipewire" "pipewire-pulse" "cmake" "cpio"
         "pkg-config" "gcc" "wf-recorder" "grim" "ninja-build" "clang" "curl" "git" "unzip" "xz-utils" "zip" "libglu1-mesa" "sway" "virt-viewer" "libvirt-clients" "libvirt-daemon-system" "virtinst"
+        "bluez" "bluez-tools" "xdg-utils" "slurp" "libnotify-bin" "mako-notifier" "polkit-gnome" "network-manager-gnome" "pavucontrol" "playerctl" "jq" "libcanberra-gtk3-module" "libcanberra-gtk-module" "psmisc" "pamixer"
     )
 
     echo "Installing official dependencies via apt..."
@@ -77,8 +79,9 @@ elif [ "$OS" = "fedora" ]; then
     deps=(
         "swaybg" "swaylock" "swayidle" "xorg-x11-server-Xwayland" "foot" "gtk-layer-shell-devel"
         "xdg-desktop-portal" "xdg-desktop-portal-gtk" "xdg-desktop-portal-wlr"
-        "xclip" "wl-clipboard" "brightnessctl" "wireplumber" "cmake" "cpio"
+        "xclip" "wl-clipboard" "brightnessctl" "wireplumber" "pipewire" "pipewire-pulseaudio" "cmake" "cpio"
         "pkgconf" "gcc" "wf-recorder" "grim" "ninja-build" "clang" "curl" "git" "unzip" "zip" "mesa-libGLU" "sway" "virt-viewer" "libvirt" "virt-install"
+        "bluez" "bluez-utils" "xdg-utils" "slurp" "libnotify" "mako" "polkit-gnome" "nm-connection-editor" "pavucontrol" "playerctl" "jq" "libcanberra-gtk3" "psmisc" "pamixer"
     )
 
     echo "Installing official dependencies via dnf..."

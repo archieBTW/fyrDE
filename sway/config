@@ -49,7 +49,7 @@ bindsym XF86MonBrightnessDown exec brightnessctl set 5%-
 bindsym Print exec sh -c 'mkdir -p ~/Pictures/screenshots && f=~/Pictures/screenshots/$(date +"%Y-%m-%d_%H-%M-%S").png && grim "$f" && wl-copy -t image/png < "$f"'
 bindsym $mod+Print exec ~/.config/fyr/toggle_recording.sh
 bindsym $mod+t exec fyrterm
-bindsym $mod+f exec fyr_files
+bindsym $mod+f exec fyrfiles
 bindsym $mod+m exec ~/.config/fyr/toggle_floating.sh
 
 # -------------------------------------------------------------
