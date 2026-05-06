@@ -296,7 +296,41 @@ class _PhoneHomePageState extends State<PhoneHomePage> {
                   ],
                 ),
               ),
-              if (!device.isPaired)
+              if (device.isPairRequestedByPeer)
+                Row(
+                  children: [
+                    ElevatedButton.icon(
+                      onPressed: () => _kdeService.acceptPairing(device.id),
+                      icon: const Icon(Icons.check),
+                      label: const Text('Accept Pair'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        foregroundColor: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    OutlinedButton.icon(
+                      onPressed: () => _kdeService.cancelPairing(device.id),
+                      icon: const Icon(Icons.close),
+                      label: const Text('Reject'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.redAccent,
+                        side: const BorderSide(color: Colors.redAccent),
+                      ),
+                    ),
+                  ],
+                )
+              else if (device.isPairRequested)
+                OutlinedButton.icon(
+                  onPressed: () => _kdeService.cancelPairing(device.id),
+                  icon: const Icon(Icons.hourglass_empty),
+                  label: const Text('Cancel Request'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: FyrTheme.textColorMuted,
+                    side: BorderSide(color: FyrTheme.cardColor),
+                  ),
+                )
+              else if (!device.isPaired)
                 ElevatedButton.icon(
                   onPressed: () => _kdeService.pair(device.id),
                   icon: const Icon(Icons.link),
@@ -395,9 +429,9 @@ class _PhoneHomePageState extends State<PhoneHomePage> {
         width: 200,
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: FyrTheme.cardColor.withOpacity(0.5),
+          color: Colors.black.withOpacity(0.3),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: FyrTheme.cardColor),
+          border: Border.all(color: FyrTheme.cardColor.withOpacity(0.5)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,

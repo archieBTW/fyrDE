@@ -9,6 +9,8 @@ class KdeConnectDevice {
   final bool isReachable;
   final int batteryLevel;
   final bool isCharging;
+  final bool isPairRequested;
+  final bool isPairRequestedByPeer;
 
   KdeConnectDevice({
     required this.id,
@@ -17,6 +19,8 @@ class KdeConnectDevice {
     this.isReachable = false,
     this.batteryLevel = -1,
     this.isCharging = false,
+    this.isPairRequested = false,
+    this.isPairRequestedByPeer = false,
   });
 
   KdeConnectDevice copyWith({
@@ -25,6 +29,8 @@ class KdeConnectDevice {
     int? batteryLevel,
     bool? isCharging,
     String? name,
+    bool? isPairRequested,
+    bool? isPairRequestedByPeer,
   }) {
     return KdeConnectDevice(
       id: id,
@@ -33,6 +39,8 @@ class KdeConnectDevice {
       isReachable: isReachable ?? this.isReachable,
       batteryLevel: batteryLevel ?? this.batteryLevel,
       isCharging: isCharging ?? this.isCharging,
+      isPairRequested: isPairRequested ?? this.isPairRequested,
+      isPairRequestedByPeer: isPairRequestedByPeer ?? this.isPairRequestedByPeer,
     );
   }
 }
@@ -98,6 +106,8 @@ class KdeConnectService {
     final nameRes = await remote.getProperty('org.kde.kdeconnect.device', 'name');
     final pairedRes = await remote.getProperty('org.kde.kdeconnect.device', 'isPaired');
     final reachableRes = await remote.getProperty('org.kde.kdeconnect.device', 'isReachable');
+    final pairReqRes = await remote.getProperty('org.kde.kdeconnect.device', 'isPairRequested');
+    final pairReqPeerRes = await remote.getProperty('org.kde.kdeconnect.device', 'isPairRequestedByPeer');
 
     int battery = -1;
     bool charging = false;
@@ -116,6 +126,8 @@ class KdeConnectService {
       name: (nameRes as DBusString).value,
       isPaired: (pairedRes as DBusBoolean).value,
       isReachable: (reachableRes as DBusBoolean).value,
+      isPairRequested: (pairReqRes as DBusBoolean).value,
+      isPairRequestedByPeer: (pairReqPeerRes as DBusBoolean).value,
       batteryLevel: battery,
       isCharging: charging,
     );
@@ -200,7 +212,21 @@ class KdeConnectService {
     final remote = DBusRemoteObject(_client,
         name: 'org.kde.kdeconnect',
         path: DBusObjectPath('/modules/kdeconnect/devices/$id'));
-    await remote.callMethod('org.kde.kdeconnect.device', 'pair', []);
+    await remote.callMethod('org.kde.kdeconnect.device', 'requestPairing', []);
+  }
+
+  Future<void> acceptPairing(String id) async {
+    final remote = DBusRemoteObject(_client,
+        name: 'org.kde.kdeconnect',
+        path: DBusObjectPath('/modules/kdeconnect/devices/$id'));
+    await remote.callMethod('org.kde.kdeconnect.device', 'acceptPairing', []);
+  }
+
+  Future<void> cancelPairing(String id) async {
+    final remote = DBusRemoteObject(_client,
+        name: 'org.kde.kdeconnect',
+        path: DBusObjectPath('/modules/kdeconnect/devices/$id'));
+    await remote.callMethod('org.kde.kdeconnect.device', 'cancelPairing', []);
   }
 
   Future<void> unpair(String id) async {
