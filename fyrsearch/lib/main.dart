@@ -49,12 +49,14 @@ class DesktopApp {
   final String name;
   final String exec;
   final String? icon;
+  final bool noDisplay;
 
   DesktopApp({
     required this.id,
     required this.name,
     required this.exec,
     this.icon,
+    this.noDisplay = false,
   });
 }
 
@@ -113,12 +115,38 @@ class _LauncherScreenState extends State<LauncherScreen>
   }
 
   bool _isDefaultApp(DesktopApp app) {
+    if (app.noDisplay) return false;
+    
     final id = app.id.toLowerCase();
     final name = app.name.toLowerCase();
 
     if (name == 'firefox' || id.contains('firefox')) return true;
     if (name.startsWith('fyr') || id.startsWith('fyr')) return true;
     if (id.startsWith('org.gnome.')) return true;
+
+    // Common apps requested by user
+    const commonApps = [
+      'steam',
+      'discord',
+      'spotify',
+      'obs',
+      'vlc',
+      'code',
+      'gimp',
+      'inkscape',
+      'blender',
+      'slack',
+      'telegram',
+      'signal',
+      'chrome',
+      'chromium',
+      'brave',
+      'thunderbird',
+    ];
+
+    for (final common in commonApps) {
+      if (id.contains(common) || name.contains(common)) return true;
+    }
 
     const gnomeLegacyApps = [
       'nautilus',
@@ -165,6 +193,7 @@ class _LauncherScreenState extends State<LauncherScreen>
           String? name;
           String? exec;
           String? icon;
+          bool noDisplay = false;
 
           for (var line in content) {
             if (line.startsWith('Name=') && name == null) {
@@ -172,6 +201,9 @@ class _LauncherScreenState extends State<LauncherScreen>
             }
             if (line.startsWith('Icon=') && icon == null) {
               icon = line.substring(5).trim();
+            }
+            if (line.startsWith('NoDisplay=') ) {
+              noDisplay = line.substring(10).trim().toLowerCase() == 'true';
             }
             if (line.startsWith('Exec=') && exec == null) {
               exec = line
@@ -184,7 +216,13 @@ class _LauncherScreenState extends State<LauncherScreen>
 
           if (name != null && exec != null) {
             loadedApps.add(
-              DesktopApp(id: fileId, name: name, exec: exec, icon: icon),
+              DesktopApp(
+                id: fileId,
+                name: name,
+                exec: exec,
+                icon: icon,
+                noDisplay: noDisplay,
+              ),
             );
           }
         }
@@ -215,7 +253,7 @@ class _LauncherScreenState extends State<LauncherScreen>
       } else {
         _filteredApps =
             _allApps.where((app) {
-              return app.name.toLowerCase().contains(query.toLowerCase());
+              return !app.noDisplay && app.name.toLowerCase().contains(query.toLowerCase());
             }).toList()..sort((a, b) {
               final lowerQuery = query.toLowerCase();
               final aName = a.name.toLowerCase();

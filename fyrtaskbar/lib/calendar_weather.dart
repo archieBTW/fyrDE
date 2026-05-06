@@ -87,6 +87,7 @@ class _CalendarMenuPopupState extends State<CalendarMenuPopup>
       position: _slideAnimation,
       child: Container(
         width: 380,
+        constraints: const BoxConstraints(maxHeight: 800),
         decoration: BoxDecoration(
           color: FyrTheme.bgColor,
           borderRadius: BorderRadius.only(
@@ -205,6 +206,62 @@ class _CalendarMenuPopupState extends State<CalendarMenuPopup>
                   );
                 },
               ),
+            ),
+            ValueListenableBuilder<List<FyrNotification>>(
+              valueListenable: SystemState.notifications,
+              builder: (context, notifications, _) {
+                if (notifications.isEmpty) return const SizedBox.shrink();
+                return Flexible(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Divider(height: 1, color: FyrTheme.cardColor),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              'NOTIFICATIONS',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                color: FyrTheme.textColorMuted,
+                                letterSpacing: 1.2,
+                              ),
+                            ),
+                            InkWell(
+                              onTap: () => SystemState.clearAllNotifications(),
+                              child: Text(
+                                'Clear All',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: FyrTheme.accentColor,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Flexible(
+                        child: ListView.builder(
+                          shrinkWrap: true,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          itemCount: notifications.length,
+                          itemBuilder: (context, index) {
+                            final n = notifications[index];
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: NotificationCard(notification: n),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
             ),
           ],
         ),

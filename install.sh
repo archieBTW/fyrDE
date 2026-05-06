@@ -45,7 +45,8 @@ if [ "$OS" = "arch" ] || [ "$OS" = "manjaro" ] || [ "$OS" = "endeavouros" ]; the
         "xdg-desktop-portal-wlr" "xclip" "wl-clipboard" "brightnessctl"
         "wireplumber" "pipewire" "pipewire-pulse" "wlsunset" "cmake" "cpio" "pkg-config" "gcc" "wf-recorder" "grim" "ninja" "clang"
         "meson" "scdoc" "wayland-protocols" "pcre2" "json-c" "pango" "cairo" "gdk-pixbuf2" "unzip" "virt-viewer" "libvirt" "virt-install"
-        "bluez" "bluez-utils" "xdg-utils" "slurp" "libnotify" "mako" "polkit-gnome" "network-manager-applet" "pavucontrol" "playerctl" "jq" "libcanberra" "psmisc" "pamixer" "sddm" "accountsservice" "qt5-declarative" "qt5-quickcontrols" "qt5-quickcontrols2" "qt5-graphicaleffects"
+        "bluez" "bluez-utils" "xdg-utils" "slurp" "libnotify" "polkit-gnome" "network-manager-applet" "pavucontrol" "playerctl" "jq" "libcanberra" "psmisc" "pamixer" "sddm" "accountsservice" "qt5-declarative" "qt5-quickcontrols" "qt5-quickcontrols2" "qt5-graphicaleffects" "kdeconnect"
+        "ufw" "clamav" "rkhunter" "inotify-tools"
     )
 
     echo "Installing official dependencies via pacman..."
@@ -63,7 +64,8 @@ elif [ "$OS" = "ubuntu" ] || [ "$OS" = "debian" ]; then
         "xdg-desktop-portal" "xdg-desktop-portal-gtk" "xdg-desktop-portal-wlr"
         "xclip" "wl-clipboard" "brightnessctl" "wireplumber" "pipewire" "pipewire-pulse" "cmake" "cpio"
         "pkg-config" "gcc" "wf-recorder" "grim" "ninja-build" "clang" "curl" "git" "unzip" "xz-utils" "zip" "libglu1-mesa" "sway" "virt-viewer" "libvirt-clients" "libvirt-daemon-system" "virtinst"
-        "bluez" "bluez-tools" "xdg-utils" "slurp" "libnotify-bin" "mako-notifier" "polkit-gnome" "network-manager-gnome" "pavucontrol" "playerctl" "jq" "libcanberra-gtk3-module" "libcanberra-gtk-module" "psmisc" "pamixer" "sddm" "accountsservice" "policykit-1-gnome" "qml-module-qtquick-controls" "qml-module-qtquick-controls2" "qml-module-qtgraphicaleffects"
+        "bluez" "bluez-tools" "xdg-utils" "slurp" "libnotify-bin" "polkit-gnome" "network-manager-gnome" "pavucontrol" "playerctl" "jq" "libcanberra-gtk3-module" "libcanberra-gtk-module" "psmisc" "pamixer" "sddm" "accountsservice" "policykit-1-gnome" "qml-module-qtquick-controls" "qml-module-qtquick-controls2" "qml-module-qtgraphicaleffects" "kdeconnect"
+        "ufw" "clamav" "rkhunter" "inotify-tools"
     )
 
     echo "Installing official dependencies via apt..."
@@ -81,7 +83,8 @@ elif [ "$OS" = "fedora" ]; then
         "xdg-desktop-portal" "xdg-desktop-portal-gtk" "xdg-desktop-portal-wlr"
         "xclip" "wl-clipboard" "brightnessctl" "wireplumber" "pipewire" "pipewire-pulseaudio" "cmake" "cpio"
         "pkgconf" "gcc" "wf-recorder" "grim" "ninja-build" "clang" "curl" "git" "unzip" "zip" "mesa-libGLU" "sway" "virt-viewer" "libvirt" "virt-install"
-        "bluez" "bluez-utils" "xdg-utils" "slurp" "libnotify" "mako" "polkit-gnome" "nm-connection-editor" "pavucontrol" "playerctl" "jq" "libcanberra-gtk3" "psmisc" "pamixer" "sddm" "accountsservice" "lxqt-policykit" "qt5-qtquickcontrols" "qt5-qtquickcontrols2" "qt5-qtgraphicaleffects"
+        "bluez" "bluez-utils" "xdg-utils" "slurp" "libnotify" "polkit-gnome" "nm-connection-editor" "pavucontrol" "playerctl" "jq" "libcanberra-gtk3" "psmisc" "pamixer" "sddm" "accountsservice" "lxqt-policykit" "qt5-qtquickcontrols" "qt5-qtquickcontrols2" "qt5-qtgraphicaleffects" "kdeconnect"
+        "ufw" "clamav" "rkhunter" "inotify-tools"
     )
 
     echo "Installing official dependencies via dnf..."
@@ -133,7 +136,7 @@ if [ -f "./fyrdock/tree.json" ]; then
     sed -i "s/1080/$HEIGHT/g" ./fyrdock/tree.json
 fi
 
-flutter_apps=("fyrdock" "fyroverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrstore" "fyrvirt" "fyrtext" "fyrdaw")
+flutter_apps=("fyrdock" "fyroverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrstore" "fyrvirt" "fyrtext" "fyrdaw" "fyrav" "fyrphone")
 
 
 for app in "${flutter_apps[@]}"; do
@@ -290,6 +293,54 @@ EOF
     if command -v update-desktop-database &> /dev/null; then
         sudo update-desktop-database /usr/share/applications || true
     fi
+fi
+
+echo "Setting up FyrAV configurations..."
+if [ -d "./fyrav" ]; then
+    sudo ln -sf /opt/fyrav/fyrav /usr/local/bin/fyrav
+    
+    sudo tee /usr/share/applications/fyrav.desktop > /dev/null <<'EOF'
+[Desktop Entry]
+Name=FyrAV
+Comment=Security and Firewall Manager for FyrDE
+Exec=/usr/local/bin/fyrav
+Icon=security-high
+Terminal=false
+Type=Application
+Categories=System;Security;
+EOF
+    
+    if command -v update-desktop-database &> /dev/null; then
+        sudo update-desktop-database /usr/share/applications || true
+    fi
+fi
+
+echo "Setting up FyrPhone configurations..."
+if [ -d "./fyrphone" ]; then
+    sudo ln -sf /opt/fyrphone/fyrphone /usr/local/bin/fyrphone
+    
+    sudo tee /usr/share/applications/fyrphone.desktop > /dev/null <<'EOF'
+[Desktop Entry]
+Name=FyrPhone
+Comment=Mobile device manager for FyrDE
+Exec=/usr/local/bin/fyrphone
+Icon=phone
+Terminal=false
+Type=Application
+Categories=System;Network;
+EOF
+    
+    if command -v update-desktop-database &> /dev/null; then
+        sudo update-desktop-database /usr/share/applications || true
+    fi
+fi
+
+# Install systemd service for FyrAV daemon
+if [ -d "./fyrav" ] && [ -f "./fyrav/fyrav.service" ]; then
+    mkdir -p ~/.config/systemd/user
+    cp ./fyrav/fyrav.service ~/.config/systemd/user/fyrav.service
+    systemctl --user daemon-reload
+    systemctl --user enable fyrav.service || true
 fi
 
 echo "Setting up FyrText configurations..."
@@ -620,6 +671,23 @@ if [ -d "./sddm" ]; then
     sudo systemctl enable sddm || echo "Could not enable sddm service, please check manually."
 else
     echo "Warning: ./sddm directory not found!"
+fi
+
+echo "Hiding redundant apps (KDE Connect)..."
+mkdir -p ~/.local/share/applications
+for desktop in org.kde.kdeconnect.app.desktop org.kde.kdeconnect.daemon.desktop org.kde.kdeconnect.handler.desktop org.kde.kdeconnect.nonplasma.desktop org.kde.kdeconnect.sms.desktop; do
+    if [ -f "/usr/share/applications/$desktop" ]; then
+        cp "/usr/share/applications/$desktop" ~/.local/share/applications/
+        if ! grep -q "NoDisplay=" "~/.local/share/applications/$desktop"; then
+            echo "NoDisplay=true" >> ~/.local/share/applications/$desktop
+        else
+            sed -i 's/NoDisplay=.*/NoDisplay=true/' ~/.local/share/applications/$desktop
+        fi
+    fi
+done
+
+if command -v update-desktop-database &> /dev/null; then
+    update-desktop-database ~/.local/share/applications || true
 fi
 
 echo "Installation complete!"

@@ -38,6 +38,7 @@ dependencies:
   intl: ^0.20.2
   flutter_svg: ^2.2.4
   wayland_layer_shell: ^1.0.1
+  dbus: ^0.7.12
 
 dev_dependencies:
   flutter_test:

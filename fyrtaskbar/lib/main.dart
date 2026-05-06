@@ -12,6 +12,29 @@ import 'dart:convert';
 import 'fyr_theme.dart';
 import 'calendar_weather.dart';
 import 'workspace_switcher.dart';
+import 'notification_service.dart';
+
+class FyrNotification {
+  final int id;
+  final String appName;
+  final String title;
+  final String body;
+  final String icon;
+  final DateTime timestamp;
+  final List<String> actions;
+  final int timeout;
+
+  FyrNotification({
+    required this.id,
+    required this.appName,
+    required this.title,
+    required this.body,
+    required this.icon,
+    required this.timestamp,
+    this.actions = const [],
+    this.timeout = 5000,
+  });
+}
 
 class SystemState {
   static final ValueNotifier<int> batteryLevel = ValueNotifier(100);
@@ -35,6 +58,12 @@ class SystemState {
   static final ValueNotifier<String?> weatherDesc = ValueNotifier(null);
   static final ValueNotifier<IconData> weatherIcon = ValueNotifier(Icons.cloud);
 
+  static final ValueNotifier<List<FyrNotification>> notifications =
+      ValueNotifier([]);
+  static final ValueNotifier<List<FyrNotification>> activePopups =
+      ValueNotifier([]);
+  static int _nextNotificationId = 1;
+
   static int _updateCount = 0;
   static Timer? _timer;
 
@@ -57,6 +86,7 @@ class SystemState {
     _update();
     _updateSwayState();
     _loadWeatherLocation();
+    NotificationService.init();
     _timer = Timer.periodic(const Duration(seconds: 5), (_) {
       _update();
       _updateCount++;
@@ -302,6 +332,48 @@ class SystemState {
     if (code >= 95) return Icons.thunderstorm;
     return Icons.cloud;
   }
+
+  static void addNotification({
+    required String appName,
+    required String title,
+    required String body,
+    String? icon,
+    int? timeout,
+  }) {
+    final notification = FyrNotification(
+      id: _nextNotificationId++,
+      appName: appName,
+      title: title,
+      body: body,
+      icon: icon ?? '',
+      timestamp: DateTime.now(),
+      timeout: timeout ?? 5000,
+    );
+
+    notifications.value = [notification, ...notifications.value];
+    activePopups.value = [...activePopups.value, notification];
+
+    if (notification.timeout > 0) {
+      Timer(Duration(milliseconds: notification.timeout), () {
+        dismissPopup(notification.id, reason: 1); // 1 = expired
+      });
+    }
+  }
+
+  static void dismissPopup(int id, {int reason = 2}) {
+    activePopups.value = activePopups.value.where((n) => n.id != id).toList();
+  }
+
+  static void dismissNotification(int id, {int reason = 3}) {
+    notifications.value = notifications.value.where((n) => n.id != id).toList();
+    dismissPopup(id);
+    NotificationService.sendNotificationClosed(id, reason);
+  }
+
+  static void clearAllNotifications() {
+    notifications.value = [];
+    activePopups.value = [];
+  }
 }
 
 void main() async {
@@ -483,6 +555,24 @@ class TaskbarScreen extends StatefulWidget {
 }
 
 class _TaskbarScreenState extends State<TaskbarScreen> {
+  @override
+  void initState() {
+    super.initState();
+    SystemState.activePopups.addListener(_onPopupsChanged);
+  }
+
+  @override
+  void dispose() {
+    SystemState.activePopups.removeListener(_onPopupsChanged);
+    super.dispose();
+  }
+
+  void _onPopupsChanged() {
+    if (mounted) {
+      _updateWindowSize();
+    }
+  }
+
   bool _isStartMenuOpen = false;
   bool _isQuickSettingsOpen = false;
   bool _isCalendarOpen = false;
@@ -533,7 +623,10 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
 
   void _updateWindowSize() async {
     const channel = MethodChannel('fyrtaskbar/resize');
-    if (_isStartMenuOpen || _isQuickSettingsOpen || _isCalendarOpen) {
+    if (_isStartMenuOpen ||
+        _isQuickSettingsOpen ||
+        _isCalendarOpen ||
+        SystemState.activePopups.value.isNotEmpty) {
       try {
         await channel.invokeMethod('setSize', {'width': 1920, 'height': 1080});
       } catch (_) {}
@@ -579,6 +672,7 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                       ),
                     ),
                   ),
+                  const NotificationPopupOverlay(),
                   Positioned(
                     left: 0,
                     top: 0,
@@ -965,6 +1059,20 @@ class _ClockWidgetState extends State<ClockWidget> {
             fontWeight: FontWeight.w600,
             letterSpacing: 0.5,
           ),
+        ),
+        ValueListenableBuilder<List<FyrNotification>>(
+          valueListenable: SystemState.notifications,
+          builder: (context, notifications, _) {
+            if (notifications.isEmpty) return const SizedBox.shrink();
+            return Padding(
+              padding: const EdgeInsets.only(left: 8.0),
+              child: Icon(
+                Icons.notifications_active,
+                color: FyrTheme.accentColor,
+                size: 14,
+              ),
+            );
+          },
         ),
       ],
     );
@@ -2103,6 +2211,230 @@ class _SliderRow extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class NotificationPopupOverlay extends StatelessWidget {
+  const NotificationPopupOverlay({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      top: 66,
+      right: 20,
+      child: ValueListenableBuilder<List<FyrNotification>>(
+        valueListenable: SystemState.activePopups,
+        builder: (context, popups, _) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: popups.take(3).map((n) {
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: NotificationCard(
+                  notification: n,
+                  isPopup: true,
+                ),
+              );
+            }).toList(),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class NotificationCard extends StatelessWidget {
+  final FyrNotification notification;
+  final bool isPopup;
+
+  const NotificationCard({
+    super.key,
+    required this.notification,
+    this.isPopup = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 320,
+      decoration: BoxDecoration(
+        color: FyrTheme.bgColor.withOpacity(0.9),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: FyrTheme.cardColor),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.2),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+        child: Padding(
+          padding: const EdgeInsets.all(12.0),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildIcon(),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            notification.appName.toUpperCase(),
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: FyrTheme.accentColor,
+                              letterSpacing: 1.2,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        Text(
+                          DateFormat('HH:mm').format(notification.timestamp),
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: FyrTheme.textColorMuted,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      notification.title,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: FyrTheme.textColor,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      notification.body,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: FyrTheme.textColor.withOpacity(0.8),
+                      ),
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (notification.actions.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Row(
+                          children: notification.actions
+                              .asMap()
+                              .entries
+                              .map((entry) {
+                            if (entry.key % 2 != 0) return const SizedBox.shrink();
+                            final key = entry.value;
+                            final label = notification.actions[entry.key + 1];
+                            return Padding(
+                              padding: const EdgeInsets.only(right: 8),
+                              child: TextButton(
+                                onPressed: () {
+                                  NotificationService.sendActionInvoked(notification.id, key);
+                                  SystemState.dismissNotification(notification.id);
+                                },
+                                style: TextButton.styleFrom(
+                                  foregroundColor: FyrTheme.accentColor,
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                                  minimumSize: Size.zero,
+                                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                ),
+                                child: Text(label),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                icon: Icon(
+                  Icons.close,
+                  size: 16,
+                  color: FyrTheme.textColorMuted,
+                ),
+                onPressed: () {
+                  if (isPopup) {
+                    SystemState.dismissPopup(notification.id);
+                  } else {
+                    SystemState.dismissNotification(notification.id);
+                  }
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildIcon() {
+    if (notification.icon.isEmpty) {
+      return Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: FyrTheme.accentColor.withOpacity(0.2),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Icon(
+          Icons.notifications,
+          color: FyrTheme.accentColor,
+          size: 24,
+        ),
+      );
+    }
+
+    if (notification.icon.startsWith('/')) {
+      final file = File(notification.icon);
+      if (file.existsSync()) {
+        if (notification.icon.endsWith('.svg')) {
+          return SvgPicture.file(
+            file,
+            width: 40,
+            height: 40,
+          );
+        } else {
+          return Image.file(
+            file,
+            width: 40,
+            height: 40,
+            fit: BoxFit.contain,
+          );
+        }
+      }
+    }
+
+    // Try to find icon in theme if it's just a name
+    return Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        color: FyrTheme.accentColor.withOpacity(0.2),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Icon(
+        Icons.notifications,
+        color: FyrTheme.accentColor,
+        size: 24,
+      ),
     );
   }
 }
