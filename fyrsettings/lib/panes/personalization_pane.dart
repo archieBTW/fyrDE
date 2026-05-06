@@ -16,6 +16,8 @@ class _PersonalizationPaneState extends State<PersonalizationPane> {
   List<String> _defaultBackgrounds = [];
   final ScrollController _bgScrollController = ScrollController();
   bool _pullColorFromBg = true;
+  String _profilePicPath = '';
+  String _lockScreenBgPath = '';
 
   @override
   void dispose() {
@@ -45,10 +47,14 @@ class _PersonalizationPaneState extends State<PersonalizationPane> {
 
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
+    final home = Platform.environment['HOME'];
+    final defaultBg = '$home/.config/fyr/space.jpg';
     setState(() {
-      _bgPath = prefs.getString('bg_path') ?? '';
+      _bgPath = prefs.getString('bg_path') ?? defaultBg;
       _selectedBgPath = _bgPath;
       _pullColorFromBg = prefs.getBool('pull_color_from_bg') ?? true;
+      _lockScreenBgPath = prefs.getString('lock_screen_bg_path') ?? '';
+      _profilePicPath = '$home/.face';
     });
   }
 
@@ -157,6 +163,57 @@ class _PersonalizationPaneState extends State<PersonalizationPane> {
         _extractAndApplyColorFromBg(_selectedBgPath);
       }
     }
+  }
+
+  Future<void> _pickProfilePic() async {
+    try {
+      final result = await Process.run('zenity', [
+        '--file-selection',
+        '--title=Select Profile Picture',
+      ]);
+      if (result.exitCode == 0) {
+        final path = result.stdout.toString().trim();
+        if (path.isNotEmpty) {
+          final home = Platform.environment['HOME'];
+          final target1 = File('$home/.face');
+          final target2 = File('$home/.face.icon');
+          await File(path).copy(target1.path);
+          await File(path).copy(target2.path);
+          
+          // Set permissions to 644 (rw-r--r--) so SDDM can read it
+          await Process.run('chmod', ['644', target1.path]);
+          await Process.run('chmod', ['644', target2.path]);
+          
+          setState(() {
+            _profilePicPath = target1.path;
+          });
+        }
+      }
+    } catch (e) {}
+  }
+
+  Future<void> _pickLockScreenBg() async {
+    try {
+      final result = await Process.run('zenity', [
+        '--file-selection',
+        '--title=Select Lock Screen Background',
+      ]);
+      if (result.exitCode == 0) {
+        final path = result.stdout.toString().trim();
+        if (path.isNotEmpty) {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('lock_screen_bg_path', path);
+          setState(() {
+            _lockScreenBgPath = path;
+          });
+          
+          // Use pkexec for GUI password prompt to copy to system directory
+          await Process.run('pkexec', ['cp', path, '/usr/share/sddm/themes/fyr/space.jpg']);
+          // Also set permissions so SDDM can read it
+          await Process.run('pkexec', ['chmod', '644', '/usr/share/sddm/themes/fyr/space.jpg']);
+        }
+      }
+    } catch (e) {}
   }
 
   @override
@@ -474,6 +531,96 @@ class _PersonalizationPaneState extends State<PersonalizationPane> {
                         ),
                       );
                     },
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          SizedBox(height: 24),
+
+          Card(
+            color: FyrTheme.cardColor,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Padding(
+              padding: EdgeInsets.all(24.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Login Screen (SDDM)',
+                    style: TextStyle(
+                      color: FyrTheme.textColor,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  SizedBox(height: 24),
+                  Row(
+                    children: [
+                      Column(
+                        children: [
+                          Container(
+                            width: 100,
+                            height: 100,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(color: FyrTheme.accentColor, width: 2),
+                              image: DecorationImage(
+                                image: File(_profilePicPath).existsSync() 
+                                  ? FileImage(File(_profilePicPath)) 
+                                  : const AssetImage('assets/images/default_avatar.png') as ImageProvider,
+                                fit: BoxFit.cover,
+                              ),
+                            ),
+                          ),
+                          SizedBox(height: 12),
+                          ElevatedButton(
+                            onPressed: _pickProfilePic,
+                            style: ElevatedButton.styleFrom(backgroundColor: FyrTheme.cardColor),
+                            child: Text('Change Avatar', style: TextStyle(color: FyrTheme.textColor)),
+                          ),
+                        ],
+                      ),
+                      SizedBox(width: 32),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Lock Screen Background',
+                              style: TextStyle(color: FyrTheme.textColor, fontSize: 16),
+                            ),
+                            SizedBox(height: 8),
+                            Container(
+                              height: 120,
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: FyrTheme.accentColor.withOpacity(0.5)),
+                                image: _lockScreenBgPath.isNotEmpty && File(_lockScreenBgPath).existsSync()
+                                  ? DecorationImage(
+                                      image: FileImage(File(_lockScreenBgPath)),
+                                      fit: BoxFit.cover,
+                                    )
+                                  : null,
+                              ),
+                              child: _lockScreenBgPath.isEmpty 
+                                ? Center(child: Text('Default (Space)', style: TextStyle(color: FyrTheme.textColorMuted)))
+                                : null,
+                            ),
+                            SizedBox(height: 12),
+                            ElevatedButton.icon(
+                              onPressed: _pickLockScreenBg,
+                              icon: Icon(Icons.image, color: FyrTheme.textColor),
+                              label: Text('Select Background', style: TextStyle(color: FyrTheme.textColor)),
+                              style: ElevatedButton.styleFrom(backgroundColor: FyrTheme.cardColor),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),

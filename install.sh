@@ -45,7 +45,7 @@ if [ "$OS" = "arch" ] || [ "$OS" = "manjaro" ] || [ "$OS" = "endeavouros" ]; the
         "xdg-desktop-portal-wlr" "xclip" "wl-clipboard" "brightnessctl"
         "wireplumber" "pipewire" "pipewire-pulse" "wlsunset" "cmake" "cpio" "pkg-config" "gcc" "wf-recorder" "grim" "ninja" "clang"
         "meson" "scdoc" "wayland-protocols" "pcre2" "json-c" "pango" "cairo" "gdk-pixbuf2" "unzip" "virt-viewer" "libvirt" "virt-install"
-        "bluez" "bluez-utils" "xdg-utils" "slurp" "libnotify" "mako" "polkit-gnome" "network-manager-applet" "pavucontrol" "playerctl" "jq" "libcanberra" "psmisc" "pamixer"
+        "bluez" "bluez-utils" "xdg-utils" "slurp" "libnotify" "mako" "polkit-gnome" "network-manager-applet" "pavucontrol" "playerctl" "jq" "libcanberra" "psmisc" "pamixer" "sddm" "qt5-declarative" "qt5-quickcontrols" "qt5-quickcontrols2" "qt5-graphicaleffects"
     )
 
     echo "Installing official dependencies via pacman..."
@@ -63,7 +63,7 @@ elif [ "$OS" = "ubuntu" ] || [ "$OS" = "debian" ]; then
         "xdg-desktop-portal" "xdg-desktop-portal-gtk" "xdg-desktop-portal-wlr"
         "xclip" "wl-clipboard" "brightnessctl" "wireplumber" "pipewire" "pipewire-pulse" "cmake" "cpio"
         "pkg-config" "gcc" "wf-recorder" "grim" "ninja-build" "clang" "curl" "git" "unzip" "xz-utils" "zip" "libglu1-mesa" "sway" "virt-viewer" "libvirt-clients" "libvirt-daemon-system" "virtinst"
-        "bluez" "bluez-tools" "xdg-utils" "slurp" "libnotify-bin" "mako-notifier" "polkit-gnome" "network-manager-gnome" "pavucontrol" "playerctl" "jq" "libcanberra-gtk3-module" "libcanberra-gtk-module" "psmisc" "pamixer"
+        "bluez" "bluez-tools" "xdg-utils" "slurp" "libnotify-bin" "mako-notifier" "polkit-gnome" "network-manager-gnome" "pavucontrol" "playerctl" "jq" "libcanberra-gtk3-module" "libcanberra-gtk-module" "psmisc" "pamixer" "sddm" "qml-module-qtquick-controls" "qml-module-qtquick-controls2" "qml-module-qtgraphicaleffects"
     )
 
     echo "Installing official dependencies via apt..."
@@ -81,7 +81,7 @@ elif [ "$OS" = "fedora" ]; then
         "xdg-desktop-portal" "xdg-desktop-portal-gtk" "xdg-desktop-portal-wlr"
         "xclip" "wl-clipboard" "brightnessctl" "wireplumber" "pipewire" "pipewire-pulseaudio" "cmake" "cpio"
         "pkgconf" "gcc" "wf-recorder" "grim" "ninja-build" "clang" "curl" "git" "unzip" "zip" "mesa-libGLU" "sway" "virt-viewer" "libvirt" "virt-install"
-        "bluez" "bluez-utils" "xdg-utils" "slurp" "libnotify" "mako" "polkit-gnome" "nm-connection-editor" "pavucontrol" "playerctl" "jq" "libcanberra-gtk3" "psmisc" "pamixer"
+        "bluez" "bluez-utils" "xdg-utils" "slurp" "libnotify" "mako" "polkit-gnome" "nm-connection-editor" "pavucontrol" "playerctl" "jq" "libcanberra-gtk3" "psmisc" "pamixer" "sddm" "qt5-qtquickcontrols" "qt5-qtquickcontrols2" "qt5-qtgraphicaleffects"
     )
 
     echo "Installing official dependencies via dnf..."
@@ -439,6 +439,75 @@ if __name__ == "__main__":
 EOF
 chmod +x ~/.config/fyr/retile.py
 
+echo "Setting up Alt-Tab script..."
+cat << 'EOF' > ~/.config/fyr/alttab.py
+#!/usr/bin/env python3
+import subprocess
+import json
+
+def run(cmd):
+    return subprocess.check_output(cmd, shell=True).decode('utf-8')
+
+def get_windows(node, windows):
+    if node.get('type') in ['con', 'floating_con']:
+        if (node.get('app_id') or node.get('window_properties')) and not node.get('nodes'):
+            windows.append(node)
+            return
+    for child in node.get('nodes', []) + node.get('floating_nodes', []):
+        get_windows(child, windows)
+
+def main():
+    try:
+        tree = json.loads(run('swaymsg -t get_tree'))
+        workspaces = json.loads(run('swaymsg -t get_workspaces'))
+    except Exception:
+        return
+
+    focused_ws_name = next((ws['name'] for ws in workspaces if ws['focused']), None)
+    if not focused_ws_name:
+        return
+
+    def find_workspace_node(node, name):
+        if node.get('type') == 'workspace' and node.get('name') == name:
+            return node
+        for child in node.get('nodes', []) + node.get('floating_nodes', []):
+            res = find_workspace_node(child, name)
+            if res: return res
+        return None
+
+    workspace_node = find_workspace_node(tree, focused_ws_name)
+    if not workspace_node:
+        return
+
+    windows = []
+    get_windows(workspace_node, windows)
+    if len(windows) < 2:
+        return
+
+    def find_focused_node_id(node):
+        if node.get('focused'):
+            return node.get('id')
+        for child in node.get('nodes', []) + node.get('floating_nodes', []):
+            res = find_focused_node_id(child)
+            if res: return res
+        return None
+
+    focused_id = find_focused_node_id(tree)
+    focused_idx = -1
+    for i, w in enumerate(windows):
+        if w.get('id') == focused_id:
+            focused_idx = i
+            break
+    
+    next_idx = (focused_idx + 1) % len(windows)
+    next_id = windows[next_idx]['id']
+    subprocess.run(['swaymsg', f'[con_id={next_id}] focus'])
+
+if __name__ == "__main__":
+    main()
+EOF
+chmod +x ~/.config/fyr/alttab.py
+
 touch ~/.config/sway/floating.conf
 
 echo "Setting up Screen Recording script..."
@@ -537,6 +606,20 @@ EOF
     done
 else
     echo "Warning: ./themes directory not found!"
+fi
+
+echo "Setting up SDDM theme..."
+if [ -d "./sddm" ]; then
+    sudo mkdir -p /usr/share/sddm/themes/fyr
+    sudo cp -r ./sddm/theme/* /usr/share/sddm/themes/fyr/
+    
+    sudo mkdir -p /etc/sddm.conf.d
+    sudo cp ./sddm/sddm.conf /etc/sddm.conf.d/fyr.conf
+    
+    echo "SDDM theme 'fyr' installed and configured."
+    sudo systemctl enable sddm || echo "Could not enable sddm service, please check manually."
+else
+    echo "Warning: ./sddm directory not found!"
 fi
 
 echo "Installation complete!"

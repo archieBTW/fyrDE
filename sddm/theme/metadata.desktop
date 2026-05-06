@@ -1,0 +1,12 @@
+[Appearance]
+Name=Fyr
+Author=fyrDE
+Description=Fyr Desktop Environment SDDM Theme
+Type=sddm-theme
+Version=1.0
+MainScript=Main.qml
+ConfigFile=theme.conf
+TranslationsDirectory=translations
+Email=contact@fyrde.org
+WebSite=https://fyrde.org
+License=MIT
