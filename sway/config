@@ -126,7 +126,7 @@ bar {
 # ==========================================
 for_window [app_id="(?i).*fyrsearch.*"] floating enable, border none, move scratchpad
 for_window [class="(?i).*fyrsearch.*"] floating enable, border none, move scratchpad
-bindsym $mod+space [app_id="(?i).*fyrsearch.*"] scratchpad show, border none, resize set 1920 1080, move absolute positon 0 0
+bindsym $mod+space exec ~/.config/fyr/launcher_toggle.sh
 
 
 # ==========================================
@@ -135,8 +135,8 @@ bindsym $mod+space [app_id="(?i).*fyrsearch.*"] scratchpad show, border none, re
 exec /opt/fyroverview/fyroverview
 exec /opt/fyrwindowoverview/fyrwindowoverview
 
-for_window [app_id="fyroverview"] floating enable, border none, resize set 1920 1080, move absolute position 0 0, blur enable, move scratchpad
-for_window [app_id="fyrwindowoverview"] floating enable, border none, resize set 1920 1080, move absolute position 0 0, blur enable, move scratchpad
+for_window [app_id="fyroverview"] floating enable, border none, blur enable, move scratchpad
+for_window [app_id="fyrwindowoverview"] floating enable, border none, blur enable, move scratchpad
 
 # Super + Tab and Super + W
 bindsym $mod+Tab exec ~/.config/fyr/overview_toggle.sh
@@ -151,11 +151,10 @@ bindgesture swipe:3:up exec ~/.config/fyr/overview_toggle.sh hide
 # Fyrhelp Sway Configuration
 # ==========================================
 exec /opt/fyrhelp/fyrhelp
-for_window [app_id="fyrhelp"] floating enable, border none, resize set 1920 1080, move position 0 0, move scratchpad
-bindsym $mod+Control_L [app_id="fyrhelp"] scratchpad show, resize set 1920 1080, border none, move absolute position 0 0
-bindsym $mod+Control_R [app_id="fyrhelp"] scratchpad show, resize set 1920 1080, border none, move absolute position 0 0
-bindsym $mod+Ctrl [app_id="fyrhelp"] scratchpad show, resize set 1920 1080, border none, move absolute position 0 0
-for_window [app_id="fyrhelp"] floating enable, border none, resize set 1920 1080, move position 0 0, move scratchpad
+for_window [app_id="fyrhelp"] floating enable, border none, move scratchpad
+bindsym $mod+Control_L exec ~/.config/fyr/help_toggle.sh
+bindsym $mod+Control_R exec ~/.config/fyr/help_toggle.sh
+bindsym $mod+Ctrl exec ~/.config/fyr/help_toggle.sh
 
 
 # ==========================================

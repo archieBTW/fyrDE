@@ -20,8 +20,8 @@ Rectangle {
 
         for (var i = 0; i < userModel.count; ++i) {
             if (userModel.data(userModel.index(i, 0), Qt.UserRole + 1) === selectedUser) {
-                var userHome = userModel.data(userModel.index(i, 0), Qt.UserRole + 4) || "";
-                var iconFromModel = userModel.data(userModel.index(i, 0), Qt.UserRole + 3) || "";
+                var userHome = userModel.data(userModel.index(i, 0), Qt.UserRole + 3) || "";
+                var iconFromModel = userModel.data(userModel.index(i, 0), Qt.UserRole + 4) || "";
                 var cleanHome = userHome.replace(/^file:\/\//, "");
                 
                 var timestamp = new Date().getTime();

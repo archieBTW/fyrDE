@@ -70,7 +70,7 @@ install_deps() {
             "wireplumber" "pipewire" "pipewire-pulse" "wlsunset" "cmake" "cpio" "pkg-config" "gcc" "wf-recorder" "grim" "ninja" "clang"
             "meson" "scdoc" "wayland-protocols" "pcre2" "json-c" "pango" "cairo" "gdk-pixbuf2" "unzip" "virt-viewer" "libvirt" "virt-install" "qemu-desktop"
             "bluez" "bluez-utils" "xdg-utils" "slurp" "libnotify" "polkit-gnome" "network-manager-applet" "pavucontrol" "playerctl" "jq" "libcanberra" "psmisc" "pamixer" "sddm" "accountsservice" "qt5-declarative" "qt5-quickcontrols" "qt5-quickcontrols2" "qt5-graphicaleffects" "kdeconnect"
-            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "mpv" "ffmpeg" "noto-fonts-emoji" "zsh" "xorg-server-xvfb" "p7zip" "zip" "tar" "gzip" "bzip2" "nodejs" "npm" "clang"
+            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "mpv" "ffmpeg" "noto-fonts-emoji" "zsh" "xorg-server-xvfb" "p7zip" "zip" "tar" "gzip" "bzip2" "nodejs" "npm" "clang" "virglrenderer"
         )
         sudo pacman -S --needed --noconfirm "${deps[@]}"
         yay -S --needed --noconfirm scenefx0.4 wlroots0.19 xdg-desktop-portal-termfilechooser-hunkyburrito-git
@@ -84,7 +84,7 @@ install_deps() {
             "xclip" "wl-clipboard" "brightnessctl" "wireplumber" "pipewire" "pipewire-pulse" "cmake" "cpio"
             "pkg-config" "gcc" "wf-recorder" "grim" "ninja-build" "clang" "curl" "git" "unzip" "xz-utils" "zip" "libglu1-mesa" "sway" "virt-viewer" "libvirt-clients" "libvirt-daemon-system" "virtinst" "qemu-kvm" "qemu-system"
             "bluez" "bluez-tools" "xdg-utils" "slurp" "libnotify-bin" "polkit-gnome" "network-manager-gnome" "pavucontrol" "playerctl" "jq" "libcanberra-gtk3-module" "libcanberra-gtk-module" "psmisc" "pamixer" "sddm" "accountsservice" "policykit-1-gnome" "qml-module-qtquick-controls" "qml-module-qtquick-controls2" "qml-module-qtgraphicaleffects" "kdeconnect"
-            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "libmpv-dev" "ffmpeg" "fonts-noto-color-emoji" "zsh" "xvfb" "p7zip-full" "tar" "gzip" "bzip2" "nodejs" "npm" "clangd"
+            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "libmpv-dev" "ffmpeg" "fonts-noto-color-emoji" "zsh" "xvfb" "p7zip-full" "tar" "gzip" "bzip2" "nodejs" "npm" "clangd" "libvirglrenderer-dev"
         )
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${deps[@]}"
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y wlsunset wmenu swayfx || echo "Optional packages missed."
@@ -98,7 +98,7 @@ install_deps() {
             "xclip" "wl-clipboard" "brightnessctl" "wireplumber" "pipewire" "pipewire-pulseaudio" "cmake" "cpio"
             "pkgconf" "gcc" "wf-recorder" "grim" "ninja-build" "clang" "curl" "git" "unzip" "zip" "mesa-libGLU" "sway" "virt-viewer" "libvirt" "virt-install" "qemu-kvm"
             "bluez" "bluez-utils" "xdg-utils" "slurp" "libnotify" "polkit-gnome" "nm-connection-editor" "pavucontrol" "playerctl" "jq" "libcanberra-gtk3" "psmisc" "pamixer" "sddm" "accountsservice" "lxqt-policykit" "qt5-qtquickcontrols" "qt5-qtquickcontrols2" "qt5-qtgraphicaleffects" "kdeconnect"
-            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "mpv-libs-devel" "ffmpeg" "google-noto-emoji-color-fonts" "zsh" "xorg-x11-server-Xvfb" "p7zip" "tar" "gzip" "bzip2" "nodejs" "npm" "clang"
+            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "mpv-libs-devel" "ffmpeg" "google-noto-emoji-color-fonts" "zsh" "xorg-x11-server-Xvfb" "p7zip" "tar" "gzip" "bzip2" "nodejs" "npm" "clang" "virglrenderer-devel"
         )
         sudo dnf install -y "${deps[@]}"
         sudo dnf install -y wlsunset wmenu swayfx || echo "Optional packages missed."
@@ -492,6 +492,13 @@ EOF
     cat << 'EOF' > ~/.config/fyr/overview_toggle.sh
 #!/bin/bash
 
+# Get focused output info
+FOCUSED_OUTPUT=$(swaymsg -t get_outputs | jq -r '.[] | select(.focused) | .name')
+X=$(swaymsg -t get_outputs | jq -r ".[] | select(.name == \"$FOCUSED_OUTPUT\") | .rect.x")
+Y=$(swaymsg -t get_outputs | jq -r ".[] | select(.name == \"$FOCUSED_OUTPUT\") | .rect.y")
+W=$(swaymsg -t get_outputs | jq -r ".[] | select(.name == \"$FOCUSED_OUTPUT\") | .rect.width")
+H=$(swaymsg -t get_outputs | jq -r ".[] | select(.name == \"$FOCUSED_OUTPUT\") | .rect.height")
+
 CONF="$HOME/.config/sway/floating.conf"
 IS_FLOATING=0
 if [ -f "$CONF" ] && grep -q "floating enable" "$CONF"; then
@@ -524,9 +531,49 @@ if [ "$TARGET" = "fyrwindowoverview" ]; then
 fi
 
 swaymsg "[app_id=\"$OTHER\"] move scratchpad"
-swaymsg "[app_id=\"$TARGET\"] scratchpad show, border none, resize set 1920 1080, move absolute position 0 0"
+swaymsg "[app_id=\"$TARGET\"] scratchpad show, border none, resize set $W $H, move absolute position $X $Y"
 EOF
     chmod +x ~/.config/fyr/overview_toggle.sh
+
+    # Launcher Toggle Script
+    cat << 'EOF' > ~/.config/fyr/launcher_toggle.sh
+#!/bin/bash
+FOCUSED_OUTPUT=$(swaymsg -t get_outputs | jq -r '.[] | select(.focused) | .name')
+X=$(swaymsg -t get_outputs | jq -r ".[] | select(.name == \"$FOCUSED_OUTPUT\") | .rect.x")
+Y=$(swaymsg -t get_outputs | jq -r ".[] | select(.name == \"$FOCUSED_OUTPUT\") | .rect.y")
+W=$(swaymsg -t get_outputs | jq -r ".[] | select(.name == \"$FOCUSED_OUTPUT\") | .rect.width")
+H=$(swaymsg -t get_outputs | jq -r ".[] | select(.name == \"$FOCUSED_OUTPUT\") | .rect.height")
+
+# Toggle logic: if it's already visible on the current output, hide it
+# Otherwise show it on the current output
+VISIBLE=$(swaymsg -t get_tree | jq -r '.. | select(.app_id? == "fyrsearch" or .app_id? == "launcher") | .visible')
+
+if [ "$VISIBLE" = "true" ]; then
+    swaymsg '[app_id="(?i).*fyrsearch.*"] move scratchpad'
+else
+    swaymsg "[app_id=\"(?i).*fyrsearch.*\"] scratchpad show, border none, resize set $W $H, move absolute position $X $Y"
+fi
+EOF
+    chmod +x ~/.config/fyr/launcher_toggle.sh
+
+    # Help Toggle Script
+    cat << 'EOF' > ~/.config/fyr/help_toggle.sh
+#!/bin/bash
+FOCUSED_OUTPUT=$(swaymsg -t get_outputs | jq -r '.[] | select(.focused) | .name')
+X=$(swaymsg -t get_outputs | jq -r ".[] | select(.name == \"$FOCUSED_OUTPUT\") | .rect.x")
+Y=$(swaymsg -t get_outputs | jq -r ".[] | select(.name == \"$FOCUSED_OUTPUT\") | .rect.y")
+W=$(swaymsg -t get_outputs | jq -r ".[] | select(.name == \"$FOCUSED_OUTPUT\") | .rect.width")
+H=$(swaymsg -t get_outputs | jq -r ".[] | select(.name == \"$FOCUSED_OUTPUT\") | .rect.height")
+
+VISIBLE=$(swaymsg -t get_tree | jq -r '.. | select(.app_id? == "fyrhelp") | .visible')
+
+if [ "$VISIBLE" = "true" ]; then
+    swaymsg '[app_id="fyrhelp"] move scratchpad'
+else
+    swaymsg "[app_id=\"fyrhelp\"] scratchpad show, border none, resize set $W $H, move absolute position $X $Y"
+fi
+EOF
+    chmod +x ~/.config/fyr/help_toggle.sh
 
     mkdir -p ~/.config/sway
     if [ -f "./sway/config" ]; then

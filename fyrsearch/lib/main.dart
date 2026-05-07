@@ -513,6 +513,9 @@ class _LauncherScreenState extends State<LauncherScreen>
         ? 0
         : ((_filteredApps.length - 1) / _itemsPerPage).floor() + 1;
 
+    final double screenHeight = MediaQuery.of(context).size.height;
+    final double scale = (screenHeight / 1080).clamp(0.5, 1.0);
+
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: GestureDetector(
@@ -572,7 +575,7 @@ class _LauncherScreenState extends State<LauncherScreen>
                     ),
                     child: Center(
                       child: Container(
-                        width: 700,
+                        width: 700 * scale,
                         decoration: BoxDecoration(
                           color: FyrTheme.hoverColor,
                           borderRadius: BorderRadius.circular(50),
@@ -832,7 +835,7 @@ class _LauncherScreenState extends State<LauncherScreen>
                                                               child:
                                                                   _buildAppIcon(
                                                                     app,
-                                                                    size: 96,
+                                                                    size: 96 * scale,
                                                                   ),
                                                             ),
                                                             SizedBox(

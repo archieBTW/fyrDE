@@ -480,7 +480,9 @@ class _FyrVirtState extends State<FyrVirt> {
                       '--connect', 'qemu:///session',
                       vm.name,
                       '--edit',
-                      '--video', 'model.type=virtio,accel3d=${accel3d ? 'yes' : 'no'}'
+                      '--video', 'model.type=virtio,accel3d=${accel3d ? 'yes' : 'no'}',
+                      '--edit',
+                      '--graphics', 'spice,gl.enable=${accel3d ? 'yes' : 'no'}'
                     ]);
                   } catch (e) {
                     if (context.mounted) {

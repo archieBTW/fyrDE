@@ -1435,6 +1435,17 @@ class _StartMenuPopupState extends State<StartMenuPopup>
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
                   _PowerButton(
+                    icon: Icons.lock_outline,
+                    label: "Lock",
+                    onTap: () => _runCommand('dbus-send', [
+                      '--system',
+                      '--type=method_call',
+                      '--dest=org.freedesktop.DisplayManager',
+                      '/org/freedesktop/DisplayManager/Seat0',
+                      'org.freedesktop.DisplayManager.Seat.SwitchToGreeter'
+                    ]),
+                  ),
+                  _PowerButton(
                     icon: Icons.logout,
                     label: "Logout",
                     onTap: () => _runCommand('swaymsg', ['exit']),
