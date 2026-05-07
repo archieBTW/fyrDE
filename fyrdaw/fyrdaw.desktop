@@ -1,8 +1,8 @@
 [Desktop Entry]
-Name=FyrDAW
+Name=Sound Booth
 Comment=Digital Audio Workstation for FyrDE
 Exec=/usr/local/bin/fyrdaw
-Icon=audio-x-generic
+Icon=fyrdaw
 Terminal=false
 Type=Application
 Categories=AudioVideo;Audio;

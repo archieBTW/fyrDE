@@ -34,14 +34,37 @@ class FyrPhoneApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'FyrPhone',
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        fontFamily: 'Inter',
+    return AnimatedBuilder(
+      animation: Listenable.merge([
+        FyrTheme.accentColorNotifier,
+        FyrTheme.themeModeNotifier,
+      ]),
+      builder: (context, child) => MaterialApp(
+        debugShowCheckedModeBanner: false,
+        title: 'FyrPhone',
+        themeMode: FyrTheme.themeMode,
+        theme: ThemeData.light().copyWith(
+          useMaterial3: true,
+          scaffoldBackgroundColor: Colors.transparent,
+          textTheme: ThemeData.light().textTheme.apply(fontFamily: 'Inter'),
+          colorScheme: ColorScheme.light(
+            primary: FyrTheme.accentColor,
+            secondary: FyrTheme.accentColor,
+            surface: FyrTheme.surfaceColor,
+          ),
+        ),
+        darkTheme: ThemeData.dark().copyWith(
+          useMaterial3: true,
+          scaffoldBackgroundColor: Colors.transparent,
+          textTheme: ThemeData.dark().textTheme.apply(fontFamily: 'Inter'),
+          colorScheme: ColorScheme.dark(
+            primary: FyrTheme.accentColor,
+            secondary: FyrTheme.accentColor,
+            surface: FyrTheme.surfaceColor,
+          ),
+        ),
+        home: const PhoneHomePage(),
       ),
-      home: const PhoneHomePage(),
     );
   }
 }
@@ -64,9 +87,9 @@ class _PhoneHomePageState extends State<PhoneHomePage> {
       backgroundColor: Colors.transparent,
       body: Container(
         decoration: BoxDecoration(
-          color: Colors.black,
+          color: FyrTheme.bgColor,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: FyrTheme.cardColor, width: 1),
+          border: Border.all(color: FyrTheme.dividerColor, width: 1),
         ),
         clipBehavior: Clip.antiAlias,
         child: Column(
@@ -97,7 +120,7 @@ class _PhoneHomePageState extends State<PhoneHomePage> {
         height: 50,
         padding: const EdgeInsets.symmetric(horizontal: 16),
         decoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: FyrTheme.cardColor)),
+          border: Border(bottom: BorderSide(color: FyrTheme.dividerColor)),
         ),
         child: Row(
           children: [
@@ -149,7 +172,7 @@ class _PhoneHomePageState extends State<PhoneHomePage> {
   Widget _buildSidebar() {
     return Container(
       width: 280,
-      color: Colors.black12,
+      color: FyrTheme.sidebarColor,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -203,14 +226,14 @@ class _PhoneHomePageState extends State<PhoneHomePage> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
           decoration: BoxDecoration(
-            color: isSelected ? FyrTheme.accentColor.withOpacity(0.2) : Colors.transparent,
+            color: isSelected ? FyrTheme.accentColor : Colors.transparent,
             borderRadius: BorderRadius.circular(10),
           ),
           child: Row(
             children: [
               Icon(
                 device.isReachable ? Icons.smartphone : Icons.phonelink_erase,
-                color: device.isReachable ? FyrTheme.accentColor : FyrTheme.textColorMuted,
+                color: isSelected ? FyrTheme.getContrastingColor(FyrTheme.accentColor) : (device.isReachable ? FyrTheme.accentColor : FyrTheme.textColorMuted),
                 size: 20,
               ),
               const SizedBox(width: 12),
@@ -221,14 +244,14 @@ class _PhoneHomePageState extends State<PhoneHomePage> {
                     Text(
                       device.name,
                       style: TextStyle(
-                        color: isSelected ? FyrTheme.textColor : FyrTheme.textColor.withOpacity(0.8),
+                        color: isSelected ? FyrTheme.getContrastingColor(FyrTheme.accentColor) : FyrTheme.textColor,
                         fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                       ),
                     ),
                     Text(
                       device.isPaired ? 'Paired' : 'Not paired',
                       style: TextStyle(
-                        color: FyrTheme.textColorMuted,
+                        color: isSelected ? FyrTheme.getContrastingColor(FyrTheme.accentColor).withOpacity(0.8) : FyrTheme.textColorMuted,
                         fontSize: 12,
                       ),
                     ),
@@ -454,9 +477,9 @@ class _PhoneHomePageState extends State<PhoneHomePage> {
         width: 200,
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.3),
+          color: FyrTheme.cardColor,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: FyrTheme.cardColor.withOpacity(0.5)),
+          border: Border.all(color: FyrTheme.dividerColor.withOpacity(0.5)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,

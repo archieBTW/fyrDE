@@ -331,6 +331,8 @@ class _DockScreenState extends State<DockScreen> {
       '/usr/share/icons/hicolor/scalable/apps/$iconName.svg',
       '/usr/share/icons/hicolor/48x48/apps/$iconName.png',
       '/usr/share/icons/hicolor/128x128/apps/$iconName.png',
+      '/usr/share/icons/hicolor/256x256/apps/$iconName.png',
+      '/usr/share/icons/hicolor/512x512/apps/$iconName.png',
       '/usr/share/icons/Adwaita/scalable/apps/$iconName.svg',
       '/usr/share/icons/breeze/apps/48/$iconName.svg',
       '/usr/share/icons/Papirus/48x48/apps/$iconName.svg',

@@ -216,16 +216,23 @@ class FyrFilesApp extends StatelessWidget {
       animation: Listenable.merge([FyrTheme.themeModeNotifier, FyrTheme.accentColorNotifier]),
       builder: (_, __) {
         return MaterialApp(
-          theme: ThemeData.light().copyWith(
-            useMaterial3: false,
+          theme: ThemeData.light(useMaterial3: true).copyWith(
             primaryColor: FyrTheme.accentColor,
-            colorScheme: ColorScheme.light(primary: FyrTheme.accentColor),
+            scaffoldBackgroundColor: FyrTheme.bgColor,
+            colorScheme: ColorScheme.light(
+              primary: FyrTheme.accentColor,
+              surface: FyrTheme.surfaceColor,
+            ),
+            dividerColor: FyrTheme.dividerColor,
           ),
-          darkTheme: ThemeData.dark().copyWith(
-            useMaterial3: false,
-            scaffoldBackgroundColor: const Color(0xFF2A282C),
+          darkTheme: ThemeData.dark(useMaterial3: true).copyWith(
             primaryColor: FyrTheme.accentColor,
-            colorScheme: ColorScheme.dark(primary: FyrTheme.accentColor),
+            scaffoldBackgroundColor: const Color(0xFF121212),
+            colorScheme: ColorScheme.dark(
+              primary: FyrTheme.accentColor,
+              surface: const Color(0xFF1E1E1E),
+            ),
+            dividerColor: FyrTheme.dividerColor,
           ),
           themeMode: FyrTheme.themeMode,
           home: const FyrFiles(),
@@ -1183,9 +1190,7 @@ class _FyrFilesState extends State<FyrFiles> {
                                   return TextSpan(
                                     text: displayText(dir, currentDir, selectedTag != null),
                                     style: TextStyle(
-                                      color: FyrTheme.isDark
-                                          ? Colors.white
-                                          : Colors.black,
+                                      color: FyrTheme.textColor,
                                     ),
                                     recognizer: TapGestureRecognizer()
                                       ..onTap = () {
@@ -1234,7 +1239,7 @@ class _FyrFilesState extends State<FyrFiles> {
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8),
                             decoration: BoxDecoration(
-                              border: Border.all(color: Colors.grey.withOpacity(0.3)),
+                              border: Border.all(color: FyrTheme.dividerColor),
                               borderRadius: BorderRadius.circular(8),
                             ),
                             child: DropdownButtonHideUnderline(
@@ -1310,9 +1315,7 @@ class _FyrFilesState extends State<FyrFiles> {
                     children: [
                       Container(
                         width: isSidebarCollapsed ? 64 : 200,
-                        color: FyrTheme.isDark
-                            ? FyrTheme.bgColor
-                            : const Color(0xFFF0F0F0),
+                        color: FyrTheme.sidebarColor,
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -1356,8 +1359,7 @@ class _FyrFilesState extends State<FyrFiles> {
                           ],
                         ),
                       ),
-                      if (FyrTheme.isDark)
-                        VerticalDivider(width: 1, thickness: 1, color: Colors.white.withOpacity(0.1)),
+                      VerticalDivider(width: 1, thickness: 1, color: FyrTheme.dividerColor),
                       Expanded(
                         child: StreamBuilder<List<FileSystemEntity>>(
                           stream: fileStream,
@@ -1460,9 +1462,7 @@ class _FyrFilesState extends State<FyrFiles> {
                           child: Text(
                             'Cancel',
                             style: TextStyle(
-                              color: FyrTheme.isDark 
-                                ? Colors.white 
-                                : Colors.black
+                              color: FyrTheme.textColor,
                             )
                           ),
                         ),

@@ -71,19 +71,23 @@ class FyrPhotosApp extends StatelessWidget {
         title: 'FyrPhotos',
         themeMode: FyrTheme.themeMode,
         darkTheme: ThemeData.dark().copyWith(
+          useMaterial3: true,
           scaffoldBackgroundColor: Colors.transparent,
           textTheme: ThemeData.dark().textTheme.apply(fontFamily: 'San Francisco'),
           colorScheme: ColorScheme.dark(
             primary: FyrTheme.accentColor,
             secondary: FyrTheme.accentColor,
+            surface: FyrTheme.surfaceColor,
           ),
         ),
         theme: ThemeData.light().copyWith(
+          useMaterial3: true,
           scaffoldBackgroundColor: Colors.transparent,
           textTheme: ThemeData.light().textTheme.apply(fontFamily: 'San Francisco'),
           colorScheme: ColorScheme.light(
             primary: FyrTheme.accentColor,
             secondary: FyrTheme.accentColor,
+            surface: FyrTheme.surfaceColor,
           ),
         ),
         home: initialFile != null 
@@ -257,7 +261,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
           // Sidebar
           Container(
             width: 260,
-            color: FyrTheme.isDark ? Color(0xFF000000).withOpacity(0.9) : Color(0xFFF0F0F0).withOpacity(0.9),
+            color: FyrTheme.sidebarColor,
             child: Column(
               children: [
                 DragToMoveArea(
@@ -320,9 +324,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   Widget _buildSidebarItem(String title, IconData icon) {
     final isSelected = _currentView == title;
+    final onAccentColor = FyrTheme.getContrastingColor(FyrTheme.accentColor);
     return ListTile(
-      leading: Icon(icon, color: isSelected ? Colors.white : FyrTheme.textColor),
-      title: Text(title, style: TextStyle(color: isSelected ? Colors.white : FyrTheme.textColor, fontWeight: isSelected ? FontWeight.bold : FontWeight.normal)),
+      leading: Icon(icon, color: isSelected ? onAccentColor : FyrTheme.textColor),
+      title: Text(title, style: TextStyle(color: isSelected ? onAccentColor : FyrTheme.textColor, fontWeight: isSelected ? FontWeight.bold : FontWeight.normal)),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       tileColor: isSelected ? FyrTheme.accentColor : Colors.transparent,
       onTap: () => setState(() => _currentView = title),

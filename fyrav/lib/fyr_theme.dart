@@ -67,11 +67,17 @@ class FyrTheme {
   static Color get textColor => isDark ? Colors.white : Colors.black87;
   static Color get textColorMuted => isDark ? Colors.white70 : Colors.black54;
   static Color get bgColor =>
-      isDark ? const Color(0xFF2A282C).withOpacity(0.8) : Colors.white.withOpacity(0.9);
+      isDark ? const Color(0xFF000000) : Colors.white;
+  static Color get sidebarColor =>
+      isDark ? const Color(0xFF000000) : const Color(0xFFF8F8F8);
+  static Color get surfaceColor =>
+      isDark ? const Color(0xFF1A1A1A) : const Color(0xFFFFFFFF);
+  static Color get contentColor =>
+      isDark ? const Color(0xFF0A0A0A) : const Color(0xFFFFFFFF);
   static Color get cardColor =>
-      isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.05);
+      isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.03);
   static Color get hoverColor =>
-      isDark ? Colors.white.withOpacity(0.1) : Colors.black.withOpacity(0.1);
+      isDark ? Colors.white.withOpacity(0.1) : Colors.black.withOpacity(0.05);
   static Color get dividerColor =>
       isDark ? Colors.white.withOpacity(0.1) : Colors.black.withOpacity(0.1);
 

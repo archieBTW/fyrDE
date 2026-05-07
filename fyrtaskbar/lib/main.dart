@@ -480,8 +480,9 @@ class DesktopApp {
   final String name;
   final String exec;
   final String icon;
+  final String path;
 
-  DesktopApp({required this.name, required this.exec, required this.icon});
+  DesktopApp({required this.name, required this.exec, required this.icon, required this.path});
 }
 
 class AppService {
@@ -535,6 +536,8 @@ class AppService {
                     '/usr/share/icons/hicolor/scalable/apps/$icon.svg',
                     '/usr/share/icons/hicolor/48x48/apps/$icon.png',
                     '/usr/share/icons/hicolor/128x128/apps/$icon.png',
+                    '/usr/share/icons/hicolor/256x256/apps/$icon.png',
+                    '/usr/share/icons/hicolor/512x512/apps/$icon.png',
                     '/usr/share/icons/Adwaita/scalable/apps/$icon.svg',
                     '/usr/share/icons/breeze/apps/48/$icon.svg',
                     '${Platform.environment['HOME']}/.local/share/icons/hicolor/scalable/apps/$icon.svg',
@@ -552,7 +555,7 @@ class AppService {
                     }
                   }
                 }
-                apps.add(DesktopApp(name: name, exec: exec, icon: icon ?? ''));
+                apps.add(DesktopApp(name: name, exec: exec, icon: icon ?? '', path: entity.path));
               }
             } catch (e) {}
           }
@@ -1251,6 +1254,7 @@ class _StartMenuPopupState extends State<StartMenuPopup>
   }
 
   Future<void> _loadApps() async {
+    AppService.cachedApps = null;
     final apps = await AppService.getInstalledApps();
     if (mounted) {
       setState(() {
@@ -1308,6 +1312,120 @@ class _StartMenuPopupState extends State<StartMenuPopup>
     }
   }
 
+  void _renameApp(DesktopApp app) async {
+    final TextEditingController _nameController = TextEditingController(text: app.name);
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: FyrTheme.bgColor,
+        title: Text('Rename App', style: TextStyle(color: FyrTheme.textColor)),
+        content: TextField(
+          controller: _nameController,
+          style: TextStyle(color: FyrTheme.textColor),
+          autofocus: true,
+          decoration: InputDecoration(
+            hintText: 'New Name',
+            hintStyle: TextStyle(color: FyrTheme.textColor.withOpacity(0.4)),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(context, _nameController.text), child: Text('Rename', style: TextStyle(color: FyrTheme.accentColor))),
+        ],
+      ),
+    );
+
+    if (newName != null && newName.isNotEmpty && newName != app.name) {
+      bool needsSudo = app.path.startsWith('/usr/share/applications');
+      if (needsSudo) {
+        // For system files, we still use sed but with better escaping
+        final escapedName = newName.replaceAll("'", "'\\''");
+        String script = "sed -i \"s/^Name=.*/Name=$escapedName/\" \"${app.path}\"";
+        _runWithAuth(script);
+      } else {
+        try {
+          final file = File(app.path);
+          final lines = await file.readAsLines();
+          final newLines = lines.map((line) {
+            if (line.startsWith('Name=')) {
+              return 'Name=$newName';
+            }
+            return line;
+          }).toList();
+          await file.writeAsString(newLines.join('\n'));
+          _loadApps();
+        } catch (e) {
+          debugPrint('Failed to rename local app: $e');
+        }
+      }
+    }
+  }
+
+  void _removeApp(DesktopApp app) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: FyrTheme.bgColor,
+        title: Text('Remove App', style: TextStyle(color: FyrTheme.textColor)),
+        content: Text('Are you sure you want to remove ${app.name}?', style: TextStyle(color: FyrTheme.textColor)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(context, true), child: Text('Remove', style: TextStyle(color: Colors.redAccent))),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      bool needsSudo = app.path.startsWith('/usr/share/applications');
+      if (needsSudo) {
+        _runWithAuth("rm \"${app.path}\"");
+      } else {
+        await File(app.path).delete();
+        _loadApps();
+      }
+    }
+  }
+
+  void _runWithAuth(String command) async {
+    final TextEditingController _passController = TextEditingController();
+    final password = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: FyrTheme.bgColor,
+        title: Text('Authentication Required', style: TextStyle(color: FyrTheme.textColor)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Enter password to perform this action:', style: TextStyle(color: FyrTheme.textColor, fontSize: 14)),
+            SizedBox(height: 16),
+            TextField(
+              controller: _passController,
+              obscureText: true,
+              autofocus: true,
+              style: TextStyle(color: FyrTheme.textColor),
+              decoration: InputDecoration(hintText: 'Password', hintStyle: TextStyle(color: FyrTheme.textColor.withOpacity(0.4))),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(context, _passController.text), child: Text('Authorize', style: TextStyle(color: FyrTheme.accentColor))),
+        ],
+      ),
+    );
+
+    if (password != null) {
+      final res = await Process.run('sh', ['-c', 'echo "$password" | sudo -S $command']);
+      if (res.exitCode == 0) {
+        _loadApps();
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Action failed: check password'), backgroundColor: Colors.redAccent));
+        }
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return SlideTransition(
@@ -1344,6 +1462,16 @@ class _StartMenuPopupState extends State<StartMenuPopup>
                                   value: 'pin',
                                   child: Text('Toggle Pin to Dock'),
                                   onTap: () => _pinApp(app),
+                                ),
+                                PopupMenuItem(
+                                  value: 'rename',
+                                  child: Text('Rename App'),
+                                  onTap: () => _renameApp(app),
+                                ),
+                                PopupMenuItem(
+                                  value: 'remove',
+                                  child: Text('Remove App', style: TextStyle(color: Colors.redAccent)),
+                                  onTap: () => _removeApp(app),
                                 ),
                               ],
                             );

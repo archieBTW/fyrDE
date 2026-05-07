@@ -179,6 +179,7 @@ class _PowerPaneState extends State<PowerPane> {
           color: FyrTheme.cardColor,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
+            side: FyrTheme.isDark ? BorderSide.none : BorderSide(color: FyrTheme.dividerColor),
           ),
           child: Padding(
             padding: EdgeInsets.all(24.0),

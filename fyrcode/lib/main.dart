@@ -47,19 +47,19 @@ class FyrCodeApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       themeMode: FyrTheme.themeMode,
       theme: ThemeData.light().copyWith(
-        useMaterial3: false,
-        scaffoldBackgroundColor: Color(0xFFF0F0F0),
+        useMaterial3: true,
+        scaffoldBackgroundColor: FyrTheme.bgColor,
         colorScheme: ColorScheme.light(
           primary: FyrTheme.accentColor,
-          surface: Color(0xFFFFFFFF),
+          surface: FyrTheme.surfaceColor,
         ),
       ),
       darkTheme: ThemeData.dark().copyWith(
-        useMaterial3: false,
-        scaffoldBackgroundColor: const Color(0xFF2A282C),
+        useMaterial3: true,
+        scaffoldBackgroundColor: FyrTheme.bgColor,
         colorScheme: ColorScheme.dark(
           primary: FyrTheme.accentColor,
-          surface: Color(0xFF252526),
+          surface: FyrTheme.surfaceColor,
         ),
       ),
       home: EditorScreen(initialDirectory: initialDirectory),

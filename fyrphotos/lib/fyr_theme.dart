@@ -67,13 +67,21 @@ class FyrTheme {
   static Color get textColor => isDark ? Colors.white : Colors.black87;
   static Color get textColorMuted => isDark ? Colors.white70 : Colors.black54;
   static Color get bgColor =>
-      isDark ? const Color(0xFF000000) : Colors.white.withOpacity(0.9);
+      isDark ? const Color(0xFF000000) : Colors.white;
+  static Color get sidebarColor =>
+      isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF);
+  static Color get surfaceColor =>
+      isDark ? const Color(0xFF1A1A1A) : const Color(0xFFFFFFFF);
   static Color get cardColor =>
-      isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.05);
+      isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.03);
   static Color get hoverColor =>
-      isDark ? Colors.white.withOpacity(0.1) : Colors.black.withOpacity(0.1);
+      isDark ? Colors.white.withOpacity(0.1) : Colors.black.withOpacity(0.05);
   static Color get dividerColor =>
       isDark ? Colors.white.withOpacity(0.1) : Colors.black.withOpacity(0.1);
+
+  static Color getContrastingColor(Color color) {
+    return color.computeLuminance() > 0.5 ? Colors.black : Colors.white;
+  }
 
   static Future<void> setAccentColor(Color color) async {
     try {

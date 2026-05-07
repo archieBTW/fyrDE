@@ -415,6 +415,7 @@ class _DisplayPaneState extends State<DisplayPane> {
                   color: FyrTheme.cardColor,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(16),
+                    side: FyrTheme.isDark ? BorderSide.none : BorderSide(color: FyrTheme.dividerColor),
                   ),
                   margin: EdgeInsets.only(bottom: 16),
                   child: Padding(

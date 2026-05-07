@@ -22,7 +22,7 @@ WIDTH=$(echo $RES | cut -d'x' -f1)
 HEIGHT=$(echo $RES | cut -d'x' -f2)
 echo "Detected resolution: ${WIDTH}x${HEIGHT}"
 
-flutter_apps=("fyrdock" "fyroverview" "fyrwindowoverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrstore" "fyrvirt" "fyrtext" "fyrdaw" "fyrav" "fyrphone" "fyrcode" "fyrvideo" "fyrmusic" "fyrphotos")
+flutter_apps=("fyrdock" "fyroverview" "fyrwindowoverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrstore" "fyrvirt" "fyrtext" "fyrdaw" "fyrav" "fyrphone" "fyrcode" "fyrvideo" "fyrmusic" "fyrphotos" "fyrcamera" "fyrbrowser" "fyrjournal")
 
 # --- Functions ---
 
@@ -71,6 +71,7 @@ install_deps() {
             "meson" "scdoc" "wayland-protocols" "pcre2" "json-c" "pango" "cairo" "gdk-pixbuf2" "unzip" "virt-viewer" "libvirt" "virt-install" "qemu-desktop"
             "bluez" "bluez-utils" "xdg-utils" "slurp" "libnotify" "polkit-gnome" "network-manager-applet" "pavucontrol" "playerctl" "jq" "libcanberra" "psmisc" "pamixer" "sddm" "accountsservice" "qt5-declarative" "qt5-quickcontrols" "qt5-quickcontrols2" "qt5-graphicaleffects" "kdeconnect"
             "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "mpv" "ffmpeg" "noto-fonts-emoji" "zsh" "xorg-server-xvfb" "p7zip" "zip" "tar" "gzip" "bzip2" "nodejs" "npm" "clang" "virglrenderer"
+            "gstreamer" "gst-plugins-base" "gst-plugins-good" "gst-plugins-bad" "gst-plugins-ugly" "gst-libav" "gst-plugin-pipewire" "libcamera" "gst-plugin-libcamera"
         )
         sudo pacman -S --needed --noconfirm "${deps[@]}"
         yay -S --needed --noconfirm scenefx0.4 wlroots0.19 xdg-desktop-portal-termfilechooser-hunkyburrito-git
@@ -85,6 +86,7 @@ install_deps() {
             "pkg-config" "gcc" "wf-recorder" "grim" "ninja-build" "clang" "curl" "git" "unzip" "xz-utils" "zip" "libglu1-mesa" "sway" "virt-viewer" "libvirt-clients" "libvirt-daemon-system" "virtinst" "qemu-kvm" "qemu-system"
             "bluez" "bluez-tools" "xdg-utils" "slurp" "libnotify-bin" "polkit-gnome" "network-manager-gnome" "pavucontrol" "playerctl" "jq" "libcanberra-gtk3-module" "libcanberra-gtk-module" "psmisc" "pamixer" "sddm" "accountsservice" "policykit-1-gnome" "qml-module-qtquick-controls" "qml-module-qtquick-controls2" "qml-module-qtgraphicaleffects" "kdeconnect"
             "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "libmpv-dev" "ffmpeg" "fonts-noto-color-emoji" "zsh" "xvfb" "p7zip-full" "tar" "gzip" "bzip2" "nodejs" "npm" "clangd" "libvirglrenderer-dev"
+            "libgstreamer1.0-dev" "libgstreamer-plugins-base1.0-dev" "gstreamer1.0-plugins-base" "gstreamer1.0-plugins-good" "gstreamer1.0-plugins-bad" "gstreamer1.0-libav"
         )
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${deps[@]}"
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y wlsunset wmenu swayfx || echo "Optional packages missed."
@@ -99,6 +101,7 @@ install_deps() {
             "pkgconf" "gcc" "wf-recorder" "grim" "ninja-build" "clang" "curl" "git" "unzip" "zip" "mesa-libGLU" "sway" "virt-viewer" "libvirt" "virt-install" "qemu-kvm"
             "bluez" "bluez-utils" "xdg-utils" "slurp" "libnotify" "polkit-gnome" "nm-connection-editor" "pavucontrol" "playerctl" "jq" "libcanberra-gtk3" "psmisc" "pamixer" "sddm" "accountsservice" "lxqt-policykit" "qt5-qtquickcontrols" "qt5-qtquickcontrols2" "qt5-qtgraphicaleffects" "kdeconnect"
             "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "mpv-libs-devel" "ffmpeg" "google-noto-emoji-color-fonts" "zsh" "xorg-x11-server-Xvfb" "p7zip" "tar" "gzip" "bzip2" "nodejs" "npm" "clang" "virglrenderer-devel"
+            "gstreamer1-devel" "gstreamer1-plugins-base-devel" "gstreamer1-plugins-good" "gstreamer1-plugins-bad-free" "gstreamer1-libav"
         )
         sudo dnf install -y "${deps[@]}"
         sudo dnf install -y wlsunset wmenu swayfx || echo "Optional packages missed."
@@ -176,14 +179,14 @@ setup_app_configs() {
     case $app in
         "fyrterm")
             sudo ln -sf /opt/fyrterm/fyrterm /usr/local/bin/fyrterm
-            if [ -f "./fyrterm/assets/icons/fyrterm.png" ]; then
+            if [ -f "./fyrterm/assets/icons/terminal.png" ]; then
                 sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
-                sudo cp ./fyrterm/assets/icons/fyrterm.png /usr/share/icons/hicolor/512x512/apps/fyrterm.png
+                sudo cp ./fyrterm/assets/icons/terminal.png /usr/share/icons/hicolor/512x512/apps/fyrterm.png
             fi
             sudo tee /usr/share/applications/fyrterm.desktop > /dev/null <<'EOF'
 [Desktop Entry]
 Version=1.0
-Name=fyrterm
+Name=Terminal
 GenericName=Terminal Emulator
 Comment=A flutter terminal emulator
 Exec=/usr/local/bin/fyrterm
@@ -196,12 +199,16 @@ EOF
             ;;
         "fyrfiles")
             sudo ln -sf /opt/fyrfiles/fyr_files /usr/local/bin/fyrfiles
+            if [ -f "./fyrfiles/assets/icons/folderfile.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrfiles/assets/icons/folderfile.png /usr/share/icons/hicolor/512x512/apps/fyrfiles.png
+            fi
             sudo tee /usr/share/applications/fyrfiles.desktop > /dev/null <<'EOF'
 [Desktop Entry]
-Name=fyrfiles
+Name=fyrFiles
 Comment=A modern, custom file manager
 Exec=/usr/local/bin/fyrfiles
-Icon=system-file-manager
+Icon=fyrfiles
 Terminal=false
 Type=Application
 Categories=Utility;System;FileTools;
@@ -221,24 +228,32 @@ EOF
             ;;
         "fyrstore")
             sudo ln -sf /opt/fyrstore/fyrstore /usr/local/bin/fyrstore
+            if [ -f "./fyrstore/assets/icons/shop.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrstore/assets/icons/shop.png /usr/share/icons/hicolor/512x512/apps/fyrstore.png
+            fi
             sudo tee /usr/share/applications/fyrstore.desktop > /dev/null <<'EOF'
 [Desktop Entry]
-Name=FyrStore
+Name=fyrStore
 Type=Application
 Exec=/usr/local/bin/fyrstore
-Icon=system-software-install
+Icon=fyrstore
 Terminal=false
 Categories=System;Settings;
 EOF
             ;;
         "fyrsettings")
             sudo ln -sf /opt/fyrsettings/fyrsettings /usr/local/bin/fyrsettings
+            if [ -f "./fyrsettings/assets/icons/settings.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrsettings/assets/icons/settings.png /usr/share/icons/hicolor/512x512/apps/fyrsettings.png
+            fi
             sudo tee /usr/share/applications/fyrsettings.desktop > /dev/null <<'EOF'
 [Desktop Entry]
-Name=FyrSettings
+Name=Settings
 Comment=System settings for FyrDE
 Exec=/usr/local/bin/fyrsettings
-Icon=preferences-system
+Icon=fyrsettings
 Terminal=false
 Type=Application
 Categories=System;Settings;
@@ -246,12 +261,16 @@ EOF
             ;;
         "fyrvirt")
             sudo ln -sf /opt/fyrvirt/fyrvirt /usr/local/bin/fyrvirt
+            if [ -f "./fyrvirt/assets/icons/vm.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrvirt/assets/icons/vm.png /usr/share/icons/hicolor/512x512/apps/fyrvirt.png
+            fi
             sudo tee /usr/share/applications/fyrvirt.desktop > /dev/null <<'EOF'
 [Desktop Entry]
-Name=FyrVirt
+Name=fyrVM
 Comment=Virtual Machine Manager for FyrDE
 Exec=/usr/local/bin/fyrvirt
-Icon=virt-manager
+Icon=fyrvirt
 Terminal=false
 Type=Application
 Categories=System;Virtualization;
@@ -259,12 +278,16 @@ EOF
             ;;
         "fyrav")
             sudo ln -sf /opt/fyrav/fyrav /usr/local/bin/fyrav
+            if [ -f "./fyrav/assets/icons/antibac.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrav/assets/icons/antibac.png /usr/share/icons/hicolor/512x512/apps/fyrav.png
+            fi
             sudo tee /usr/share/applications/fyrav.desktop > /dev/null <<'EOF'
 [Desktop Entry]
 Name=FyrAV
 Comment=Anti-Virus & System Security
 Exec=/usr/local/bin/fyrav
-Icon=security-high
+Icon=fyrav
 Terminal=false
 Type=Application
 Categories=System;Security;
@@ -280,7 +303,7 @@ EOF
             sudo ln -sf /opt/fyrvideo/fyrvideo /usr/local/bin/fyrvideo
             sudo tee /usr/share/applications/fyrvideo.desktop > /dev/null <<'EOF'
 [Desktop Entry]
-Name=FyrVideo
+Name=Watchbox
 Comment=Media player for FyrDE
 Exec=/usr/local/bin/fyrvideo %f
 Icon=video-x-generic
@@ -293,12 +316,16 @@ EOF
             ;;
         "fyrphone")
             sudo ln -sf /opt/fyrphone/fyrphone /usr/local/bin/fyrphone
+            if [ -f "./fyrphone/assets/icons/connect.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrphone/assets/icons/connect.png /usr/share/icons/hicolor/512x512/apps/fyrphone.png
+            fi
             sudo tee /usr/share/applications/fyrphone.desktop > /dev/null <<'EOF'
 [Desktop Entry]
-Name=FyrPhone
+Name=fyrConnect
 Comment=Mobile device manager for FyrDE
 Exec=/usr/local/bin/fyrphone
-Icon=phone
+Icon=fyrphone
 Terminal=false
 Type=Application
 Categories=System;Network;
@@ -311,6 +338,10 @@ EOF
             ;;
         "fyrdaw")
             sudo ln -sf /opt/fyrdaw/fyrdaw /usr/local/bin/fyrdaw
+            if [ -f "./fyrdaw/assets/icons/music2.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrdaw/assets/icons/music2.png /usr/share/icons/hicolor/512x512/apps/fyrdaw.png
+            fi
             sudo cp ./fyrdaw/fyrdaw.desktop /usr/share/applications/fyrdaw.desktop
             ;;
         "fyrcode")
@@ -328,12 +359,16 @@ EOF
             ;;
         "fyrmusic")
             sudo ln -sf /opt/fyrmusic/fyrmusic /usr/local/bin/fyrmusic
+            if [ -f "./fyrmusic/assets/icons/music.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrmusic/assets/icons/music.png /usr/share/icons/hicolor/512x512/apps/fyrmusic.png
+            fi
             sudo tee /usr/share/applications/fyrmusic.desktop > /dev/null <<'EOF'
 [Desktop Entry]
-Name=FyrMusic
+Name=Music
 Comment=Music library and player for FyrDE
 Exec=/usr/local/bin/fyrmusic %f
-Icon=audio-x-generic
+Icon=fyrmusic
 Terminal=false
 Type=Application
 Categories=AudioVideo;Audio;Player;
@@ -343,18 +378,66 @@ EOF
             ;;
         "fyrphotos")
             sudo ln -sf /opt/fyrphotos/fyrphotos /usr/local/bin/fyrphotos
+            if [ -f "./fyrphotos/assets/icons/photos.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrphotos/assets/icons/photos.png /usr/share/icons/hicolor/512x512/apps/fyrphotos.png
+            fi
             sudo tee /usr/share/applications/fyrphotos.desktop > /dev/null <<'EOF'
 [Desktop Entry]
-Name=FyrPhotos
+Name=Photos
 Comment=Photo library and viewer for FyrDE
 Exec=/usr/local/bin/fyrphotos %f
-Icon=image-x-generic
+Icon=fyrphotos
 Terminal=false
 Type=Application
 Categories=Graphics;Viewer;
 MimeType=image/jpeg;image/png;image/gif;image/webp;image/x-ms-bmp;
 EOF
             xdg-mime default fyrphotos.desktop image/jpeg image/png image/gif image/webp image/x-ms-bmp || true
+            ;;
+        "fyrcamera")
+            sudo ln -sf /opt/fyrcamera/fyrcamera /usr/local/bin/fyrcamera
+            sudo tee /usr/share/applications/fyrcamera.desktop > /dev/null <<'EOF'
+[Desktop Entry]
+Name=Camera
+Comment=Camera application for FyrDE
+Exec=/usr/local/bin/fyrcamera
+Icon=camera-webcam
+Terminal=false
+Type=Application
+Categories=AudioVideo;Video;
+EOF
+            ;;
+        "fyrbrowser")
+            sudo ln -sf /opt/fyrbrowser/fyrbrowser /usr/local/bin/fyrbrowser
+            if [ -f "./fyrbrowser/assets/icons/browser.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrbrowser/assets/icons/browser.png /usr/share/icons/hicolor/512x512/apps/fyrbrowser.png
+            fi
+            sudo tee /usr/share/applications/fyrbrowser.desktop > /dev/null <<'EOF'
+[Desktop Entry]
+Version=1.0
+Name=Goose
+GenericName=Web Browser
+Comment=CEF-based web browser for FyrDE
+Exec=/usr/local/bin/fyrbrowser %u
+Icon=fyrbrowser
+Terminal=false
+Type=Application
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;application/xml;image/svg+xml;application/rss+xml;application/rdf+xml;x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/ftp;
+StartupNotify=true
+EOF
+            xdg-settings set default-web-browser fyrbrowser.desktop || true
+            xdg-mime default fyrbrowser.desktop text/html text/xml application/xhtml+xml x-scheme-handler/http x-scheme-handler/https || true
+            ;;
+        "fyrjournal")
+            sudo ln -sf /opt/fyrjournal/fyrjournal /usr/local/bin/fyrjournal
+            if [ -f "./fyrjournal/assets/icons/journal.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrjournal/assets/icons/journal.png /usr/share/icons/hicolor/512x512/apps/fyrjournal.png
+            fi
+            sudo cp ./fyrjournal/fyrjournal.desktop /usr/share/applications/fyrjournal.desktop
             ;;
     esac
     

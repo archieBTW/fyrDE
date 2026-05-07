@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../fyr_theme.dart';
+import '../widgets/circle_crop_dialog.dart';
 
 class PersonalizationPane extends StatefulWidget {
   const PersonalizationPane({super.key});
@@ -173,63 +174,75 @@ class _PersonalizationPaneState extends State<PersonalizationPane> {
       ]);
       if (result.exitCode == 0) {
         final path = result.stdout.toString().trim();
-        if (path.isNotEmpty) {
-          final home = Platform.environment['HOME'];
-          final target1 = File('$home/.face');
-          final target2 = File('$home/.face.icon');
-          
-          // Evict from cache before copying to ensure UI updates
-          await FileImage(target1).evict();
-          await FileImage(target2).evict();
-          
-          // Use ffmpeg to resize to 128x128 (very safe for Accountsservice)
-          // We output to a .png extension first so ffmpeg knows the format
-          final tempIcon = File('$home/.face_temp.png');
-          await Process.run('ffmpeg', [
-            '-y',
-            '-i', path,
-            '-frames:v', '1',
-            '-vf', 'scale=128:128:force_original_aspect_ratio=decrease,pad=128:128:(ow-iw)/2:(oh-ih)/2',
-            tempIcon.path
-          ]);
-          
-          if (await tempIcon.exists()) {
-            await tempIcon.copy(target1.path);
-            await tempIcon.rename(target2.path);
-          }
-          
-          // Set permissions to 644 (rw-r--r--) so SDDM can read it
-          await Process.run('chmod', ['644', target1.path]);
-          await Process.run('chmod', ['644', target2.path]);
-          
-          // Ensure ACLs are preserved/re-applied
-          await Process.run('setfacl', ['-m', 'u:sddm:r', target1.path]);
-          await Process.run('setfacl', ['-m', 'u:sddm:r', target2.path]);
+        // Show crop dialog
+        if (!mounted) return;
+        final CropRect? crop = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => CircleCropDialog(imagePath: path),
+            fullscreenDialog: true,
+          ),
+        );
 
-          // Notify Accountsservice
-          final uidResult = await Process.run('id', ['-u']);
-          final uid = uidResult.stdout.toString().trim();
-          await Process.run('dbus-send', [
-            '--system',
-            '--dest=org.freedesktop.Accounts',
-            '--type=method_call',
-            '/org/freedesktop/Accounts/User$uid',
-            'org.freedesktop.Accounts.User.SetIconFile',
-            'string:${target2.path}'
-          ]);
+        if (crop == null) return;
 
-          setState(() {
-            _profilePicPath = ''; // Clear briefly to trigger rebuild
-          });
-          
-          Future.delayed(const Duration(milliseconds: 50), () {
-            if (mounted) {
-              setState(() {
-                _profilePicPath = target1.path;
-              });
-            }
-          });
+        final home = Platform.environment['HOME'];
+        final target1 = File('$home/.face');
+        final target2 = File('$home/.face.icon');
+
+        // Evict from cache before copying to ensure UI updates
+        await FileImage(target1).evict();
+        await FileImage(target2).evict();
+
+        // Use ffmpeg to crop and resize to 128x128
+        final tempIcon = File('$home/.face_temp.png');
+        await Process.run('ffmpeg', [
+          '-y',
+          '-i',
+          path,
+          '-frames:v',
+          '1',
+          '-vf',
+          'crop=${crop.width}:${crop.height}:${crop.x}:${crop.y},scale=128:128',
+          tempIcon.path
+        ]);
+
+        if (await tempIcon.exists()) {
+          await tempIcon.copy(target1.path);
+          await tempIcon.rename(target2.path);
         }
+
+        // Set permissions to 644 (rw-r--r--) so SDDM can read it
+        await Process.run('chmod', ['644', target1.path]);
+        await Process.run('chmod', ['644', target2.path]);
+
+        // Ensure ACLs are preserved/re-applied
+        await Process.run('setfacl', ['-m', 'u:sddm:r', target1.path]);
+        await Process.run('setfacl', ['-m', 'u:sddm:r', target2.path]);
+
+        // Notify Accountsservice
+        final uidResult = await Process.run('id', ['-u']);
+        final uid = uidResult.stdout.toString().trim();
+        await Process.run('dbus-send', [
+          '--system',
+          '--dest=org.freedesktop.Accounts',
+          '--type=method_call',
+          '/org/freedesktop/Accounts/User$uid',
+          'org.freedesktop.Accounts.User.SetIconFile',
+          'string:${target2.path}'
+        ]);
+
+        setState(() {
+          _profilePicPath = ''; // Clear briefly to trigger rebuild
+        });
+
+        Future.delayed(const Duration(milliseconds: 50), () {
+          if (mounted) {
+            setState(() {
+              _profilePicPath = target1.path;
+            });
+          }
+        });
       }
     } catch (e) {}
   }
@@ -280,6 +293,7 @@ class _PersonalizationPaneState extends State<PersonalizationPane> {
             color: FyrTheme.cardColor,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16),
+              side: FyrTheme.isDark ? BorderSide.none : BorderSide(color: FyrTheme.dividerColor),
             ),
             child: Padding(
               padding: EdgeInsets.all(24.0),
@@ -317,7 +331,7 @@ class _PersonalizationPaneState extends State<PersonalizationPane> {
                             'Light',
                             style: TextStyle(
                               color: !FyrTheme.isDark
-                                  ? Colors.white
+                                  ? FyrTheme.getContrastingColor(FyrTheme.accentColor)
                                   : FyrTheme.textColor,
                               fontWeight: FontWeight.bold,
                             ),
@@ -345,7 +359,7 @@ class _PersonalizationPaneState extends State<PersonalizationPane> {
                             'Dark',
                             style: TextStyle(
                               color: FyrTheme.isDark
-                                  ? Colors.white
+                                  ? FyrTheme.getContrastingColor(FyrTheme.accentColor)
                                   : FyrTheme.textColor,
                               fontWeight: FontWeight.bold,
                             ),

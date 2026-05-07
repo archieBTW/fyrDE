@@ -23,19 +23,23 @@ class LauncherApp extends StatelessWidget {
       title: 'Sway Launcher',
       themeMode: FyrTheme.themeMode,
       darkTheme: ThemeData.dark().copyWith(
+        useMaterial3: true,
         scaffoldBackgroundColor: Colors.transparent,
         textTheme: ThemeData.dark().textTheme.apply(fontFamily: 'San Francisco'),
         colorScheme: ColorScheme.dark(
           primary: FyrTheme.accentColor,
           secondary: FyrTheme.accentColor,
+          surface: FyrTheme.surfaceColor,
         ),
       ),
       theme: ThemeData.light().copyWith(
+        useMaterial3: true,
         scaffoldBackgroundColor: Colors.transparent,
         textTheme: ThemeData.light().textTheme.apply(fontFamily: 'San Francisco'),
         colorScheme: ColorScheme.light(
           primary: FyrTheme.accentColor,
           secondary: FyrTheme.accentColor,
+          surface: FyrTheme.surfaceColor,
         ),
       ),
       home: LauncherScreen(),
@@ -114,62 +118,6 @@ class _LauncherScreenState extends State<LauncherScreen>
     }
   }
 
-  bool _isDefaultApp(DesktopApp app) {
-    if (app.noDisplay) return false;
-    
-    final id = app.id.toLowerCase();
-    final name = app.name.toLowerCase();
-
-    if (name == 'firefox' || id.contains('firefox')) return true;
-    if (name.startsWith('fyr') || id.startsWith('fyr')) return true;
-    if (id.startsWith('org.gnome.')) return true;
-
-    // Common apps requested by user
-    const commonApps = [
-      'steam',
-      'discord',
-      'spotify',
-      'obs',
-      'vlc',
-      'code',
-      'gimp',
-      'inkscape',
-      'blender',
-      'slack',
-      'telegram',
-      'signal',
-      'chrome',
-      'chromium',
-      'brave',
-      'thunderbird',
-    ];
-
-    for (final common in commonApps) {
-      if (id.contains(common) || name.contains(common)) return true;
-    }
-
-    const gnomeLegacyApps = [
-      'nautilus',
-      'gnome-terminal',
-      'gnome-calculator',
-      'gnome-system-monitor',
-      'gnome-control-center',
-      'gnome-text-editor',
-      'gedit',
-      'eog',
-      'evince',
-      'totem',
-      'epiphany',
-      'baobab',
-      'file-roller',
-    ];
-
-    for (final legacy in gnomeLegacyApps) {
-      if (id.startsWith(legacy)) return true;
-    }
-
-    return false;
-  }
 
   Future<void> _loadApps() async {
     final List<String> searchPaths = [
@@ -233,11 +181,31 @@ class _LauncherScreenState extends State<LauncherScreen>
       for (var app in loadedApps) app.name: app,
     }.values.toList();
 
-    uniqueApps.sort(
-      (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
-    );
+    const orderedIds = [
+      'fyrbrowser.desktop',
+      'fyrfiles.desktop',
+      'fyrterm.desktop',
+      'fyrstore.desktop',
+      'fyrsettings.desktop',
+      'fyrdaw.desktop',
+      'fyrjournal.desktop',
+      'fyrvirt.desktop',
+      'fyrphotos.desktop',
+      'fyrav.desktop',
+    ];
 
-    final defaultApps = uniqueApps.where(_isDefaultApp).toList();
+    uniqueApps.sort((a, b) {
+      int indexA = orderedIds.indexOf(a.id);
+      int indexB = orderedIds.indexOf(b.id);
+
+      if (indexA != -1 && indexB != -1) return indexA.compareTo(indexB);
+      if (indexA != -1) return -1;
+      if (indexB != -1) return 1;
+
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    });
+
+    final defaultApps = uniqueApps.where((app) => !app.noDisplay).toList();
 
     setState(() {
       _allApps = uniqueApps;
@@ -577,11 +545,7 @@ class _LauncherScreenState extends State<LauncherScreen>
                       child: Container(
                         width: 700 * scale,
                         decoration: BoxDecoration(
-                          color: FyrTheme.hoverColor,
                           borderRadius: BorderRadius.circular(50),
-                          border: Border.all(
-                            color: FyrTheme.hoverColor,
-                          ),
                           boxShadow: [
                             BoxShadow(
                               color: Colors.black.withOpacity(0.3),
@@ -590,7 +554,19 @@ class _LauncherScreenState extends State<LauncherScreen>
                             ),
                           ],
                         ),
-                        child: Focus(
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(50),
+                          child: BackdropFilter(
+                            filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: FyrTheme.surfaceColor.withOpacity(0),
+                                borderRadius: BorderRadius.circular(50),
+                                border: Border.all(
+                                  color: FyrTheme.dividerColor,
+                                ),
+                              ),
+                              child: Focus(
                           onKeyEvent: (node, event) {
                             if (event is KeyDownEvent) {
                               if (event.logicalKey ==
@@ -672,21 +648,24 @@ class _LauncherScreenState extends State<LauncherScreen>
                       ),
                     ),
                   ),
-                  Expanded(
-                    child: Center(
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 1200),
-                        child: _filteredApps.isNotEmpty
-                            ? Stack(
-                                alignment: Alignment.center,
-                                children: [
-                                  PageView.builder(
-                                    controller: _pageController,
-                                    itemCount: pageCount,
-                                    onPageChanged: (page) {
-                                      setState(() => _currentPage = page);
-                                    },
-                                    itemBuilder: (context, pageIndex) {
+                ),
+              ),
+            ),
+            Expanded(
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 1200),
+                  child: _filteredApps.isNotEmpty
+                      ? Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            PageView.builder(
+                              controller: _pageController,
+                              itemCount: pageCount,
+                              onPageChanged: (page) {
+                                setState(() => _currentPage = page);
+                              },
+                              itemBuilder: (context, pageIndex) {
                                       final int startIndex =
                                           pageIndex * _itemsPerPage;
                                       final int endIndex =

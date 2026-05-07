@@ -77,12 +77,12 @@ class _WorkspaceSwitcherState extends State<WorkspaceSwitcher> {
                     height: 10,
                     decoration: BoxDecoration(
                       color: isFocused
-                          ? Colors.white
-                          : Colors.white.withOpacity(isEmpty ? 0.25 : 0.7),
+                          ? FyrTheme.textColor
+                          : FyrTheme.textColor.withOpacity(isEmpty ? 0.2 : 0.6),
                       borderRadius: BorderRadius.circular(5),
                       boxShadow: isFocused ? [
                         BoxShadow(
-                          color: Colors.white.withOpacity(0.4),
+                          color: FyrTheme.textColor.withOpacity(0.4),
                           blurRadius: 8,
                           offset: const Offset(0, 2),
                         )
@@ -103,7 +103,7 @@ class _WorkspaceSwitcherState extends State<WorkspaceSwitcher> {
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     border: Border.all(
-                      color: Colors.white.withOpacity(0.5),
+                      color: FyrTheme.textColor.withOpacity(0.5),
                       width: 1.5,
                     ),
                   ),
@@ -111,7 +111,7 @@ class _WorkspaceSwitcherState extends State<WorkspaceSwitcher> {
                     child: Icon(
                       Icons.add,
                       size: 10,
-                      color: Colors.white.withOpacity(0.5),
+                      color: FyrTheme.textColor.withOpacity(0.5),
                     ),
                   ),
                 ),

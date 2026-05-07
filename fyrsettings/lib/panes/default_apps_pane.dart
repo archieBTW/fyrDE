@@ -181,6 +181,7 @@ class _DefaultAppsPaneState extends State<DefaultAppsPane> {
           color: FyrTheme.cardColor,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
+            side: FyrTheme.isDark ? BorderSide.none : BorderSide(color: FyrTheme.dividerColor),
           ),
           child: Padding(
             padding: EdgeInsets.all(24.0),
@@ -221,7 +222,7 @@ class _DefaultAppsPaneState extends State<DefaultAppsPane> {
             value: _installedApps.any((app) => app.desktopFile == value) ? value : null,
             decoration: InputDecoration(
               filled: true,
-              fillColor: Colors.black12,
+              fillColor: FyrTheme.isDark ? Colors.black26 : FyrTheme.dividerColor.withOpacity(0.05),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(8),
                 borderSide: BorderSide.none,

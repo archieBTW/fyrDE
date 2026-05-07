@@ -182,13 +182,23 @@ class FyrAVApp extends StatelessWidget {
       builder: (_, __) {
         return MaterialApp(
           debugShowCheckedModeBanner: false,
-          theme: ThemeData.dark().copyWith(
+          themeMode: FyrTheme.themeMode,
+          theme: ThemeData.light().copyWith(
             useMaterial3: true,
-            scaffoldBackgroundColor: const Color(0xFF000000),
+            scaffoldBackgroundColor: FyrTheme.bgColor,
+            primaryColor: FyrTheme.accentColor,
+            colorScheme: ColorScheme.light(
+              primary: FyrTheme.accentColor,
+              surface: FyrTheme.surfaceColor,
+            ),
+          ),
+          darkTheme: ThemeData.dark().copyWith(
+            useMaterial3: true,
+            scaffoldBackgroundColor: FyrTheme.bgColor,
             primaryColor: FyrTheme.accentColor,
             colorScheme: ColorScheme.dark(
               primary: FyrTheme.accentColor,
-              surface: const Color(0xFF1A1A1A),
+              surface: FyrTheme.surfaceColor,
             ),
           ),
           home: const FyrAVMain(),
@@ -224,8 +234,8 @@ class _FyrAVMainState extends State<FyrAVMain> {
           Container(
             width: 240,
             decoration: BoxDecoration(
-              color: Colors.black,
-              border: Border(right: BorderSide(color: Colors.white.withOpacity(0.05))),
+              color: FyrTheme.sidebarColor,
+              border: Border(right: BorderSide(color: FyrTheme.dividerColor)),
             ),
             child: Column(
               children: [
@@ -239,12 +249,12 @@ class _FyrAVMainState extends State<FyrAVMain> {
                       return ListTile(
                         leading: Icon(
                           _pages[index]['icon'],
-                          color: isSelected ? FyrTheme.accentColor : Colors.white60,
+                          color: isSelected ? FyrTheme.accentColor : FyrTheme.textColorMuted,
                         ),
                         title: Text(
                           _pages[index]['title'],
                           style: TextStyle(
-                            color: isSelected ? Colors.white : Colors.white60,
+                            color: isSelected ? FyrTheme.textColor : FyrTheme.textColorMuted,
                             fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                           ),
                         ),
@@ -260,7 +270,7 @@ class _FyrAVMainState extends State<FyrAVMain> {
           ),
           Expanded(
             child: Container(
-              color: const Color(0xFF0A0A0A),
+              color: FyrTheme.contentColor,
               child: Column(
                 children: [
                   _buildContentHeader(),
@@ -313,7 +323,7 @@ class _FyrAVMainState extends State<FyrAVMain> {
             const SizedBox(width: 12),
             const Text(
               'FyrAV',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
           ],
         ),
@@ -332,7 +342,7 @@ class _FyrAVMainState extends State<FyrAVMain> {
           children: [
             Text(
               _pages[_selectedIndex]['title'],
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w500, color: Colors.white70),
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500, color: FyrTheme.textColorMuted),
             ),
             const Spacer(),
           ],
@@ -373,9 +383,9 @@ class _DashboardPageState extends State<DashboardPage> {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            const Text('Security Overview', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white70)),
+            Text('Security Overview', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: FyrTheme.textColorMuted)),
             IconButton(
-              icon: const Icon(Icons.refresh, color: Colors.white60),
+              icon: Icon(Icons.refresh, color: FyrTheme.textColorMuted),
               onPressed: () async {
                 setState(() => _isLoading = true);
                 await SecurityState.updateStatus();
@@ -431,7 +441,7 @@ class _DashboardPageState extends State<DashboardPage> {
           const SizedBox(height: 8),
           Text(
             isProtected ? 'All security modules are running normally' : 'Firewall is currently disabled',
-            style: const TextStyle(color: Colors.white60),
+            style: TextStyle(color: FyrTheme.textColorMuted),
           ),
         ],
       ),
@@ -442,16 +452,16 @@ class _DashboardPageState extends State<DashboardPage> {
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.03),
+        color: FyrTheme.cardColor,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.white.withOpacity(0.05)),
+        border: Border.all(color: FyrTheme.dividerColor),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: color ?? Colors.white70, size: 32),
+          Icon(icon, color: color ?? FyrTheme.textColorMuted, size: 32),
           const SizedBox(height: 16),
-          Text(label, style: const TextStyle(color: Colors.white60, fontSize: 14)),
+          Text(label, style: TextStyle(color: FyrTheme.textColorMuted, fontSize: 14)),
           const SizedBox(height: 4),
           Text(value, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
         ],
@@ -516,7 +526,7 @@ class _FirewallPageState extends State<FirewallPage> {
             ],
           ),
           const SizedBox(height: 32),
-          const Text('Active Rules', style: TextStyle(color: Colors.white60)),
+          Text('Active Rules', style: TextStyle(color: FyrTheme.textColorMuted)),
           const SizedBox(height: 16),
           Expanded(
             child: ListView.builder(
@@ -526,7 +536,7 @@ class _FirewallPageState extends State<FirewallPage> {
                   margin: const EdgeInsets.only(bottom: 8),
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.03),
+                    color: FyrTheme.cardColor,
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(_rules[index], style: const TextStyle(fontFamily: 'monospace')),
@@ -632,16 +642,16 @@ class _ScansPageState extends State<ScansPage> {
           const SizedBox(height: 32),
           if (_isScanning) const LinearProgressIndicator(),
           const SizedBox(height: 16),
-          const Text('Scan Log', style: TextStyle(color: Colors.white60)),
+          Text('Scan Log', style: TextStyle(color: FyrTheme.textColorMuted)),
           const SizedBox(height: 8),
           Expanded(
             child: Container(
               width: double.infinity,
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: Colors.black,
+                color: FyrTheme.isDark ? Colors.black : Colors.white,
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.white10),
+                border: Border.all(color: FyrTheme.dividerColor),
               ),
               child: SingleChildScrollView(
                 child: Text(
@@ -687,20 +697,20 @@ class _RealtimePageState extends State<RealtimePage> {
             ],
           ),
           const SizedBox(height: 8),
-          const Text(
+          Text(
             'Automatically scan files as they are created in your home folder.',
-            style: TextStyle(color: Colors.white60),
+            style: TextStyle(color: FyrTheme.textColorMuted),
           ),
           const SizedBox(height: 32),
-          const Text('Recent Activity', style: TextStyle(color: Colors.white60)),
+          Text('Recent Activity', style: TextStyle(color: FyrTheme.textColorMuted)),
           const SizedBox(height: 16),
           Expanded(
             child: _events.isEmpty
-                ? Center(child: Text('No activity recorded', style: TextStyle(color: Colors.white24)))
+                ? Center(child: Text('No activity recorded', style: TextStyle(color: FyrTheme.textColorMuted.withOpacity(0.3))))
                 : ListView.builder(
                     itemCount: _events.length,
                     itemBuilder: (context, index) => ListTile(
-                      leading: Icon(Icons.history, color: Colors.white24),
+                      leading: Icon(Icons.history, color: FyrTheme.textColorMuted.withOpacity(0.3)),
                       title: Text(_events[index], style: TextStyle(fontSize: 14)),
                     ),
                   ),
@@ -724,13 +734,13 @@ class SettingsPage extends StatelessWidget {
           subtitle: const Text('Start monitoring service on login'),
           trailing: Switch(value: true, onChanged: (val) {}),
         ),
-        const Divider(color: Colors.white10),
+        const Divider(),
         ListTile(
           title: const Text('Notification Level'),
           subtitle: const Text('Alert on every scan vs only on threats'),
           trailing: const Icon(Icons.chevron_right),
         ),
-        const Divider(color: Colors.white10),
+        const Divider(),
         ListTile(
           title: const Text('Update Virus Database'),
           subtitle: const Text('Last updated: 2 hours ago'),

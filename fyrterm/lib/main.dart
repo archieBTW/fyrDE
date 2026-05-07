@@ -272,7 +272,7 @@ class _HomeState extends State<Home> with WindowListener {
   void _closeTab(int index, {bool force = false}) async {
     if (_tabs.length == 1) {
       if (force) {
-        windowManager.destroy();
+        exit(0);
       }
       return;
     }
@@ -345,8 +345,11 @@ class _HomeState extends State<Home> with WindowListener {
   }
 
   @override
-  void onWindowClose() async {
-    await windowManager.destroy();
+  void onWindowClose() {
+    for (var tab in _tabs) {
+      tab.pty.kill();
+    }
+    exit(0);
   }
 
   void _startPty(TerminalTab tab) {

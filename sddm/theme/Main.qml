@@ -121,14 +121,26 @@ Rectangle {
             }
         }
 
-        // Username Display/Input
+        // Username Display
+        Text {
+            id: userNameDisplay
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: userModel.count === 1 ? userModel.data(userModel.index(0, 0), Qt.UserRole + 1) : usernameBox.currentText
+            font.pointSize: 22
+            font.bold: true
+            color: "white"
+            horizontalAlignment: Text.AlignHCenter
+        }
+
+        // Login Inputs
         Column {
             width: parent.width
-            spacing: 10
+            spacing: 15
 
             ComboBox {
                 id: usernameBox
-                width: parent.width
+                width: 280
+                anchors.horizontalCenter: parent.horizontalCenter
                 model: userModel
                 textRole: "name"
                 currentIndex: userModel.lastIndex
@@ -175,68 +187,58 @@ Rectangle {
                 }
             }
 
-            TextField {
-                id: singleUsername
+            Item {
                 width: parent.width
-                text: userModel.count === 1 ? userModel.data(userModel.index(0, 0), Qt.UserRole + 1) : ""
-                font.pointSize: 14
-                color: "white"
-                readOnly: true
-                visible: userModel.count === 1
-                background: Rectangle {
+                height: 50
+
+                TextField {
+                    id: password
+                    width: 280
+                    height: 50
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    placeholderText: "Password"
+                    echoMode: TextInput.Password
+                    focus: true
+                    font.pointSize: 14
                     color: "white"
-                    opacity: 0.1
-                    radius: 12
-                    border.color: "transparent"
-                    border.width: 2
+                    leftPadding: 20
+                    rightPadding: 20
+                    selectionColor: "#6200EE"
+                    selectedTextColor: "white"
+                    renderType: Text.NativeRendering
+                    background: Rectangle {
+                        color: "white"
+                        opacity: 0.1
+                        radius: 12
+                        border.color: parent.activeFocus ? "#6200EE" : "transparent"
+                        border.width: 2
+                    }
+                    onAccepted: sddm.login(userModel.count > 1 ? usernameBox.currentText : userNameDisplay.text, password.text, sessionBox.currentIndex)
                 }
-            }
 
-            TextField {
-                id: password
-                width: parent.width
-                placeholderText: "Password"
-                echoMode: TextInput.Password
-                focus: true
-                font.pointSize: 14
-                color: "white"
-                selectionColor: "#6200EE"
-                selectedTextColor: "white"
-                renderType: Text.NativeRendering
-                background: Rectangle {
-                    color: "white"
-                    opacity: 0.1
-                    radius: 12
-                    border.color: parent.activeFocus ? "#6200EE" : "transparent"
-                    border.width: 2
+                Button {
+                    id: loginButton
+                    width: 50
+                    height: 50
+                    anchors.left: password.right
+                    anchors.leftMargin: 10
+                    onClicked: sddm.login(userModel.count > 1 ? usernameBox.currentText : userNameDisplay.text, password.text, sessionBox.currentIndex)
+                    
+                    contentItem: Text {
+                        text: "➜"
+                        font.pointSize: 20
+                        color: "white"
+                        opacity: 0.7
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+
+                    background: Rectangle {
+                        color: loginButton.pressed ? "white" : "transparent"
+                        opacity: 0.1
+                        radius: 25
+                    }
                 }
-                onAccepted: sddm.login(userModel.count > 1 ? usernameBox.currentText : singleUsername.text, password.text, sessionBox.currentIndex)
-            }
-        }
-
-        Button {
-            id: loginButton
-            width: 150
-            height: 40
-            anchors.horizontalCenter: parent.horizontalCenter
-            text: "Login"
-            onClicked: sddm.login(userModel.count > 1 ? usernameBox.currentText : singleUsername.text, password.text, sessionBox.currentIndex)
-            
-            contentItem: Text {
-                text: loginButton.text
-                font.pointSize: 12
-                font.bold: true
-                color: "white"
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
-            }
-
-            background: Rectangle {
-                color: loginButton.pressed ? "white" : "transparent"
-                opacity: loginButton.pressed ? 0.2 : 1.0
-                radius: 10
-                border.color: "white"
-                border.width: 1
             }
         }
 
