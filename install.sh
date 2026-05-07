@@ -34,12 +34,20 @@ usage() {
     echo "  -l          Reinstall SDDM theme and configuration"
     echo "  -t          Reinstall GTK and icon themes"
     echo "  -d          Install system dependencies only"
+    echo "  -z          Setup ZSH and Oh-My-Zsh"
     echo "  -f          Force full installation (default if no flags provided)"
     echo "  -h          Show this help message"
 }
 
 install_deps() {
     if [ "$OS" = "arch" ] || [ "$OS" = "manjaro" ] || [ "$OS" = "endeavouros" ]; then
+        echo "Configuring pacman..."
+        sudo sed -i '/^#\[multilib\]/{ s/^#//; n; s/^#//; }' /etc/pacman.conf
+        sudo sed -i 's/^#Color/Color/' /etc/pacman.conf
+        if ! grep -q "^ILoveCandy" /etc/pacman.conf; then
+            sudo sed -i '/^Color/a ILoveCandy' /etc/pacman.conf
+        fi
+        
         echo "Updating system..."
         sudo pacman -Syu --noconfirm
 
@@ -62,7 +70,7 @@ install_deps() {
             "wireplumber" "pipewire" "pipewire-pulse" "wlsunset" "cmake" "cpio" "pkg-config" "gcc" "wf-recorder" "grim" "ninja" "clang"
             "meson" "scdoc" "wayland-protocols" "pcre2" "json-c" "pango" "cairo" "gdk-pixbuf2" "unzip" "virt-viewer" "libvirt" "virt-install" "qemu-desktop"
             "bluez" "bluez-utils" "xdg-utils" "slurp" "libnotify" "polkit-gnome" "network-manager-applet" "pavucontrol" "playerctl" "jq" "libcanberra" "psmisc" "pamixer" "sddm" "accountsservice" "qt5-declarative" "qt5-quickcontrols" "qt5-quickcontrols2" "qt5-graphicaleffects" "kdeconnect"
-            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "mpv" "ffmpeg" "noto-fonts-emoji"
+            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "mpv" "ffmpeg" "noto-fonts-emoji" "zsh" "xorg-server-xvfb"
         )
         sudo pacman -S --needed --noconfirm "${deps[@]}"
         yay -S --needed --noconfirm scenefx0.4 wlroots0.19 xdg-desktop-portal-termfilechooser-hunkyburrito-git
@@ -76,7 +84,7 @@ install_deps() {
             "xclip" "wl-clipboard" "brightnessctl" "wireplumber" "pipewire" "pipewire-pulse" "cmake" "cpio"
             "pkg-config" "gcc" "wf-recorder" "grim" "ninja-build" "clang" "curl" "git" "unzip" "xz-utils" "zip" "libglu1-mesa" "sway" "virt-viewer" "libvirt-clients" "libvirt-daemon-system" "virtinst" "qemu-kvm" "qemu-system"
             "bluez" "bluez-tools" "xdg-utils" "slurp" "libnotify-bin" "polkit-gnome" "network-manager-gnome" "pavucontrol" "playerctl" "jq" "libcanberra-gtk3-module" "libcanberra-gtk-module" "psmisc" "pamixer" "sddm" "accountsservice" "policykit-1-gnome" "qml-module-qtquick-controls" "qml-module-qtquick-controls2" "qml-module-qtgraphicaleffects" "kdeconnect"
-            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "libmpv-dev" "ffmpeg" "fonts-noto-color-emoji"
+            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "libmpv-dev" "ffmpeg" "fonts-noto-color-emoji" "zsh" "xvfb"
         )
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${deps[@]}"
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y wlsunset wmenu swayfx || echo "Optional packages missed."
@@ -90,7 +98,7 @@ install_deps() {
             "xclip" "wl-clipboard" "brightnessctl" "wireplumber" "pipewire" "pipewire-pulseaudio" "cmake" "cpio"
             "pkgconf" "gcc" "wf-recorder" "grim" "ninja-build" "clang" "curl" "git" "unzip" "zip" "mesa-libGLU" "sway" "virt-viewer" "libvirt" "virt-install" "qemu-kvm"
             "bluez" "bluez-utils" "xdg-utils" "slurp" "libnotify" "polkit-gnome" "nm-connection-editor" "pavucontrol" "playerctl" "jq" "libcanberra-gtk3" "psmisc" "pamixer" "sddm" "accountsservice" "lxqt-policykit" "qt5-qtquickcontrols" "qt5-qtquickcontrols2" "qt5-qtgraphicaleffects" "kdeconnect"
-            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "mpv-libs-devel" "ffmpeg" "google-noto-emoji-color-fonts"
+            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "mpv-libs-devel" "ffmpeg" "google-noto-emoji-color-fonts" "zsh" "xorg-x11-server-Xvfb"
         )
         sudo dnf install -y "${deps[@]}"
         sudo dnf install -y wlsunset wmenu swayfx || echo "Optional packages missed."
@@ -143,7 +151,7 @@ reinstall_app() {
         flutter clean || true
         flutter create --platforms=linux .
         flutter pub get
-        flutter build linux
+        xvfb-run -a flutter build linux
         
         echo "Installing $app to /opt/$app..."
         sudo rm -rf "/opt/$app"
@@ -278,7 +286,7 @@ Type=Application
 Categories=AudioVideo;Video;Player;
 MimeType=video/mp4;video/x-matroska;video/webm;video/quicktime;video/x-msvideo;video/x-flv;video/x-ms-wmv;video/mpeg;
 EOF
-            sudo xdg-mime default fyrvideo.desktop video/mp4 video/x-matroska video/webm video/quicktime video/x-msvideo video/x-flv video/x-ms-wmv video/mpeg || true
+            xdg-mime default fyrvideo.desktop video/mp4 video/x-matroska video/webm video/quicktime video/x-msvideo video/x-flv video/x-ms-wmv video/mpeg || true
             ;;
         "fyrphone")
             sudo ln -sf /opt/fyrphone/fyrphone /usr/local/bin/fyrphone
@@ -328,7 +336,7 @@ Type=Application
 Categories=AudioVideo;Audio;Player;
 MimeType=audio/mpeg;audio/x-wav;audio/flac;audio/ogg;audio/mp4;
 EOF
-            sudo xdg-mime default fyrmusic.desktop audio/mpeg audio/x-wav audio/flac audio/ogg audio/mp4 || true
+            xdg-mime default fyrmusic.desktop audio/mpeg audio/x-wav audio/flac audio/ogg audio/mp4 || true
             ;;
         "fyrphotos")
             sudo ln -sf /opt/fyrphotos/fyrphotos /usr/local/bin/fyrphotos
@@ -343,7 +351,7 @@ Type=Application
 Categories=Graphics;Viewer;
 MimeType=image/jpeg;image/png;image/gif;image/webp;image/x-ms-bmp;
 EOF
-            sudo xdg-mime default fyrphotos.desktop image/jpeg image/png image/gif image/webp image/x-ms-bmp || true
+            xdg-mime default fyrphotos.desktop image/jpeg image/png image/gif image/webp image/x-ms-bmp || true
             ;;
     esac
     
@@ -477,6 +485,46 @@ mkdir -p ~/Videos/screencasts; wf-recorder -f ~/Videos/screencasts/$(date +'%Y-%
 EOF
     chmod +x ~/.config/fyr/toggle_recording.sh
 
+    # Overview Toggle Script
+    cat << 'EOF' > ~/.config/fyr/overview_toggle.sh
+#!/bin/bash
+
+CONF="$HOME/.config/sway/floating.conf"
+IS_FLOATING=0
+if [ -f "$CONF" ] && grep -q "floating enable" "$CONF"; then
+    IS_FLOATING=1
+fi
+
+ARG=$1
+
+if [ "$ARG" = "hide" ]; then
+    swaymsg '[app_id="fyrwindowoverview"] move scratchpad'
+    swaymsg '[app_id="fyroverview"] move scratchpad'
+    exit 0
+fi
+
+TARGET=""
+
+if [ "$IS_FLOATING" -eq 1 ]; then
+    if [ "$ARG" = "workspace" ]; then
+        TARGET="fyroverview"
+    else
+        TARGET="fyrwindowoverview"
+    fi
+else
+    TARGET="fyroverview"
+fi
+
+OTHER="fyrwindowoverview"
+if [ "$TARGET" = "fyrwindowoverview" ]; then
+    OTHER="fyroverview"
+fi
+
+swaymsg "[app_id=\"$OTHER\"] move scratchpad"
+swaymsg "[app_id=\"$TARGET\"] scratchpad show, border none, resize set 1920 1080, move absolute position 0 0"
+EOF
+    chmod +x ~/.config/fyr/overview_toggle.sh
+
     mkdir -p ~/.config/sway
     if [ -f "./sway/config" ]; then
         cp ./sway/config ~/.config/sway/config
@@ -537,9 +585,30 @@ INSTALL_DEPS=false
 INSTALL_SWAY_CONFIG=false
 INSTALL_SDDM=false
 INSTALL_THEMES=false
+INSTALL_ZSH=false
+
+setup_zsh() {
+    echo "Setting up ZSH and Oh-My-Zsh..."
+    if [ ! -d "$HOME/.oh-my-zsh" ]; then
+        RUNZSH=no CHSH=yes sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
+    else
+        echo "Oh-My-Zsh already installed."
+    fi
+    
+    if [ "$SHELL" != "$(which zsh)" ]; then
+        echo "Changing default shell to zsh..."
+        sudo chsh -s $(which zsh) $USER
+    fi
+    
+    # Ensure flutter is in the zsh path
+    if ! grep -q "/opt/flutter/bin" "$HOME/.zshrc" 2>/dev/null; then
+        echo "export PATH=\"\$PATH:/opt/flutter/bin\"" >> "$HOME/.zshrc"
+    fi
+}
+
 APP_TO_REINSTALL=""
 
-while getopts "a:sldthf" opt; do
+while getopts "a:sldthfz" opt; do
     MODULAR=true
     case $opt in
         a) APP_TO_REINSTALL="$OPTARG" ;;
@@ -547,6 +616,7 @@ while getopts "a:sldthf" opt; do
         l) INSTALL_SDDM=true ;;
         t) INSTALL_THEMES=true ;;
         d) INSTALL_DEPS=true ;;
+        z) INSTALL_ZSH=true ;;
         f) MODULAR=false ;;
         h) usage; exit 0 ;;
         *) usage; exit 1 ;;
@@ -556,6 +626,7 @@ done
 if [ "$MODULAR" = "false" ]; then
     echo "Starting full installation..."
     install_deps
+    setup_zsh
     install_flutter
     build_swayfx
     for app in "${flutter_apps[@]}"; do
@@ -567,6 +638,7 @@ if [ "$MODULAR" = "false" ]; then
 else
     echo "Starting modular installation..."
     if [ "$INSTALL_DEPS" = "true" ]; then install_deps; fi
+    if [ "$INSTALL_ZSH" = "true" ]; then setup_zsh; fi
     if [ -n "$APP_TO_REINSTALL" ]; then
         install_flutter
         reinstall_app "$APP_TO_REINSTALL"

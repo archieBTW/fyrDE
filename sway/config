@@ -135,8 +135,8 @@ bindsym $mod+space [app_id="(?i).*fyrsearch.*"] scratchpad show, border none, re
 exec /opt/fyroverview/fyroverview
 exec /opt/fyrwindowoverview/fyrwindowoverview
 
-for_window [app_id="fyroverview"] floating enable, border none, resize set 1920 1024, move position 0 56, blur enable, move scratchpad
-for_window [app_id="fyrwindowoverview"] floating enable, border none, resize set 1920 1024, move position 0 56, blur enable, move scratchpad
+for_window [app_id="fyroverview"] floating enable, border none, resize set 1920 1080, move absolute position 0 0, blur enable, move scratchpad
+for_window [app_id="fyrwindowoverview"] floating enable, border none, resize set 1920 1080, move absolute position 0 0, blur enable, move scratchpad
 
 # Super + Tab and Super + W
 bindsym $mod+Tab exec ~/.config/fyr/overview_toggle.sh

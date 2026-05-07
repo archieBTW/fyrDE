@@ -10,7 +10,57 @@ import 'dart:async';
 import 'package:fyrcode/editor_toolbar.dart';
 import 'fyr_theme.dart';
 
-// Beautiful Catppuccin Macchiato Theme (Removed forced height for precise coordinate tracking)
+class DragAutoScroller extends StatefulWidget {
+  final Widget child;
+  final ScrollController controller;
+
+  const DragAutoScroller({super.key, required this.child, required this.controller});
+
+  @override
+  State<DragAutoScroller> createState() => _DragAutoScrollerState();
+}
+
+class _DragAutoScrollerState extends State<DragAutoScroller> {
+  Timer? _timer;
+
+  void _checkScroll(PointerEvent event) {
+    if (event.down) {
+      final renderBox = context.findRenderObject() as RenderBox?;
+      if (renderBox != null) {
+        final position = renderBox.globalToLocal(event.position);
+        _timer?.cancel();
+        if (position.dy < 40) {
+          _timer = Timer.periodic(const Duration(milliseconds: 30), (_) {
+            if (widget.controller.hasClients) {
+              widget.controller.jumpTo((widget.controller.offset - 15).clamp(0.0, widget.controller.position.maxScrollExtent));
+            }
+          });
+        } else if (position.dy > renderBox.size.height - 40) {
+          _timer = Timer.periodic(const Duration(milliseconds: 30), (_) {
+            if (widget.controller.hasClients) {
+              widget.controller.jumpTo((widget.controller.offset + 15).clamp(0.0, widget.controller.position.maxScrollExtent));
+            }
+          });
+        } else {
+          _timer?.cancel();
+        }
+      }
+    } else {
+      _timer?.cancel();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      onPointerMove: _checkScroll,
+      onPointerUp: (_) => _timer?.cancel(),
+      onPointerCancel: (_) => _timer?.cancel(),
+      child: widget.child,
+    );
+  }
+}
+
 final Map<String, TextStyle> catppuccinTheme = {
   'root': TextStyle(
     backgroundColor: FyrTheme.bgColor, // Deeper Macchiato base
@@ -1085,7 +1135,9 @@ class CodeEditorPaneState extends State<CodeEditorPane> {
                           context: context,
                           removeTop: true,
                           removeBottom: true,
-                          child: CodeEditor(
+                          child: DragAutoScroller(
+                            controller: _scrollController.verticalScroller,
+                            child: CodeEditor(
                             padding: EdgeInsets.zero,
                             key: ValueKey(widget.filePath),
                             controller: _controller!,
@@ -1143,8 +1195,9 @@ class CodeEditorPaneState extends State<CodeEditorPane> {
                               );
                             },
                         ),
+                          ),
+                        ),
                       ),
-                    ),
                   ],
                 ),
               ),
