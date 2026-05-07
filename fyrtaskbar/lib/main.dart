@@ -821,7 +821,7 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                               '${Platform.environment['HOME']}/.config/fyr/toggle_floating.sh',
                               [],
                             );
-                            SystemState._updateSwayState();
+                            await SystemState._update();
                           },
                           behavior: HitTestBehavior.opaque,
                           child: Container(

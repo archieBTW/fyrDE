@@ -255,6 +255,10 @@ class _FyrFilesState extends State<FyrFiles> {
   Set<String> selectedPaths = {};
   Offset? dragStart;
   Offset? dragCurrent;
+  bool isListView = false;
+  String sortBy = 'name'; // 'name', 'date', 'size'
+  bool sortAscending = true;
+  int? _lastSelectedIndex;
   final ScrollController _scrollController = ScrollController();
   String? previewImagePath;
 
@@ -262,26 +266,67 @@ class _FyrFilesState extends State<FyrFiles> {
     if (dragStart == null || dragCurrent == null) return;
     
     Rect selectionRect = Rect.fromPoints(dragStart!, dragCurrent!);
-    double width = MediaQuery.of(context).size.width;
-    double itemWidth = width / (width / 120).floor();
-    int crossAxisCount = (width / 120).floor();
+    double sidebarWidth = isSidebarCollapsed ? 64.0 : 200.0;
+    double availableWidth = MediaQuery.of(context).size.width - sidebarWidth;
     
     Set<String> newSelection = {};
-    for (int i = 0; i < files.length; i++) {
-      int row = i ~/ crossAxisCount;
-      int col = i % crossAxisCount;
+    
+    if (isListView) {
+      for (int i = 0; i < files.length; i++) {
+        double y = i * 50.0 - _scrollController.offset;
+        Rect itemRect = Rect.fromLTWH(0, y, availableWidth, 50.0);
+        if (selectionRect.overlaps(itemRect)) {
+          newSelection.add(files[i].path);
+        }
+      }
+    } else {
+      double itemWidth = availableWidth / (availableWidth / 120).floor();
+      int crossAxisCount = (availableWidth / 120).floor();
       
-      double x = col * itemWidth;
-      double y = row * itemWidth - _scrollController.offset;
-      
-      Rect itemRect = Rect.fromLTWH(x, y, itemWidth, itemWidth);
-      if (selectionRect.overlaps(itemRect)) {
-        newSelection.add(files[i].path);
+      for (int i = 0; i < files.length; i++) {
+        int row = i ~/ crossAxisCount;
+        int col = i % crossAxisCount;
+        
+        double x = col * itemWidth;
+        double y = row * itemWidth - _scrollController.offset;
+        
+        Rect itemRect = Rect.fromLTWH(x, y, itemWidth, itemWidth);
+        if (selectionRect.overlaps(itemRect)) {
+          newSelection.add(files[i].path);
+        }
       }
     }
     
     setState(() {
       selectedPaths = newSelection;
+    });
+  }
+
+  void _sortFiles() {
+    files.sort((a, b) {
+      // Directories always come first
+      bool isDirA = FileSystemEntity.isDirectorySync(a.path);
+      bool isDirB = FileSystemEntity.isDirectorySync(b.path);
+      if (isDirA != isDirB) return isDirA ? -1 : 1;
+
+      int comparison;
+      try {
+        switch (sortBy) {
+          case 'date':
+            comparison = a.statSync().modified.compareTo(b.statSync().modified);
+            break;
+          case 'size':
+            comparison = a.statSync().size.compareTo(b.statSync().size);
+            break;
+          case 'name':
+          default:
+            comparison = p.basename(a.path).toLowerCase().compareTo(p.basename(b.path).toLowerCase());
+            break;
+        }
+      } catch (e) {
+        comparison = 0;
+      }
+      return sortAscending ? comparison : -comparison;
     });
   }
 
@@ -317,6 +362,152 @@ class _FyrFilesState extends State<FyrFiles> {
 
   bool isAndroid() {
     return Platform.isAndroid;
+  }
+
+  bool _isArchive(String path) {
+    final extensions = ['.zip', '.7z', '.tar', '.gz', '.bz2', '.xz', '.tgz', '.tbz2', '.txz'];
+    return extensions.any((ext) => path.toLowerCase().endsWith(ext));
+  }
+
+  Future<void> _extractArchive(String path) async {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Extracting ${p.basename(path)}...')),
+    );
+    
+    try {
+      ProcessResult pr;
+      if (path.toLowerCase().endsWith('.zip')) {
+        pr = await Process.run('unzip', [path, '-d', currentDir.path]);
+      } else if (path.toLowerCase().endsWith('.tar.gz') || path.toLowerCase().endsWith('.tgz')) {
+        pr = await Process.run('tar', ['-xzf', path, '-C', currentDir.path]);
+      } else if (path.toLowerCase().endsWith('.tar.xz') || path.toLowerCase().endsWith('.txz')) {
+        pr = await Process.run('tar', ['-xJf', path, '-C', currentDir.path]);
+      } else if (path.toLowerCase().endsWith('.tar')) {
+        pr = await Process.run('tar', ['-xf', path, '-C', currentDir.path]);
+      } else {
+        pr = await Process.run('7z', ['x', path, '-o${currentDir.path}', '-y']);
+      }
+
+      if (!mounted) return;
+
+      if (pr.exitCode == 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Extraction complete')),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Extraction failed: ${pr.stderr}')),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e')),
+      );
+    }
+  }
+
+  Future<void> _handleCompress(List<String> paths) async {
+    if (paths.isEmpty) return;
+
+    String baseDefaultName = paths.length == 1 
+        ? p.basename(paths[0]) 
+        : p.basename(currentDir.path);
+    
+    TextEditingController nameController = TextEditingController(text: baseDefaultName);
+    String selectedFormat = '.zip';
+
+    final result = await showDialog<Map<String, String>>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Compress Files'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameController,
+                decoration: const InputDecoration(labelText: 'Archive Name'),
+              ),
+              const SizedBox(height: 16),
+              DropdownButton<String>(
+                isExpanded: true,
+                value: selectedFormat,
+                items: ['.zip', '.7z', '.tar.gz', '.tar.xz'].map((String value) {
+                  return DropdownMenuItem<String>(
+                    value: value,
+                    child: Text(value),
+                  );
+                }).toList(),
+                onChanged: (value) {
+                  if (value != null) {
+                    setDialogState(() {
+                      selectedFormat = value;
+                    });
+                  }
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(context, {
+                  'name': nameController.text,
+                  'format': selectedFormat,
+                });
+              },
+              child: const Text('Compress'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || result == null) return;
+
+    String archiveName = result['name']!;
+    String format = result['format']!;
+    if (!archiveName.toLowerCase().endsWith(format.toLowerCase())) {
+      archiveName += format;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Compressing to $archiveName...')),
+    );
+
+    final outputPath = p.join(currentDir.path, archiveName);
+      
+      try {
+        ProcessResult pr;
+        if (format == '.zip') {
+          pr = await Process.run('zip', ['-r', outputPath, ...paths.map((e) => p.relative(e, from: currentDir.path))]);
+        } else if (format == '.tar.gz') {
+          pr = await Process.run('tar', ['-czf', outputPath, ...paths.map((e) => p.relative(e, from: currentDir.path))]);
+        } else if (format == '.tar.xz') {
+          pr = await Process.run('tar', ['-cJf', outputPath, ...paths.map((e) => p.relative(e, from: currentDir.path))]);
+        } else {
+          pr = await Process.run('7z', ['a', outputPath, ...paths]);
+        }
+
+        if (!mounted) return;
+
+        if (pr.exitCode == 0) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Compression complete')),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Compression failed: ${pr.stderr}')),
+          );
+        }
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
   }
 
   Future<Directory> getHomeDirectoryByPlatform() async {
@@ -454,6 +645,9 @@ class _FyrFilesState extends State<FyrFiles> {
         String fileName = p.basename(file.path);
         return showHiddenFiles || !fileName.startsWith('.');
       }).toList();
+      _sortFiles();
+      selectedPaths.clear();
+      _lastSelectedIndex = null;
     });
   }
 
@@ -737,6 +931,123 @@ class _FyrFilesState extends State<FyrFiles> {
     );
   }
 
+  Widget _buildFileItem(FileSystemEntity file, int index, bool isList) {
+    var isDir = FileSystemEntity.isDirectorySync(file.path);
+    FileInfo? currentFileInfo = fileInfoList.firstWhere(
+      (info) => info.filePath == file.path,
+      orElse: () => FileInfo(filePath: file.path),
+    );
+    bool isSelected = selectedPaths.contains(file.path);
+
+    Widget content;
+    if (isList) {
+      content = Container(
+        height: 50,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        color: isSelected ? FyrTheme.accentColor.withOpacity(0.3) : Colors.transparent,
+        child: Row(
+          children: [
+            (!isDir && (file.path.toLowerCase().endsWith('.png') || file.path.toLowerCase().endsWith('.jpg') || file.path.toLowerCase().endsWith('.jpeg') || file.path.toLowerCase().endsWith('.gif') || file.path.toLowerCase().endsWith('.webp')))
+                ? Image.file(File(file.path), width: 32, height: 32, fit: BoxFit.cover)
+                : Icon(isDir ? Icons.folder : Icons.file_copy, size: 32, color: FyrTheme.accentColor),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Text(
+                p.basename(file.path),
+                style: const TextStyle(fontSize: 14),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (currentFileInfo.tag != null)
+              getDotByTag(currentFileInfo.tag!),
+          ],
+        ),
+      );
+    } else {
+      content = Container(
+        color: isSelected ? FyrTheme.accentColor.withOpacity(0.3) : Colors.transparent,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                (!isDir && (file.path.toLowerCase().endsWith('.png') || file.path.toLowerCase().endsWith('.jpg') || file.path.toLowerCase().endsWith('.jpeg') || file.path.toLowerCase().endsWith('.gif') || file.path.toLowerCase().endsWith('.webp')))
+                    ? Image.file(File(file.path), width: 48, height: 48, fit: BoxFit.cover)
+                    : Icon(isDir ? Icons.folder : Icons.file_copy, size: 48, color: FyrTheme.accentColor),
+                Text(
+                  p.basename(file.path),
+                  textAlign: TextAlign.center,
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                  style: const TextStyle(fontSize: 11),
+                ),
+              ],
+            ),
+            if (currentFileInfo.tag != null)
+              Positioned(top: 24, left: 24, child: getDotByTag(currentFileInfo.tag!)),
+          ],
+        ),
+      );
+    }
+
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (PointerDownEvent event) {
+        if (event.kind == PointerDeviceKind.mouse && event.buttons == kSecondaryMouseButton) {
+          isFileContextMenuShown = true;
+          openIconContextMenuRightClick(context, event, file).then((value) => isFileContextMenuShown = false);
+        }
+      },
+      child: GestureDetector(
+        onDoubleTap: () async {
+          if (isDir) {
+            openDirectory(file as Directory);
+          } else {
+            var filePath = file.path;
+            if (isPicker) { stdout.write(filePath); await stdout.flush(); exit(0); }
+            var result = await Process.run('xdg-open', [filePath]);
+            if (result.exitCode != 0) { stderr.writeln('Could not open $filePath: ${result.stderr}'); }
+          }
+        },
+        onLongPressStart: (LongPressStartDetails event) {
+          isFileContextMenuShown = true;
+          openIconContextMenu(context, event, file).then((value) => isFileContextMenuShown = false);
+        },
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () {
+              bool isControlPressed = HardwareKeyboard.instance.isControlPressed;
+              bool isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
+              setState(() {
+                if (isControlPressed) {
+                  if (selectedPaths.contains(file.path)) {
+                    selectedPaths.remove(file.path);
+                  } else {
+                    selectedPaths.add(file.path);
+                    _lastSelectedIndex = index;
+                  }
+                } else if (isShiftPressed && _lastSelectedIndex != null) {
+                  int start = min(_lastSelectedIndex!, index);
+                  int end = max(_lastSelectedIndex!, index);
+                  for (int i = start; i <= end; i++) {
+                    selectedPaths.add(files[i].path);
+                  }
+                } else {
+                  selectedPaths.clear();
+                  selectedPaths.add(file.path);
+                  _lastSelectedIndex = index;
+                }
+              });
+            },
+            child: content,
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     double width = MediaQuery.of(context).size.width;
@@ -959,6 +1270,37 @@ class _FyrFilesState extends State<FyrFiles> {
                           padding: EdgeInsets.zero,
                           constraints: const BoxConstraints(),
                         ),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          icon: Icon(isListView ? Icons.grid_view : Icons.list, size: 20),
+                          onPressed: () {
+                            setState(() {
+                              isListView = !isListView;
+                            });
+                          },
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                        ),
+                        const SizedBox(width: 8),
+                        PopupMenuButton<String>(
+                          icon: const Icon(Icons.sort, size: 20),
+                          onSelected: (String value) {
+                            setState(() {
+                              if (sortBy == value) {
+                                sortAscending = !sortAscending;
+                              } else {
+                                sortBy = value;
+                                sortAscending = true;
+                              }
+                              _sortFiles();
+                            });
+                          },
+                          itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+                            const PopupMenuItem<String>(value: 'name', child: Text('Sort by Name')),
+                            const PopupMenuItem<String>(value: 'date', child: Text('Sort by Date')),
+                            const PopupMenuItem<String>(value: 'size', child: Text('Sort by Size')),
+                          ],
+                        ),
                       ],
                     ),
                   ),
@@ -1022,10 +1364,12 @@ class _FyrFilesState extends State<FyrFiles> {
                           builder: (context, snapshot) {
                             if (snapshot.hasData) {
                               files = snapshot.data as List<FileSystemEntity>;
-                              return GestureDetector(
+    double sidebarWidth = isSidebarCollapsed ? 64.0 : 200.0;
+    return GestureDetector(
                 onTap: () {
                   setState(() {
                     selectedPaths.clear();
+                    _lastSelectedIndex = null;
                   });
                 },
                 onLongPressStart: (LongPressStartDetails details) async {
@@ -1041,6 +1385,7 @@ class _FyrFilesState extends State<FyrFiles> {
                     dragStart = details.localPosition;
                     dragCurrent = details.localPosition;
                     selectedPaths.clear();
+                    _lastSelectedIndex = null;
                   });
                 },
                 onPanUpdate: (details) {
@@ -1057,187 +1402,19 @@ class _FyrFilesState extends State<FyrFiles> {
                 },
                 child: Stack(
                   children: [
-                    GridView.builder(
-                      controller: _scrollController,
-                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: (width / 120).floor()),
-                      itemCount: files.length,
-                      itemBuilder: (context, index) {
-                        var file = files[index];
-                        var isDir = FileSystemEntity.isDirectorySync(file.path);
-
-                        FileInfo? currentFileInfo = fileInfoList.firstWhere(
-                          (info) => info.filePath == file.path,
-                          orElse: () => FileInfo(filePath: file.path),
-                        );
-
-                        return isAndroid()
-                            ? Material(
-                                color: Colors.transparent,
-                              child: InkWell(
-                                  onTap: () {
-                                    setState(() {
-                                      if (selectedPaths.contains(file.path)) {
-                                        selectedPaths.remove(file.path);
-                                      } else {
-                                        selectedPaths.clear();
-                                        selectedPaths.add(file.path);
-                                      }
-                                    });
-                                  },
-                                  onDoubleTap: () async {
-                                    if (isDir) {
-                                      openDirectory(file as Directory);
-                                    } else {
-                                      var filePath = file.path;
-                                      if (isPicker) { stdout.writeln(filePath); await stdout.flush(); exit(0); } var result = await Process.run(
-                                          'xdg-open', [filePath]);
-                                      if (result.exitCode != 0) {
-                                        stderr.writeln(
-                                            'Could not open $filePath: ${result.stderr}');
-                                      }
-                                    }
-                                  },
-                                  child: Container(
-                                    color: selectedPaths.contains(file.path) ? FyrTheme.accentColor.withOpacity(0.3) : Colors.transparent,
-                                    child: Stack(
-                                        alignment: Alignment.center,
-                                      children: [
-                                        Column(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.center,
-                                          children: [
-                                            GestureDetector(
-                                              onLongPressStart:
-                                                  (LongPressStartDetails
-                                                      event) {
-                                                isFileContextMenuShown = true;
-                                                openIconContextMenu(
-                                                        context, event, file)
-                                                    .then((value) =>
-                                                        isFileContextMenuShown =
-                                                            false);
-                                              },
-                                              child: (!isDir && (file.path.toLowerCase().endsWith('.png') || file.path.toLowerCase().endsWith('.jpg') || file.path.toLowerCase().endsWith('.jpeg') || file.path.toLowerCase().endsWith('.gif') || file.path.toLowerCase().endsWith('.webp')))
-                                                  ? Image.file(File(file.path), width: 48, height: 48, fit: BoxFit.cover)
-                                                  : Icon(
-                                                isDir
-                                                    ? Icons.folder
-                                                    : Icons.file_copy,
-                                                size: 48.0,
-                                                color: FyrTheme.accentColor,
-                                              ),
-                                            ),
-                                            Text(
-                                              isDir
-                                                  ? file.path.split('/').last
-                                                  : file.uri.pathSegments.last,
-                                              textAlign: TextAlign.center,
-                                              overflow: TextOverflow.ellipsis,
-                                              maxLines: 1,
-                                              style: const TextStyle(fontSize: 11),
-                                            ),
-                                          ],
-                                        ),
-                                        if (currentFileInfo.tag != null)
-                                          Positioned(
-                                              top: 24,
-                                              left: 24,
-                                              child: getDotByTag(
-                                                  currentFileInfo.tag!)),
-                                      ]),
-                                ),
-                              ),
-                            )
-                            : Listener(
-                                behavior: HitTestBehavior.translucent,
-                                onPointerDown: (PointerDownEvent event) {
-                                  if (event.kind == PointerDeviceKind.mouse &&
-                                      event.buttons == kSecondaryMouseButton) {
-                                    isFileContextMenuShown = true;
-                                    openIconContextMenuRightClick(
-                                            context, event, file)
-                                        .then((value) =>
-                                            isFileContextMenuShown = false);
-                                  }
-                                },
-                                child: Material(
-                                  color: Colors.transparent,
-                                  child: GestureDetector(
-                                    onDoubleTap: () async {
-                                      if (isDir) {
-                                        openDirectory(file as Directory);
-                                      } else {
-                                        var filePath = file.path;
-                                        if (isPicker) {
-                                          stdout.write(filePath);
-                                          await stdout.flush();
-                                          exit(0);
-                                        }
-                                        var result = await Process.run(
-                                            'xdg-open', [filePath]);
-                                        if (result.exitCode != 0) {
-                                          stderr.writeln(
-                                              'Could not open $filePath: ${result.stderr}');
-                                        }
-                                      }
-                                    },
-                                    child: InkWell(
-                                      onTap: () {
-                                        setState(() {
-                                          if (selectedPaths.contains(file.path)) {
-                                            selectedPaths.remove(file.path);
-                                          } else {
-                                            selectedPaths.clear();
-                                            selectedPaths.add(file.path);
-                                          }
-                                        });
-                                      },
-                                      child: Container(
-                                        color: selectedPaths.contains(file.path) ? FyrTheme.accentColor.withOpacity(0.3) : Colors.transparent,
-                                        child: Stack(
-                                              alignment: Alignment.center,
-                                            children: [
-                                              Column(
-                                                mainAxisAlignment:
-                                                    MainAxisAlignment.center,
-                                                children: [
-                                                  (!isDir && (file.path.toLowerCase().endsWith('.png') || file.path.toLowerCase().endsWith('.jpg') || file.path.toLowerCase().endsWith('.jpeg') || file.path.toLowerCase().endsWith('.gif') || file.path.toLowerCase().endsWith('.webp')))
-                                                      ? Image.file(File(file.path), width: 48, height: 48, fit: BoxFit.cover)
-                                                      : Icon(
-                                                    isDir
-                                                        ? Icons.folder
-                                                        : Icons.file_copy,
-                                                    size: 48.0,
-                                                    color: FyrTheme.accentColor,
-                                                  ),
-                                                  Text(
-                                                    isDir
-                                                        ? file.path
-                                                            .split('/')
-                                                            .last
-                                                        : file.uri.pathSegments
-                                                            .last,
-                                                    textAlign: TextAlign.center,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
-                                                    maxLines: 1,
-                                                    style: const TextStyle(fontSize: 11),
-                                                  ),
-                                                ],
-                                              ),
-                                              if (currentFileInfo.tag != null)
-                                                Positioned(
-                                                    top: 24,
-                                                    left: 24,
-                                                    child: getDotByTag(
-                                                        currentFileInfo.tag!)),
-                                            ]),
-                                      ),
-                                    ))),
-                              );
-                      },
-                    ),
+                    isListView 
+                    ? ListView.builder(
+                        controller: _scrollController,
+                        itemCount: files.length,
+                        itemBuilder: (context, index) => _buildFileItem(files[index], index, true),
+                      )
+                    : GridView.builder(
+                        controller: _scrollController,
+                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: ((width - sidebarWidth) / 120).floor().clamp(1, 100)),
+                        itemCount: files.length,
+                        itemBuilder: (context, index) => _buildFileItem(files[index], index, false),
+                      ),
                     if (dragStart != null && dragCurrent != null)
                       Positioned(
                         left: min(dragStart!.dx, dragCurrent!.dx),
@@ -1431,6 +1608,30 @@ class _FyrFilesState extends State<FyrFiles> {
               },
             ),
           ),
+        if (_isArchive(file.path))
+          PopupMenuItem(
+            child: ListTile(
+              leading: const Icon(Icons.unarchive),
+              title: const Text('Extract Here'),
+              onTap: () {
+                Navigator.pop(context);
+                _extractArchive(file.path);
+              },
+            ),
+          ),
+        PopupMenuItem(
+          child: ListTile(
+            leading: const Icon(Icons.archive),
+            title: const Text('Compress...'),
+            onTap: () {
+              Navigator.pop(context);
+              List<String> toCompress = selectedPaths.contains(file.path) 
+                  ? selectedPaths.toList() 
+                  : [file.path];
+              _handleCompress(toCompress);
+            },
+          ),
+        ),
         PopupMenuItem(
           child: Column(
             children: [
@@ -1825,6 +2026,30 @@ class _FyrFilesState extends State<FyrFiles> {
                 selectedPaths.clear();
               });
               Navigator.pop(context);
+            },
+          ),
+        ),
+        if (_isArchive(file.path))
+          PopupMenuItem(
+            child: ListTile(
+              leading: const Icon(Icons.unarchive),
+              title: const Text('Extract Here'),
+              onTap: () {
+                Navigator.pop(context);
+                _extractArchive(file.path);
+              },
+            ),
+          ),
+        PopupMenuItem(
+          child: ListTile(
+            leading: const Icon(Icons.archive),
+            title: const Text('Compress...'),
+            onTap: () {
+              Navigator.pop(context);
+              List<String> toCompress = selectedPaths.contains(file.path) 
+                  ? selectedPaths.toList() 
+                  : [file.path];
+              _handleCompress(toCompress);
             },
           ),
         ),

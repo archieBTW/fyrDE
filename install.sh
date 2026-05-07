@@ -70,7 +70,7 @@ install_deps() {
             "wireplumber" "pipewire" "pipewire-pulse" "wlsunset" "cmake" "cpio" "pkg-config" "gcc" "wf-recorder" "grim" "ninja" "clang"
             "meson" "scdoc" "wayland-protocols" "pcre2" "json-c" "pango" "cairo" "gdk-pixbuf2" "unzip" "virt-viewer" "libvirt" "virt-install" "qemu-desktop"
             "bluez" "bluez-utils" "xdg-utils" "slurp" "libnotify" "polkit-gnome" "network-manager-applet" "pavucontrol" "playerctl" "jq" "libcanberra" "psmisc" "pamixer" "sddm" "accountsservice" "qt5-declarative" "qt5-quickcontrols" "qt5-quickcontrols2" "qt5-graphicaleffects" "kdeconnect"
-            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "mpv" "ffmpeg" "noto-fonts-emoji" "zsh" "xorg-server-xvfb"
+            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "mpv" "ffmpeg" "noto-fonts-emoji" "zsh" "xorg-server-xvfb" "p7zip" "zip" "tar" "gzip" "bzip2" "nodejs" "npm" "clang"
         )
         sudo pacman -S --needed --noconfirm "${deps[@]}"
         yay -S --needed --noconfirm scenefx0.4 wlroots0.19 xdg-desktop-portal-termfilechooser-hunkyburrito-git
@@ -84,7 +84,7 @@ install_deps() {
             "xclip" "wl-clipboard" "brightnessctl" "wireplumber" "pipewire" "pipewire-pulse" "cmake" "cpio"
             "pkg-config" "gcc" "wf-recorder" "grim" "ninja-build" "clang" "curl" "git" "unzip" "xz-utils" "zip" "libglu1-mesa" "sway" "virt-viewer" "libvirt-clients" "libvirt-daemon-system" "virtinst" "qemu-kvm" "qemu-system"
             "bluez" "bluez-tools" "xdg-utils" "slurp" "libnotify-bin" "polkit-gnome" "network-manager-gnome" "pavucontrol" "playerctl" "jq" "libcanberra-gtk3-module" "libcanberra-gtk-module" "psmisc" "pamixer" "sddm" "accountsservice" "policykit-1-gnome" "qml-module-qtquick-controls" "qml-module-qtquick-controls2" "qml-module-qtgraphicaleffects" "kdeconnect"
-            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "libmpv-dev" "ffmpeg" "fonts-noto-color-emoji" "zsh" "xvfb"
+            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "libmpv-dev" "ffmpeg" "fonts-noto-color-emoji" "zsh" "xvfb" "p7zip-full" "tar" "gzip" "bzip2" "nodejs" "npm" "clangd"
         )
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${deps[@]}"
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y wlsunset wmenu swayfx || echo "Optional packages missed."
@@ -98,7 +98,7 @@ install_deps() {
             "xclip" "wl-clipboard" "brightnessctl" "wireplumber" "pipewire" "pipewire-pulseaudio" "cmake" "cpio"
             "pkgconf" "gcc" "wf-recorder" "grim" "ninja-build" "clang" "curl" "git" "unzip" "zip" "mesa-libGLU" "sway" "virt-viewer" "libvirt" "virt-install" "qemu-kvm"
             "bluez" "bluez-utils" "xdg-utils" "slurp" "libnotify" "polkit-gnome" "nm-connection-editor" "pavucontrol" "playerctl" "jq" "libcanberra-gtk3" "psmisc" "pamixer" "sddm" "accountsservice" "lxqt-policykit" "qt5-qtquickcontrols" "qt5-qtquickcontrols2" "qt5-qtgraphicaleffects" "kdeconnect"
-            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "mpv-libs-devel" "ffmpeg" "google-noto-emoji-color-fonts" "zsh" "xorg-x11-server-Xvfb"
+            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "mpv-libs-devel" "ffmpeg" "google-noto-emoji-color-fonts" "zsh" "xorg-x11-server-Xvfb" "p7zip" "tar" "gzip" "bzip2" "nodejs" "npm" "clang"
         )
         sudo dnf install -y "${deps[@]}"
         sudo dnf install -y wlsunset wmenu swayfx || echo "Optional packages missed."
@@ -127,6 +127,9 @@ install_flutter() {
         flutter doctor
         flutter config --enable-linux-desktop
     fi
+    
+    sudo ln -sf /opt/flutter/bin/flutter /usr/local/bin/flutter
+    sudo ln -sf /opt/flutter/bin/dart /usr/local/bin/dart
 }
 
 build_swayfx() {
@@ -546,6 +549,7 @@ setup_themes() {
         cp -r ./themes/gtk-3.0/* ~/.themes/Fyr-Dark/gtk-3.0/
         mkdir -p ~/.config/gtk-4.0
         cp ./themes/gtk-4.0/gtk-dark.css ~/.config/gtk-4.0/gtk.css
+        mkdir -p ~/.config/gtk-3.0
         
         cat <<EOF > ~/.config/gtk-3.0/settings.ini
 [Settings]
