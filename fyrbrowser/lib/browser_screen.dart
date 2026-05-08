@@ -73,7 +73,9 @@ class _BrowserScreenState extends State<BrowserScreen> {
   }
 
   Future<void> _initManager() async {
-    await _manager.initialize();
+    await _manager.initialize(
+      userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+    );
   }
 
   Future<void> _loadData() async {
@@ -170,6 +172,9 @@ class _BrowserScreenState extends State<BrowserScreen> {
         if (!mounted) return;
         _showContextMenu(x, y, typeFlags, linkUrl, sourceUrl, selectionText, isEditable);
       },
+      onConsoleMessage: (int level, String message, String source, int line) {
+        debugPrint('WebView Console [$level] ($source:$line): $message');
+      },
     ));
     void setupChannels() {
       if (tab.controller.value) {
@@ -217,6 +222,16 @@ class _BrowserScreenState extends State<BrowserScreen> {
     if (!tab.controller.value) return;
     tab.controller.executeJavaScript('''
       (function() {
+        const features = {
+          SharedArrayBuffer: typeof SharedArrayBuffer !== 'undefined',
+          WebAssembly: typeof WebAssembly !== 'undefined',
+          AudioContext: typeof AudioContext !== 'undefined',
+          AudioWorklet: !!(typeof AudioContext !== 'undefined' && AudioContext.prototype.audioWorklet),
+          OffscreenCanvas: typeof OffscreenCanvas !== 'undefined',
+          WebGL: (function() { try { var canvas = document.createElement('canvas'); return !!(window.WebGLRenderingContext && (canvas.getContext('webgl') || canvas.getContext('experimental-webgl'))); } catch(e) { return false; } })(),
+        };
+        console.log('FyrBrowser Feature Check: ' + JSON.stringify(features));
+        
         const getIcon = () => {
           const appleTouch = document.querySelector('link[rel="apple-touch-icon"]');
           if (appleTouch) return appleTouch.href;

@@ -2349,7 +2349,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         _micSource = SoLoud.instance.setBufferStream(
           maxBufferSizeBytes: 1024 * 1024 * 10,
           sampleRate: 44100,
-          channels: Channels.mono,
+          channels: Channels.stereo,
           format: BufferType.s16le,
           bufferingTimeNeeds: 0,
         );
@@ -2365,7 +2365,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           encoder: AudioEncoder.pcm16bits,
           device: _selectedInputDevice,
           sampleRate: 44100,
-          numChannels: 1,
+          numChannels: 2,
         ),
       );
 

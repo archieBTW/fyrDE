@@ -122,11 +122,14 @@ Future<List<double>?> extractWavWaveform(String path, int chunks) async {
     }
 
     int numFrames = dataSize ~/ bytesPerFrame;
+    if (numFrames <= 0) return null;
+    
     int framesPerChunk = numFrames ~/ chunks;
-    if (framesPerChunk <= 0) return null;
+    if (framesPerChunk <= 0) framesPerChunk = 1;
+    int actualChunks = numFrames < chunks ? numFrames : chunks;
 
     List<double> data = [];
-    for (int i = 0; i < chunks; i++) {
+    for (int i = 0; i < actualChunks; i++) {
       double maxAmp = 0;
       for (int j = 0; j < framesPerChunk; j++) {
         int frameIdx = i * framesPerChunk + j;

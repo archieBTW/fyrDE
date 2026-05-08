@@ -8,6 +8,7 @@ import 'panes/display_pane.dart';
 import 'panes/power_pane.dart';
 import 'panes/personalization_pane.dart';
 import 'panes/default_apps_pane.dart';
+import 'panes/sound_pane.dart';
 import 'fyr_theme.dart';
 
 void main() async {
@@ -89,6 +90,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       SettingsCategory('Wi-Fi', Icons.wifi, WiFiPane()),
       SettingsCategory('Bluetooth', Icons.bluetooth, BluetoothPane()),
       SettingsCategory('Displays', Icons.monitor, DisplayPane()),
+      SettingsCategory('Sound', Icons.volume_up, SoundPane()),
       SettingsCategory('Personalization', Icons.palette, PersonalizationPane()),
       SettingsCategory('Default Apps', Icons.apps, DefaultAppsPane()),
       SettingsCategory('Power', Icons.battery_charging_full, PowerPane()),

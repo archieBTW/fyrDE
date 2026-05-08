@@ -51,14 +51,15 @@ class AdBlockEngine {
         // Block Fetch
         const originalFetch = window.fetch;
         window.fetch = function() {
-          const url = arguments[0];
+          let url = arguments[0];
+          if (url instanceof Request) url = url.url;
           if (typeof url === 'string') {
             if (adDomains.some(domain => url.includes(domain))) {
               console.log('FyrBrowser blocked fetch to: ' + url);
               return Promise.reject(new Error('Blocked by FyrBrowser AdBlock'));
             }
           }
-          return originalFetch.apply(this, arguments);
+          return originalFetch.apply(window, arguments);
         };
 
         // Block XHR

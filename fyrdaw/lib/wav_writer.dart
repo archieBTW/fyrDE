@@ -7,7 +7,7 @@ class WavWriter {
   final int sampleRate;
   final int channels;
 
-  WavWriter(String path, {this.sampleRate = 44100, this.channels = 1})
+  WavWriter(String path, {this.sampleRate = 44100, this.channels = 2})
     : _file = File(path).openSync(mode: FileMode.write) {
     // Reserve 44 bytes for header
     _file.writeFromSync(Uint8List(44));

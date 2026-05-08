@@ -67,10 +67,10 @@ install_deps() {
             "jq" "mesa-utils" "swaybg" "swaylock" "swayidle" "xorg-xwayland" "foot" "wmenu"
             "gtk-layer-shell" "xdg-desktop-portal" "xdg-desktop-portal-gtk"
             "xdg-desktop-portal-wlr" "xclip" "wl-clipboard" "brightnessctl"
-            "wireplumber" "pipewire" "pipewire-pulse" "wlsunset" "cmake" "cpio" "pkg-config" "gcc" "wf-recorder" "grim" "ninja" "clang"
+            "wireplumber" "pipewire" "pipewire-pulse" "wlsunset" "cmake" "cpio" "pkg-config" "gcc" "wf-recorder" "grim" "ninja" "clang" "alsa-utils"
             "meson" "scdoc" "wayland-protocols" "pcre2" "json-c" "pango" "cairo" "gdk-pixbuf2" "unzip" "virt-viewer" "libvirt" "virt-install" "qemu-desktop"
             "bluez" "bluez-utils" "xdg-utils" "slurp" "libnotify" "polkit-gnome" "network-manager-applet" "pavucontrol" "playerctl" "jq" "libcanberra" "psmisc" "pamixer" "sddm" "accountsservice" "qt5-declarative" "qt5-quickcontrols" "qt5-quickcontrols2" "qt5-graphicaleffects" "kdeconnect"
-            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "mpv" "ffmpeg" "noto-fonts-emoji" "zsh" "xorg-server-xvfb" "p7zip" "zip" "tar" "gzip" "bzip2" "nodejs" "npm" "clang" "virglrenderer"
+            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "mpv" "ffmpeg" "noto-fonts-emoji" "zsh" "xorg-server-xvfb" "p7zip" "zip" "tar" "gzip" "bzip2" "nodejs" "npm" "clang" "virglrenderer" "libpulse"
             "gstreamer" "gst-plugins-base" "gst-plugins-good" "gst-plugins-bad" "gst-plugins-ugly" "gst-libav" "gst-plugin-pipewire" "libcamera" "gst-plugin-libcamera"
         )
         sudo pacman -S --needed --noconfirm "${deps[@]}"
@@ -82,10 +82,10 @@ install_deps() {
         deps=(
             "swaybg" "swaylock" "swayidle" "xwayland" "foot" "libgtk-layer-shell-dev"
             "xdg-desktop-portal" "xdg-desktop-portal-gtk" "xdg-desktop-portal-wlr"
-            "xclip" "wl-clipboard" "brightnessctl" "wireplumber" "pipewire" "pipewire-pulse" "cmake" "cpio"
+            "xclip" "wl-clipboard" "brightnessctl" "wireplumber" "pipewire" "pipewire-pulse" "cmake" "cpio" "libasound2-dev" "alsa-utils"
             "pkg-config" "gcc" "wf-recorder" "grim" "ninja-build" "clang" "curl" "git" "unzip" "xz-utils" "zip" "libglu1-mesa" "sway" "virt-viewer" "libvirt-clients" "libvirt-daemon-system" "virtinst" "qemu-kvm" "qemu-system"
             "bluez" "bluez-tools" "xdg-utils" "slurp" "libnotify-bin" "polkit-gnome" "network-manager-gnome" "pavucontrol" "playerctl" "jq" "libcanberra-gtk3-module" "libcanberra-gtk-module" "psmisc" "pamixer" "sddm" "accountsservice" "policykit-1-gnome" "qml-module-qtquick-controls" "qml-module-qtquick-controls2" "qml-module-qtgraphicaleffects" "kdeconnect"
-            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "libmpv-dev" "ffmpeg" "fonts-noto-color-emoji" "zsh" "xvfb" "p7zip-full" "tar" "gzip" "bzip2" "nodejs" "npm" "clangd" "libvirglrenderer-dev"
+            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "libmpv-dev" "ffmpeg" "fonts-noto-color-emoji" "zsh" "xvfb" "p7zip-full" "tar" "gzip" "bzip2" "nodejs" "npm" "clangd" "libvirglrenderer-dev" "libpulse-dev"
             "libgstreamer1.0-dev" "libgstreamer-plugins-base1.0-dev" "gstreamer1.0-plugins-base" "gstreamer1.0-plugins-good" "gstreamer1.0-plugins-bad" "gstreamer1.0-libav"
         )
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${deps[@]}"
@@ -301,12 +301,16 @@ EOF
             ;;
         "fyrvideo")
             sudo ln -sf /opt/fyrvideo/fyrvideo /usr/local/bin/fyrvideo
+            if [ -f "./fyrvideo/assets/icons/videoPlayer.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrvideo/assets/icons/videoPlayer.png /usr/share/icons/hicolor/512x512/apps/fyrvideo.png
+            fi
             sudo tee /usr/share/applications/fyrvideo.desktop > /dev/null <<'EOF'
 [Desktop Entry]
 Name=Watchbox
 Comment=Media player for FyrDE
 Exec=/usr/local/bin/fyrvideo %f
-Icon=video-x-generic
+Icon=fyrvideo
 Terminal=false
 Type=Application
 Categories=AudioVideo;Video;Player;
@@ -397,12 +401,16 @@ EOF
             ;;
         "fyrcamera")
             sudo ln -sf /opt/fyrcamera/fyrcamera /usr/local/bin/fyrcamera
+            if [ -f "./fyrcamera/assets/icons/camera.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrcamera/assets/icons/camera.png /usr/share/icons/hicolor/512x512/apps/fyrcamera.png
+            fi
             sudo tee /usr/share/applications/fyrcamera.desktop > /dev/null <<'EOF'
 [Desktop Entry]
 Name=Camera
 Comment=Camera application for FyrDE
 Exec=/usr/local/bin/fyrcamera
-Icon=camera-webcam
+Icon=fyrcamera
 Terminal=false
 Type=Application
 Categories=AudioVideo;Video;
