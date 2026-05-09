@@ -12,7 +12,10 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:desktop_drop/desktop_drop.dart';
 import 'fyr_theme.dart';
+
+const dragChannel = MethodChannel('fyr_files/drag');
 
 enum ResizeZoneEdge {
   left,
@@ -998,57 +1001,90 @@ class _FyrFilesState extends State<FyrFiles> {
       );
     }
 
-    return Listener(
-      behavior: HitTestBehavior.translucent,
-      onPointerDown: (PointerDownEvent event) {
-        if (event.kind == PointerDeviceKind.mouse && event.buttons == kSecondaryMouseButton) {
-          isFileContextMenuShown = true;
-          openIconContextMenuRightClick(context, event, file).then((value) => isFileContextMenuShown = false);
-        }
+    return Draggable<List<String>>(
+      data: isSelected ? selectedPaths.toList() : [file.path],
+      feedback: Material(
+        color: Colors.transparent,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(
+            color: FyrTheme.accentColor.withOpacity(0.9),
+            borderRadius: BorderRadius.circular(8),
+            boxShadow: [
+              BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 8, spreadRadius: 2)
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(isDir ? Icons.folder : Icons.file_copy, color: Colors.white, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                isSelected && selectedPaths.length > 1 
+                  ? '${selectedPaths.length} items' 
+                  : p.basename(file.path),
+                style: const TextStyle(color: Colors.white, fontSize: 14),
+              ),
+            ],
+          ),
+        ),
+      ),
+      onDragStarted: () {
+        List<String> paths = isSelected ? selectedPaths.toList() : [file.path];
+        dragChannel.invokeMethod('startDrag', paths);
       },
-      child: GestureDetector(
-        onDoubleTap: () async {
-          if (isDir) {
-            openDirectory(file as Directory);
-          } else {
-            var filePath = file.path;
-            if (isPicker) { stdout.write(filePath); await stdout.flush(); exit(0); }
-            var result = await Process.run('xdg-open', [filePath]);
-            if (result.exitCode != 0) { stderr.writeln('Could not open $filePath: ${result.stderr}'); }
+      child: Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: (PointerDownEvent event) {
+          if (event.kind == PointerDeviceKind.mouse && event.buttons == kSecondaryMouseButton) {
+            isFileContextMenuShown = true;
+            openIconContextMenuRightClick(context, event, file).then((value) => isFileContextMenuShown = false);
           }
         },
-        onLongPressStart: (LongPressStartDetails event) {
-          isFileContextMenuShown = true;
-          openIconContextMenu(context, event, file).then((value) => isFileContextMenuShown = false);
-        },
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: () {
-              bool isControlPressed = HardwareKeyboard.instance.isControlPressed;
-              bool isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
-              setState(() {
-                if (isControlPressed) {
-                  if (selectedPaths.contains(file.path)) {
-                    selectedPaths.remove(file.path);
+        child: GestureDetector(
+          onDoubleTap: () async {
+            if (isDir) {
+              openDirectory(file as Directory);
+            } else {
+              var filePath = file.path;
+              if (isPicker) { stdout.write(filePath); await stdout.flush(); exit(0); }
+              var result = await Process.run('xdg-open', [filePath]);
+              if (result.exitCode != 0) { stderr.writeln('Could not open $filePath: ${result.stderr}'); }
+            }
+          },
+          onLongPressStart: (LongPressStartDetails event) {
+            isFileContextMenuShown = true;
+            openIconContextMenu(context, event, file).then((value) => isFileContextMenuShown = false);
+          },
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () {
+                bool isControlPressed = HardwareKeyboard.instance.isControlPressed;
+                bool isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
+                setState(() {
+                  if (isControlPressed) {
+                    if (selectedPaths.contains(file.path)) {
+                      selectedPaths.remove(file.path);
+                    } else {
+                      selectedPaths.add(file.path);
+                      _lastSelectedIndex = index;
+                    }
+                  } else if (isShiftPressed && _lastSelectedIndex != null) {
+                    int start = min(_lastSelectedIndex!, index);
+                    int end = max(_lastSelectedIndex!, index);
+                    for (int i = start; i <= end; i++) {
+                      selectedPaths.add(files[i].path);
+                    }
                   } else {
+                    selectedPaths.clear();
                     selectedPaths.add(file.path);
                     _lastSelectedIndex = index;
                   }
-                } else if (isShiftPressed && _lastSelectedIndex != null) {
-                  int start = min(_lastSelectedIndex!, index);
-                  int end = max(_lastSelectedIndex!, index);
-                  for (int i = start; i <= end; i++) {
-                    selectedPaths.add(files[i].path);
-                  }
-                } else {
-                  selectedPaths.clear();
-                  selectedPaths.add(file.path);
-                  _lastSelectedIndex = index;
-                }
-              });
-            },
-            child: content,
+                });
+              },
+              child: content,
+            ),
           ),
         ),
       ),
@@ -1367,72 +1403,88 @@ class _FyrFilesState extends State<FyrFiles> {
                             if (snapshot.hasData) {
                               files = snapshot.data as List<FileSystemEntity>;
     double sidebarWidth = isSidebarCollapsed ? 64.0 : 200.0;
-    return GestureDetector(
-                onTap: () {
-                  setState(() {
-                    selectedPaths.clear();
-                    _lastSelectedIndex = null;
-                  });
-                },
-                onLongPressStart: (LongPressStartDetails details) async {
-                  await openBodyContextMenu(context, details);
-                },
-                onSecondaryTapDown: (TapDownDetails details) async {
-                  if (!isFileContextMenuShown) {
-                    await openBodyContextMenuRightClickTap(context, details.globalPosition);
-                  }
-                },
-                onPanStart: (details) {
-                  setState(() {
-                    dragStart = details.localPosition;
-                    dragCurrent = details.localPosition;
-                    selectedPaths.clear();
-                    _lastSelectedIndex = null;
-                  });
-                },
-                onPanUpdate: (details) {
-                  setState(() {
-                    dragCurrent = details.localPosition;
-                  });
-                  _updateSelection();
-                },
-                onPanEnd: (details) {
-                  setState(() {
-                    dragStart = null;
-                    dragCurrent = null;
-                  });
-                },
-                child: Stack(
-                  children: [
-                    isListView 
-                    ? ListView.builder(
-                        controller: _scrollController,
-                        itemCount: files.length,
-                        itemBuilder: (context, index) => _buildFileItem(files[index], index, true),
-                      )
-                    : GridView.builder(
-                        controller: _scrollController,
-                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: ((width - sidebarWidth) / 120).floor().clamp(1, 100)),
-                        itemCount: files.length,
-                        itemBuilder: (context, index) => _buildFileItem(files[index], index, false),
-                      ),
-                    if (dragStart != null && dragCurrent != null)
-                      Positioned(
-                        left: min(dragStart!.dx, dragCurrent!.dx),
-                        top: min(dragStart!.dy, dragCurrent!.dy),
-                        width: (dragCurrent!.dx - dragStart!.dx).abs(),
-                        height: (dragCurrent!.dy - dragStart!.dy).abs(),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: FyrTheme.accentColor.withOpacity(0.3),
-                            border: Border.all(color: FyrTheme.accentColor, width: 1),
+    return DropTarget(
+      onDragDone: (details) async {
+        for (var file in details.files) {
+          final sourcePath = file.path;
+          final fileName = p.basename(sourcePath);
+          final targetPath = p.join(currentDir.path, fileName);
+          
+          if (FileSystemEntity.isFileSync(sourcePath)) {
+            await File(sourcePath).copy(targetPath);
+          } else if (FileSystemEntity.isDirectorySync(sourcePath)) {
+            await Process.run('cp', ['-r', sourcePath, targetPath]);
+          }
+        }
+        setState(() {});
+      },
+      child: GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      selectedPaths.clear();
+                      _lastSelectedIndex = null;
+                    });
+                  },
+                  onLongPressStart: (LongPressStartDetails details) async {
+                    await openBodyContextMenu(context, details);
+                  },
+                  onSecondaryTapDown: (TapDownDetails details) async {
+                    if (!isFileContextMenuShown) {
+                      await openBodyContextMenuRightClickTap(context, details.globalPosition);
+                    }
+                  },
+                  onPanStart: (details) {
+                    setState(() {
+                      dragStart = details.localPosition;
+                      dragCurrent = details.localPosition;
+                      selectedPaths.clear();
+                      _lastSelectedIndex = null;
+                    });
+                  },
+                  onPanUpdate: (details) {
+                    setState(() {
+                      dragCurrent = details.localPosition;
+                    });
+                    _updateSelection();
+                  },
+                  onPanEnd: (details) {
+                    setState(() {
+                      dragStart = null;
+                      dragCurrent = null;
+                    });
+                  },
+                  child: Stack(
+                    children: [
+                      isListView 
+                      ? ListView.builder(
+                          controller: _scrollController,
+                          itemCount: files.length,
+                          itemBuilder: (context, index) => _buildFileItem(files[index], index, true),
+                        )
+                      : GridView.builder(
+                          controller: _scrollController,
+                          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: ((width - sidebarWidth) / 120).floor().clamp(1, 100)),
+                          itemCount: files.length,
+                          itemBuilder: (context, index) => _buildFileItem(files[index], index, false),
+                        ),
+                      if (dragStart != null && dragCurrent != null)
+                        Positioned(
+                          left: min(dragStart!.dx, dragCurrent!.dx),
+                          top: min(dragStart!.dy, dragCurrent!.dy),
+                          width: (dragCurrent!.dx - dragStart!.dx).abs(),
+                          height: (dragCurrent!.dy - dragStart!.dy).abs(),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: FyrTheme.accentColor.withOpacity(0.3),
+                              border: Border.all(color: FyrTheme.accentColor, width: 1),
+                            ),
                           ),
                         ),
-                      ),
-                  ],
+                    ],
+                  ),
                 ),
-              );
+    );
             }
             return const CircularProgressIndicator();
           },

@@ -287,6 +287,11 @@ class _FyrVirtState extends State<FyrVirt> {
     final cpuController = TextEditingController(text: '2');
     final diskController = TextEditingController(text: '20');
     final isoController = TextEditingController();
+    final descController = TextEditingController();
+    String firmware = 'BIOS';
+    bool tpm = false;
+    bool autostart = false;
+    String network = 'NAT';
 
     if (!mounted) return;
 
@@ -298,34 +303,88 @@ class _FyrVirtState extends State<FyrVirt> {
             backgroundColor: const Color(0xFF2A282C),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
             title: const Text('Create New Virtual Machine', style: TextStyle(color: Colors.white)),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _buildDialogField('VM Name', nameController),
-                  const SizedBox(height: 12),
-                  _buildDialogField('RAM (MiB)', ramController, isNumber: true),
-                  const SizedBox(height: 12),
-                  _buildDialogField('CPU Cores', cpuController, isNumber: true),
-                  const SizedBox(height: 12),
-                  _buildDialogField('Disk Size (GiB)', diskController, isNumber: true),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(child: _buildDialogField('ISO Path', isoController)),
-                      const SizedBox(width: 8),
-                      IconButton(
-                        icon: Icon(Icons.folder_open, color: FyrTheme.accentColor),
-                        onPressed: () async {
-                          final result = await Process.run('fyrfiles', ['--picker']);
-                          if (result.exitCode == 0) {
-                            isoController.text = result.stdout.toString().trim();
-                          }
-                        },
-                      ),
-                    ],
-                  ),
-                ],
+            content: SizedBox(
+              width: 500,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _buildDialogField('VM Name', nameController),
+                    const SizedBox(height: 12),
+                    _buildDialogField('Description', descController),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(child: _buildDialogField('RAM (MiB)', ramController, isNumber: true)),
+                        const SizedBox(width: 16),
+                        Expanded(child: _buildDialogField('CPU Cores', cpuController, isNumber: true)),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    _buildDialogField('Disk Size (GiB)', diskController, isNumber: true),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(child: _buildDialogField('ISO Path', isoController)),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          icon: Icon(Icons.folder_open, color: FyrTheme.accentColor),
+                          onPressed: () async {
+                            final result = await Process.run('fyrfiles', ['--picker']);
+                            if (result.exitCode == 0) {
+                              isoController.text = result.stdout.toString().trim();
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+                    const Divider(color: Colors.white10),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        const Text('Firmware', style: TextStyle(color: Colors.white70)),
+                        const Spacer(),
+                        DropdownButton<String>(
+                          value: firmware,
+                          dropdownColor: const Color(0xFF2A282C),
+                          underline: Container(),
+                          style: TextStyle(color: FyrTheme.accentColor),
+                          items: ['BIOS', 'UEFI'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+                          onChanged: (val) => setDialogState(() => firmware = val!),
+                        ),
+                      ],
+                    ),
+                    Row(
+                      children: [
+                        const Text('Network', style: TextStyle(color: Colors.white70)),
+                        const Spacer(),
+                        DropdownButton<String>(
+                          value: network,
+                          dropdownColor: const Color(0xFF2A282C),
+                          underline: Container(),
+                          style: TextStyle(color: FyrTheme.accentColor),
+                          items: ['NAT', 'Bridge'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+                          onChanged: (val) => setDialogState(() => network = val!),
+                        ),
+                      ],
+                    ),
+                    SwitchListTile(
+                      title: const Text('TPM 2.0 Security', style: TextStyle(color: Colors.white70, fontSize: 14)),
+                      value: tpm,
+                      activeColor: FyrTheme.accentColor,
+                      contentPadding: EdgeInsets.zero,
+                      onChanged: (val) => setDialogState(() => tpm = val),
+                    ),
+                    SwitchListTile(
+                      title: const Text('Autostart on Boot', style: TextStyle(color: Colors.white70, fontSize: 14)),
+                      value: autostart,
+                      activeColor: FyrTheme.accentColor,
+                      contentPadding: EdgeInsets.zero,
+                      onChanged: (val) => setDialogState(() => autostart = val),
+                    ),
+                  ],
+                ),
               ),
             ),
             actions: [
@@ -340,6 +399,7 @@ class _FyrVirtState extends State<FyrVirt> {
                   final cpus = cpuController.text;
                   final disk = diskController.text;
                   final iso = isoController.text;
+                  final desc = descController.text;
 
                   if (name.isEmpty || iso.isEmpty) return;
 
@@ -347,7 +407,7 @@ class _FyrVirtState extends State<FyrVirt> {
                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Creating VM...')));
 
                   try {
-                    final result = await Process.run('virt-install', [
+                    List<String> args = [
                       '--name', name,
                       '--ram', ram,
                       '--vcpus', cpus,
@@ -357,10 +417,34 @@ class _FyrVirtState extends State<FyrVirt> {
                       '--graphics', 'spice,listen=none',
                       '--connect', 'qemu:///session',
                       '--noautoconsole'
-                    ]);
+                    ];
+
+                    if (firmware == 'UEFI') {
+                      args.addAll(['--boot', 'uefi']);
+                    }
+
+                    if (tpm) {
+                      args.addAll(['--tpm', 'backend.type=emulator,model=tpm-tis,version=2.0']);
+                    }
+
+                    if (desc.isNotEmpty) {
+                      args.addAll(['--description', desc]);
+                    }
+
+                    if (network == 'Bridge') {
+                      args.addAll(['--network', 'bridge=br0']);
+                    } else {
+                      args.addAll(['--network', 'network=default']);
+                    }
+
+                    final result = await Process.run('virt-install', args);
                     
                     if (result.exitCode != 0) {
                       throw Exception(result.stderr.toString().trim());
+                    }
+
+                    if (autostart) {
+                      await Process.run('virsh', ['-c', 'qemu:///session', 'autostart', name]);
                     }
                     
                     refreshVMs();
@@ -413,12 +497,21 @@ class _FyrVirtState extends State<FyrVirt> {
       }
     }
 
+    // Check for Autostart
+    final autoResult = await Process.run('virsh', ['-c', 'qemu:///session', 'dominfo', vm.name]);
+    bool autostart = autoResult.stdout.toString().contains('Autostart:       enable');
+
+    // Check for Description
+    final descResult = await Process.run('virsh', ['-c', 'qemu:///session', 'desc', vm.name]);
+    String description = descResult.stdout.toString().trim();
+
     // Check for 3D acceleration
     final xmlResult = await Process.run('virsh', ['-c', 'qemu:///session', 'dumxml', vm.name]);
     bool accel3d = xmlResult.stdout.toString().contains("accel3d='yes'");
 
     final cpuController = TextEditingController(text: cpus);
     final memController = TextEditingController(text: memory);
+    final descController = TextEditingController(text: description);
 
     if (!mounted) return;
 
@@ -433,10 +526,27 @@ class _FyrVirtState extends State<FyrVirt> {
             content: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                _buildDialogField('Description', descController),
+                const SizedBox(height: 16),
                 _buildDialogField('CPU Cores', cpuController, isNumber: true),
                 const SizedBox(height: 16),
                 _buildDialogField('Memory (MiB)', memController, isNumber: true),
                 const SizedBox(height: 16),
+                Row(
+                  children: [
+                    const Text('Autostart on Boot', style: TextStyle(color: Colors.white, fontSize: 14)),
+                    const Spacer(),
+                    Switch(
+                      value: autostart,
+                      activeColor: FyrTheme.accentColor,
+                      onChanged: (val) {
+                        setDialogState(() {
+                          autostart = val;
+                        });
+                      },
+                    ),
+                  ],
+                ),
                 Row(
                   children: [
                     const Text('GPU 3D Acceleration', style: TextStyle(color: Colors.white, fontSize: 14)),
@@ -475,6 +585,17 @@ class _FyrVirtState extends State<FyrVirt> {
                     await Process.run('virsh', ['-c', 'qemu:///session', 'setmaxmem', vm.name, '${newMem}MiB', '--config']);
                     await Process.run('virsh', ['-c', 'qemu:///session', 'setmem', vm.name, '${newMem}MiB', '--config']);
                     
+                    // Update Autostart
+                    await Process.run('virsh', [
+                      '-c', 'qemu:///session',
+                      'autostart',
+                      vm.name,
+                      if (!autostart) '--disable'
+                    ]);
+
+                    // Update Description
+                    await Process.run('virsh', ['-c', 'qemu:///session', 'desc', vm.name, descController.text]);
+
                     // Apply 3D Accel using virt-xml
                     await Process.run('virt-xml', [
                       '--connect', 'qemu:///session',

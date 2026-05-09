@@ -181,17 +181,20 @@ class _LauncherScreenState extends State<LauncherScreen>
       for (var app in loadedApps) app.name: app,
     }.values.toList();
 
-    const orderedIds = [
+    final orderedIds = [
       'fyrbrowser.desktop',
       'fyrfiles.desktop',
       'fyrterm.desktop',
       'fyrstore.desktop',
       'fyrsettings.desktop',
+      'fyrcalculator.desktop',
       'fyrdaw.desktop',
       'fyrjournal.desktop',
       'fyrvirt.desktop',
       'fyrphotos.desktop',
       'fyrav.desktop',
+      'fyrcalender.desktop',
+      'fyrclock.desktop',
     ];
 
     uniqueApps.sort((a, b) {

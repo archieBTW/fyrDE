@@ -1,0 +1,22 @@
+# Flutter/Dart
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+build/
+*.so
+*.so.*
+*.a
+*.o
+*.pyc
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project specific ignores
+fyrbrowser/plugins/webview_cef/third/cef/
+bin/
+obj/

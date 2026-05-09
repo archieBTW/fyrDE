@@ -321,29 +321,35 @@ class _DockScreenState extends State<DockScreen> {
     if (iconName == null || iconName.isEmpty) return null;
     if (iconName.startsWith('/')) return iconName;
 
-    final possiblePaths = [
-      '/usr/share/pixmaps/$iconName.png',
-      '/usr/share/pixmaps/$iconName.svg',
-      '/usr/share/icons/${FyrTheme.iconThemeName}/scalable/apps/$iconName.svg',
-      '/usr/share/icons/${FyrTheme.iconThemeName}/48/apps/$iconName.svg',
-      '${Platform.environment['HOME']}/.local/share/icons/${FyrTheme.iconThemeName}/scalable/apps/$iconName.svg',
-      '${Platform.environment['HOME']}/.local/share/icons/${FyrTheme.iconThemeName}/48/apps/$iconName.svg',
-      '/usr/share/icons/hicolor/scalable/apps/$iconName.svg',
-      '/usr/share/icons/hicolor/48x48/apps/$iconName.png',
-      '/usr/share/icons/hicolor/128x128/apps/$iconName.png',
-      '/usr/share/icons/hicolor/256x256/apps/$iconName.png',
-      '/usr/share/icons/hicolor/512x512/apps/$iconName.png',
-      '/usr/share/icons/Adwaita/scalable/apps/$iconName.svg',
-      '/usr/share/icons/breeze/apps/48/$iconName.svg',
-      '/usr/share/icons/Papirus/48x48/apps/$iconName.svg',
-      '${Platform.environment['HOME']}/.local/share/icons/hicolor/scalable/apps/$iconName.svg',
-      '${Platform.environment['HOME']}/.local/share/icons/hicolor/48x48/apps/$iconName.png',
-      '${Platform.environment['HOME']}/.local/share/icons/hicolor/128x128/apps/$iconName.png',
-      '${Platform.environment['HOME']}/.local/share/icons/hicolor/256x256/apps/$iconName.png',
-      '${Platform.environment['HOME']}/.local/share/icons/hicolor/512x512/apps/$iconName.png',
-      '${Platform.environment['HOME']}/.local/share/icons/$iconName.png',
-      '${Platform.environment['HOME']}/.local/share/icons/$iconName.svg',
-    ];
+    final name = iconName.toLowerCase().replaceAll('com.example.', '').replaceAll('fyr_', 'fyr');
+    final possibleNames = [iconName, name, name.replaceAll('fyr', '')];
+    
+    final List<String> possiblePaths = [];
+    for (var n in possibleNames) {
+      possiblePaths.addAll([
+        '/usr/share/pixmaps/$n.png',
+        '/usr/share/pixmaps/$n.svg',
+        '/usr/share/icons/${FyrTheme.iconThemeName}/scalable/apps/$n.svg',
+        '/usr/share/icons/${FyrTheme.iconThemeName}/48/apps/$n.svg',
+        '${Platform.environment['HOME']}/.local/share/icons/${FyrTheme.iconThemeName}/scalable/apps/$n.svg',
+        '${Platform.environment['HOME']}/.local/share/icons/${FyrTheme.iconThemeName}/48/apps/$n.svg',
+        '/usr/share/icons/hicolor/scalable/apps/$n.svg',
+        '/usr/share/icons/hicolor/48x48/apps/$n.png',
+        '/usr/share/icons/hicolor/128x128/apps/$n.png',
+        '/usr/share/icons/hicolor/256x256/apps/$n.png',
+        '/usr/share/icons/hicolor/512x512/apps/$n.png',
+        '/usr/share/icons/Adwaita/scalable/apps/$n.svg',
+        '/usr/share/icons/breeze/apps/48/$n.svg',
+        '/usr/share/icons/Papirus/48x48/apps/$n.svg',
+        '${Platform.environment['HOME']}/.local/share/icons/hicolor/scalable/apps/$n.svg',
+        '${Platform.environment['HOME']}/.local/share/icons/hicolor/48x48/apps/$n.png',
+        '${Platform.environment['HOME']}/.local/share/icons/hicolor/128x128/apps/$n.png',
+        '${Platform.environment['HOME']}/.local/share/icons/hicolor/256x256/apps/$n.png',
+        '${Platform.environment['HOME']}/.local/share/icons/hicolor/512x512/apps/$n.png',
+        '${Platform.environment['HOME']}/.local/share/icons/$n.png',
+        '${Platform.environment['HOME']}/.local/share/icons/$n.svg',
+      ]);
+    }
 
     for (var p in possiblePaths) {
       if (await File(p).exists()) return p;
@@ -375,9 +381,13 @@ class _DockScreenState extends State<DockScreen> {
   ) {
     final exec = (pinnedApp['exec'] as String).toLowerCase();
     final appId = (window['app_id'] as String).toLowerCase();
+    final strippedId = appId.replaceAll('com.example.', '').replaceAll('fyr_', 'fyr');
     final name = (pinnedApp['name'] as String).toLowerCase();
+    
     if (exec.contains(appId) || appId.contains(exec.split(' ')[0])) return true;
+    if (exec.contains(strippedId) || strippedId.contains(exec.split(' ')[0])) return true;
     if (name.contains(appId) || appId.contains(name)) return true;
+    if (name.contains(strippedId) || strippedId.contains(name)) return true;
     return false;
   }
 
@@ -410,6 +420,11 @@ class _DockScreenState extends State<DockScreen> {
     bool hasMinimized = windows.any((w) => w['is_minimized']);
     bool allUp = windows.isNotEmpty && !hasMinimized;
     String matchId = exec ?? appId;
+
+    if (windows.isNotEmpty && (appId.contains('fyrbrowser') || (exec?.contains('fyrbrowser') ?? false))) {
+      _resumeWindow(windows.first);
+      return;
+    }
 
     if (windows.isEmpty || allUp) {
       if (exec != null) _launchApp(exec);

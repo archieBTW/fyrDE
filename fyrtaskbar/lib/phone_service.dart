@@ -25,6 +25,7 @@ class PhoneService {
   static DBusClient? _client;
   static Timer? _timer;
   static bool _isUpdating = false;
+  static final Set<String> _listenedDevices = {};
 
   static void init() {
     _client = DBusClient.session();
@@ -96,6 +97,10 @@ class PhoneService {
             batteryLevel: battery,
             isCharging: charging,
           );
+          
+          if (isReachable) {
+            _setupNotificationListener(id);
+          }
           break;
         } else if (isPaired && bestCandidate == null) {
           bestCandidate = PhoneInfo(id: id, name: name, isPaired: true, isConnected: false);
@@ -110,6 +115,13 @@ class PhoneService {
     }
   }
   
+  static Future<void> ring(String id) async {
+    final remote = DBusRemoteObject(_client!,
+        name: 'org.kde.kdeconnect',
+        path: DBusObjectPath('/modules/kdeconnect/devices/$id/findmyphone'));
+    await remote.callMethod('org.kde.kdeconnect.device.findmyphone', 'ring', []);
+  }
+
   static Future<void> ping(String id) async {
     final remote = DBusRemoteObject(_client!,
         name: 'org.kde.kdeconnect',
@@ -122,11 +134,6 @@ class PhoneService {
         name: 'org.kde.kdeconnect',
         path: DBusObjectPath('/modules/kdeconnect/devices/$id/sftp'));
     await remote.callMethod('org.kde.kdeconnect.device.sftp', 'mount', []);
-    final mpRes = await remote.getProperty('org.kde.kdeconnect.device.sftp', 'mountPoint');
-    final mp = (mpRes as DBusString).value;
-    if (mp.isNotEmpty) {
-      Process.run('fyrfiles', [mp]);
-    }
   }
 
   static Future<void> shareText(String id, String text) async {
@@ -134,5 +141,53 @@ class PhoneService {
         name: 'org.kde.kdeconnect',
         path: DBusObjectPath('/modules/kdeconnect/devices/$id/share'));
     await remote.callMethod('org.kde.kdeconnect.device.share', 'shareText', [DBusString(text)]);
+  }
+
+  static void _setupNotificationListener(String id) {
+    if (_listenedDevices.contains(id)) return;
+    _listenedDevices.add(id);
+
+    DBusSignalStream(_client!,
+            sender: 'org.kde.kdeconnect',
+            path: DBusObjectPath('/modules/kdeconnect/devices/$id/notifications'),
+            interface: 'org.kde.kdeconnect.device.notifications')
+        .listen((signal) {
+      if (signal.name == 'notificationPosted') {
+        _handlePhoneNotification(id, signal.values);
+      }
+    });
+  }
+
+  static void _handlePhoneNotification(String deviceId, List<DBusValue> values) async {
+    final rawNotificationId = (values[0] as DBusString).value;
+    // KDE Connect sanitizes IDs for object paths by replacing non-alphanumeric with _
+    final notificationId = rawNotificationId.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
+    
+    final path = '/modules/kdeconnect/devices/$deviceId/notifications/$notificationId';
+    final remote = DBusRemoteObject(_client!,
+        name: 'org.kde.kdeconnect',
+        path: DBusObjectPath(path));
+        
+    try {
+      final title = (await remote.getProperty('org.kde.kdeconnect.device.notifications.notification', 'title') as DBusString).value;
+      final text = (await remote.getProperty('org.kde.kdeconnect.device.notifications.notification', 'text') as DBusString).value;
+      final appName = (await remote.getProperty('org.kde.kdeconnect.device.notifications.notification', 'appName') as DBusString).value;
+      
+      List<String> actions = [];
+      try {
+        final actionsRes = await remote.getProperty('org.kde.kdeconnect.device.notifications.notification', 'actions');
+        actions = (actionsRes as DBusArray).children.map((v) => (v as DBusString).value).toList();
+      } catch (_) {}
+
+      SystemState.addNotification(
+        appName: appName,
+        title: '$title (from phone)',
+        body: text,
+        icon: 'phone',
+        actions: actions,
+      );
+    } catch (e) {
+      print('Error fetching phone notification details: $e');
+    }
   }
 }

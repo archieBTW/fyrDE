@@ -11,7 +11,8 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.8
-  webview_cef: ^0.2.2
+  webview_cef:
+    path: plugins/webview_cef
   window_manager: ^0.3.7
   url_launcher: ^6.2.1
   path_provider: ^2.1.1

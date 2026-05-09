@@ -4,6 +4,31 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'fyr_theme.dart';
 import 'main.dart';
+import 'phone_service.dart';
+
+class CalendarEvent {
+  final String id;
+  final String title;
+  final DateTime startTime;
+  final DateTime endTime;
+  final String source;
+
+  CalendarEvent({
+    required this.id,
+    required this.title,
+    required this.startTime,
+    required this.endTime,
+    required this.source,
+  });
+
+  factory CalendarEvent.fromJson(Map<String, dynamic> json) => CalendarEvent(
+        id: json['id'],
+        title: json['title'],
+        startTime: DateTime.parse(json['startTime']),
+        endTime: DateTime.parse(json['endTime']),
+        source: json['source'] ?? 'local',
+      );
+}
 
 class CalendarMenuPopup extends StatefulWidget {
   final VoidCallback onClose;
@@ -19,6 +44,7 @@ class _CalendarMenuPopupState extends State<CalendarMenuPopup>
   late Animation<Offset> _slideAnimation;
   DateTime _selectedDate = DateTime.now();
   final TextEditingController _locationController = TextEditingController();
+  List<CalendarEvent> _events = [];
 
   @override
   void initState() {
@@ -37,6 +63,20 @@ class _CalendarMenuPopupState extends State<CalendarMenuPopup>
     _animationController.forward();
     
     _locationController.text = SystemState.weatherLocation.value;
+    _loadEvents();
+  }
+
+  Future<void> _loadEvents() async {
+    try {
+      final file = File('${Platform.environment['HOME']}/.config/fyr/calendar_events.json');
+      if (await file.exists()) {
+        final content = await file.readAsString();
+        final List<dynamic> data = jsonDecode(content);
+        setState(() {
+          _events = data.map((e) => CalendarEvent.fromJson(e)).toList();
+        });
+      }
+    } catch (_) {}
   }
 
   @override
@@ -127,6 +167,80 @@ class _CalendarMenuPopupState extends State<CalendarMenuPopup>
                 ),
               ),
             ),
+            // Events Section
+            if (_events.any((e) =>
+                e.startTime.year == _selectedDate.year &&
+                e.startTime.month == _selectedDate.month &&
+                e.startTime.day == _selectedDate.day)) ...[
+              Divider(height: 1, color: FyrTheme.cardColor),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'EVENTS',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: FyrTheme.textColorMuted,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    ..._events
+                        .where((e) =>
+                            e.startTime.year == _selectedDate.year &&
+                            e.startTime.month == _selectedDate.month &&
+                            e.startTime.day == _selectedDate.day)
+                        .map((e) => Padding(
+                              padding: const EdgeInsets.only(bottom: 6),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    width: 4,
+                                    height: 16,
+                                    decoration: BoxDecoration(
+                                      color: FyrTheme.accentColor,
+                                      borderRadius: BorderRadius.circular(2),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      e.title,
+                                      style: TextStyle(
+                                        color: FyrTheme.textColor,
+                                        fontSize: 13,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  Text(
+                                    DateFormat('HH:mm').format(e.startTime),
+                                    style: TextStyle(
+                                      color: FyrTheme.textColorMuted,
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )),
+                  ],
+                ),
+              ),
+            ],
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: TextButton(
+                onPressed: () {
+                  Process.run('fyrcalender', []);
+                  widget.onClose();
+                },
+                child: Text('Open Calendar', style: TextStyle(color: FyrTheme.accentColor, fontSize: 12)),
+              ),
+            ),
             Divider(height: 1, color: FyrTheme.cardColor),
             // Weather Section
             Padding(
@@ -206,6 +320,63 @@ class _CalendarMenuPopupState extends State<CalendarMenuPopup>
                   );
                 },
               ),
+            ),
+            Divider(height: 1, color: FyrTheme.cardColor),
+            // Phone Section
+            ValueListenableBuilder<PhoneInfo?>(
+              valueListenable: SystemState.primaryPhone,
+              builder: (context, phone, _) {
+                if (phone == null || !phone.isPaired) return const SizedBox.shrink();
+                return Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Row(
+                        children: [
+                          Icon(
+                            phone.isConnected ? Icons.smartphone : Icons.phonelink_erase,
+                            size: 24,
+                            color: phone.isConnected ? FyrTheme.accentColor : FyrTheme.textColorMuted,
+                          ),
+                          SizedBox(width: 16),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  phone.name,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.bold,
+                                    color: FyrTheme.textColor,
+                                  ),
+                                ),
+                                Text(
+                                  phone.isConnected 
+                                    ? 'Connected • ${phone.batteryLevel}% Battery'
+                                    : 'Disconnected',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: FyrTheme.textColorMuted,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          if (phone.isConnected)
+                            IconButton(
+                              onPressed: () => PhoneService.ring(phone.id),
+                              icon: Icon(Icons.notifications_active_outlined, size: 20),
+                              color: FyrTheme.accentColor,
+                              tooltip: 'Find my phone',
+                            ),
+                        ],
+                      ),
+                    ),
+                    Divider(height: 1, color: FyrTheme.cardColor),
+                  ],
+                );
+              },
             ),
             ValueListenableBuilder<List<FyrNotification>>(
               valueListenable: SystemState.notifications,

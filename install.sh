@@ -22,7 +22,65 @@ WIDTH=$(echo $RES | cut -d'x' -f1)
 HEIGHT=$(echo $RES | cut -d'x' -f2)
 echo "Detected resolution: ${WIDTH}x${HEIGHT}"
 
-flutter_apps=("fyrdock" "fyroverview" "fyrwindowoverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrstore" "fyrvirt" "fyrtext" "fyrdaw" "fyrav" "fyrphone" "fyrcode" "fyrvideo" "fyrmusic" "fyrphotos" "fyrcamera" "fyrbrowser" "fyrjournal")
+flutter_apps=("fyrdock" "fyroverview" "fyrwindowoverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrstore" "fyrvirt" "fyrtext" "fyrdaw" "fyrav" "fyrphone" "fyrcalculator" "fyrcode" "fyrvideo" "fyrmusic" "fyrphotos" "fyrcamera" "fyrbrowser" "fyrjournal" "fyrcalender" "fyrclock")
+
+# --- Progress Tracking & Terminal Management ---
+CURRENT_STEP=0
+TOTAL_STEPS=1
+
+# Setup fixed status bar at the bottom
+if [ -t 1 ]; then
+    LINES=$(tput lines)
+    COLUMNS=$(tput cols)
+    
+    # Enable scrolling region for all but the last line
+    tput csr 0 $((LINES - 2))
+    
+    # Clear the last line and initialize it
+    tput cup $((LINES - 1)) 0
+    tput el
+    
+    # Move cursor to the last line of the scrollable region
+    tput cup $((LINES - 2)) 0
+    printf "\n"
+
+    cleanup() {
+        tput csr 0 $((LINES - 1)) # Reset scrolling region
+        tput cup $LINES 0
+        printf "\n"
+    }
+    trap cleanup EXIT
+fi
+
+show_progress() {
+    local label=$1
+    if [ ! -t 1 ]; then return; fi
+    
+    local width=40
+    local percent=$((CURRENT_STEP * 100 / TOTAL_STEPS))
+    local filled=$((CURRENT_STEP * width / TOTAL_STEPS))
+    
+    # ANSI Colors
+    local GREEN='\033[0;32m'
+    local NC='\033[0m'
+    local BOLD='\033[1m'
+
+    # Save cursor, move to last line, clear, draw, restore
+    tput sc
+    tput cup $((LINES - 1)) 0
+    tput el
+    printf "${BOLD}[${NC}"
+    for ((i=0; i<filled; i++)); do printf "${GREEN}=${NC}"; done
+    for ((i=filled; i<width; i++)); do printf " "; done
+    printf "${BOLD}]${NC} %d%% - %s" "$percent" "$label"
+    tput rc
+}
+
+next_step() {
+    local label=$1
+    CURRENT_STEP=$((CURRENT_STEP + 1))
+    show_progress "$label"
+}
 
 # --- Functions ---
 
@@ -34,12 +92,14 @@ usage() {
     echo "  -l          Reinstall SDDM theme and configuration"
     echo "  -t          Reinstall GTK and icon themes"
     echo "  -d          Install system dependencies only"
+    echo "  -f          Install Fyr Fetch tool and add to zshrc"
     echo "  -z          Setup ZSH and Oh-My-Zsh"
-    echo "  -f          Force full installation (default if no flags provided)"
+    echo "  -F          Force full installation (default if no flags provided)"
     echo "  -h          Show this help message"
 }
 
 install_deps() {
+    next_step "Installing system dependencies..."
     if [ "$OS" = "arch" ] || [ "$OS" = "manjaro" ] || [ "$OS" = "endeavouros" ]; then
         echo "Configuring pacman..."
         sudo sed -i '/^#\[multilib\]/{ s/^#//; n; s/^#//; }' /etc/pacman.conf
@@ -109,6 +169,7 @@ install_deps() {
 }
 
 install_flutter() {
+    next_step "Setting up Flutter..."
     echo "Ensuring Flutter 3.41.9 is installed in /opt/flutter..."
     
     # Check if flutter is already installed and version matches
@@ -136,6 +197,7 @@ install_flutter() {
 }
 
 build_swayfx() {
+    next_step "Building SwayFX..."
     echo "Building and installing local swayfx..."
     if [ -d "./swayfx" ]; then
         cd ./swayfx
@@ -151,6 +213,7 @@ build_swayfx() {
 
 reinstall_app() {
     local app=$1
+    next_step "Building $app..."
     if [ -d "./$app" ]; then
         echo "Building $app..."
         cd "./$app"
@@ -198,7 +261,7 @@ EOF
             sudo update-alternatives --install /usr/bin/x-terminal-emulator x-terminal-emulator /usr/local/bin/fyrterm 50 || true
             ;;
         "fyrfiles")
-            sudo ln -sf /opt/fyrfiles/fyr_files /usr/local/bin/fyrfiles
+            sudo ln -sf /opt/fyrfiles/fyrfiles /usr/local/bin/fyrfiles
             if [ -f "./fyrfiles/assets/icons/folderfile.png" ]; then
                 sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
                 sudo cp ./fyrfiles/assets/icons/folderfile.png /usr/share/icons/hicolor/512x512/apps/fyrfiles.png
@@ -348,6 +411,23 @@ EOF
             fi
             sudo cp ./fyrdaw/fyrdaw.desktop /usr/share/applications/fyrdaw.desktop
             ;;
+        "fyrcalculator")
+            sudo ln -sf /opt/fyrcalculator/fyrcalculator /usr/local/bin/fyrcalculator
+            if [ -f "./fyrcalculator/assets/icons/calculator.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrcalculator/assets/icons/calculator.png /usr/share/icons/hicolor/512x512/apps/fyrcalculator.png
+            fi
+            sudo tee /usr/share/applications/fyrcalculator.desktop > /dev/null <<'EOF'
+[Desktop Entry]
+Name=Calculator
+Comment=Calculator
+Exec=/usr/local/bin/fyrcalculator
+Icon=fyrcalculator
+Terminal=false
+Type=Application
+Categories=Utility;Calculator;
+EOF
+            ;;
         "fyrcode")
             sudo ln -sf /opt/fyrcode/fyrcode /usr/local/bin/fyrcode
             sudo tee /usr/share/applications/fyrcode.desktop > /dev/null <<'EOF'
@@ -447,6 +527,40 @@ EOF
             fi
             sudo cp ./fyrjournal/fyrjournal.desktop /usr/share/applications/fyrjournal.desktop
             ;;
+        "fyrcalender")
+            sudo ln -sf /opt/fyrcalender/fyrcalender /usr/local/bin/fyrcalender
+            if [ -f "./fyrcalender/assets/icons/calendar.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrcalender/assets/icons/calendar.png /usr/share/icons/hicolor/512x512/apps/fyrcalender.png
+            fi
+            sudo tee /usr/share/applications/fyrcalender.desktop > /dev/null <<'EOF'
+[Desktop Entry]
+Name=Calendar
+Comment=Modern calendar for FyrDE
+Exec=/usr/local/bin/fyrcalender
+Icon=fyrcalender
+Terminal=false
+Type=Application
+Categories=Office;Calendar;Utility;
+EOF
+            ;;
+        "fyrclock")
+            sudo ln -sf /opt/fyrclock/fyrclock /usr/local/bin/fyrclock
+            if [ -f "./fyrclock/assets/icons/clock.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrclock/assets/icons/clock.png /usr/share/icons/hicolor/512x512/apps/fyrclock.png
+            fi
+            sudo tee /usr/share/applications/fyrclock.desktop > /dev/null <<'EOF'
+[Desktop Entry]
+Name=Clock
+Comment=Sleek clock with World Clock, Alarm, Stopwatch, and Timer
+Exec=/usr/local/bin/fyrclock
+Icon=fyrclock
+Terminal=false
+Type=Application
+Categories=Utility;Clock;
+EOF
+            ;;
     esac
     
     if command -v update-desktop-database &> /dev/null; then
@@ -454,7 +568,107 @@ EOF
     fi
 }
 
+setup_fetch() {
+    next_step "Installing Fyr Fetch..."
+    mkdir -p ~/.config/fyr
+    cat << 'EOF' > ~/.config/fyr/fyr_fetch
+#!/bin/bash
+
+# ANSI color codes
+PURPLE='\033[38;5;147m'
+BOLD='\033[1m'
+NC='\033[0m' # No Color
+
+# ASCII Art
+logo=(
+"        %          "
+"         %%%        "
+"         % %%%      "
+"        %% %%%      "
+"       %%% %%%  %%  "
+"     %%%  %%% %%%   "
+"   %%%   %%%%% %    "
+"  %%%   %% %%  %%   "
+" %%%%          %%%  "
+" %%%%#   % %. %%%%% "
+"%%%%% %% % %%%%%%%%%"
+"%%%%% %% % %%%%%%%%%"
+" %%%% %%%% %%%%%%%%%"
+" %%%%%%%%%%%%%%%%%% "
+"   %%%        %%%   "
+"      %%%%%%%     "
+)
+
+# System info
+os=$(grep '^PRETTY_NAME=' /etc/os-release | cut -d'=' -f2 | tr -d '"')
+host=$(uname -n)
+user=$(whoami)
+kernel=$(uname -r)
+uptime=$(uptime -p | sed 's/uptime //')
+
+# Package count (detecting package manager)
+if command -v pacman &> /dev/null; then
+    pkgs=$(pacman -Qq | wc -l)
+elif command -v dpkg &> /dev/null; then
+    pkgs=$(dpkg -l | grep -c '^ii')
+elif command -v rpm &> /dev/null; then
+    pkgs=$(rpm -qa | wc -l)
+else
+    pkgs="Unknown"
+fi
+
+# Memory info
+mem_total=$(free -m | awk '/Mem:/ {print $2}')
+mem_used=$(free -m | awk '/Mem:/ {print $3}')
+memory="${mem_used}MiB / ${mem_total}MiB"
+
+# Print layout
+info=(
+    "${BOLD}${PURPLE}${user}${NC}@${BOLD}${PURPLE}${host}${NC}"
+    ""
+    "-------------------"
+    ""
+    "${BOLD}${PURPLE}OS:${NC} ${os}"
+    ""
+    "${BOLD}${PURPLE}Host:${NC} ${host}"
+    ""
+    "${BOLD}${PURPLE}Kernel:${NC} ${kernel}"
+    ""
+    "${BOLD}${PURPLE}Uptime:${NC} ${uptime}"
+    ""
+    "${BOLD}${PURPLE}Packages:${NC} ${pkgs}"
+    ""
+    "${BOLD}${PURPLE}Memory:${NC} ${memory}"
+)
+
+max_lines=${#logo[@]}
+if [ ${#info[@]} -gt $max_lines ]; then
+    max_lines=${#info[@]}
+fi
+
+echo ""
+for ((i=0; i<max_lines; i++)); do
+    line_logo="${logo[i]}"
+    line_info="${info[i]:-}"
+    
+    # Print logo in bold purple and info next to it
+    printf "  ${BOLD}${PURPLE}%-20s${NC}  %b\n" "$line_logo" "$line_info"
+done
+echo ""
+EOF
+    chmod +x ~/.config/fyr/fyr_fetch
+    
+    if [ -f "$HOME/.zshrc" ]; then
+        if ! grep -q "fyr_fetch" "$HOME/.zshrc"; then
+            echo "" >> "$HOME/.zshrc"
+            echo "# Fyr Fetch" >> "$HOME/.zshrc"
+            echo "~/.config/fyr/fyr_fetch" >> "$HOME/.zshrc"
+        fi
+    fi
+}
+
 setup_sway_config() {
+    next_step "Configuring Sway..."
     echo "Setting up Sway configuration..."
     mkdir -p ~/.config/fyr
     cp ./backgrounds/space.jpg ~/.config/fyr/space.jpg
@@ -486,6 +700,9 @@ fi
 swaymsg reload
 EOF
     chmod +x ~/.config/fyr/toggle_floating.sh
+
+    setup_fetch
+
 
     # Retile Script
     cat << 'EOF' > ~/.config/fyr/retile.py
@@ -676,6 +893,7 @@ EOF
 }
 
 setup_themes() {
+    next_step "Installing themes..."
     echo "Installing Themes..."
     if [ ! -d "$HOME/.local/share/icons/Tela-purple-dark" ]; then
         git clone https://github.com/vinceliuice/Tela-icon-theme.git /tmp/Tela-icon-theme
@@ -702,6 +920,7 @@ EOF
 }
 
 setup_sddm() {
+    next_step "Configuring SDDM..."
     echo "Setting up SDDM theme..."
     if [ -d "./sddm" ]; then
         sudo mkdir -p /usr/share/sddm/themes/fyr
@@ -728,8 +947,10 @@ INSTALL_SWAY_CONFIG=false
 INSTALL_SDDM=false
 INSTALL_THEMES=false
 INSTALL_ZSH=false
+INSTALL_FETCH=false
 
 setup_zsh() {
+    next_step "Configuring ZSH..."
     echo "Setting up ZSH and Oh-My-Zsh..."
     if [ ! -d "$HOME/.oh-my-zsh" ]; then
         RUNZSH=no CHSH=yes sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
@@ -750,7 +971,7 @@ setup_zsh() {
 
 APP_TO_REINSTALL=""
 
-while getopts "a:sldthfz" opt; do
+while getopts "a:sldthfFz" opt; do
     MODULAR=true
     case $opt in
         a) APP_TO_REINSTALL="$OPTARG" ;;
@@ -759,7 +980,8 @@ while getopts "a:sldthfz" opt; do
         t) INSTALL_THEMES=true ;;
         d) INSTALL_DEPS=true ;;
         z) INSTALL_ZSH=true ;;
-        f) MODULAR=false ;;
+        f) INSTALL_FETCH=true ;;
+        F) MODULAR=false ;;
         h) usage; exit 0 ;;
         *) usage; exit 1 ;;
     esac
@@ -767,6 +989,7 @@ done
 
 if [ "$MODULAR" = "false" ]; then
     echo "Starting full installation..."
+    TOTAL_STEPS=$(( 9 + ${#flutter_apps[@]} ))
     install_deps
     setup_zsh
     install_flutter
@@ -779,6 +1002,18 @@ if [ "$MODULAR" = "false" ]; then
     setup_sddm
 else
     echo "Starting modular installation..."
+    # Calculate steps
+    TOTAL_STEPS=0
+    [ "$INSTALL_DEPS" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
+    [ "$INSTALL_ZSH" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
+    [ -n "$APP_TO_REINSTALL" ] && TOTAL_STEPS=$((TOTAL_STEPS + 2)) # flutter + app
+    [ "$INSTALL_SWAY_CONFIG" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
+    [ "$INSTALL_SDDM" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
+    [ "$INSTALL_THEMES" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
+    [ "$INSTALL_FETCH" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
+    
+    if [ "$TOTAL_STEPS" -eq 0 ]; then TOTAL_STEPS=1; fi
+
     if [ "$INSTALL_DEPS" = "true" ]; then install_deps; fi
     if [ "$INSTALL_ZSH" = "true" ]; then setup_zsh; fi
     if [ -n "$APP_TO_REINSTALL" ]; then
@@ -788,6 +1023,8 @@ else
     if [ "$INSTALL_SWAY_CONFIG" = "true" ]; then setup_sway_config; fi
     if [ "$INSTALL_SDDM" = "true" ]; then setup_sddm; fi
     if [ "$INSTALL_THEMES" = "true" ]; then setup_themes; fi
+    if [ "$INSTALL_FETCH" = "true" ]; then setup_fetch; fi
 fi
 
+printf "\n"
 echo "Operation complete!"

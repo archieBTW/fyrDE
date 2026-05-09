@@ -1,0 +1,83 @@
+#!/bin/bash
+
+# ANSI color codes
+PURPLE='\033[38;5;147m'
+BOLD='\033[1m'
+NC='\033[0m' # No Color
+
+# ASCII Art
+logo=(
+"        %          "
+"         %%%        "
+"         % %%%      "
+"        %% %%%      "
+"       %%% %%%  %%  "
+"     %%%  %%% %%%   "
+"   %%%   %%%%% %    "
+"  %%%   %% %%  %%   "
+" %%%%          %%%  "
+" %%%%#   % %. %%%%% "
+"%%%%% %% % %%%%%%%%%"
+"%%%%% %% % %%%%%%%%%"
+" %%%% %%%% %%%%%%%%%"
+" %%%%%%%%%%%%%%%%%% "
+"   %%%        %%%   "
+"      %%%%%%%     "
+)
+
+# System info
+os=$(grep '^PRETTY_NAME=' /etc/os-release | cut -d'=' -f2 | tr -d '"')
+host=$(uname -n)
+user=$(whoami)
+kernel=$(uname -r)
+uptime=$(uptime -p | sed 's/uptime //')
+
+# Package count (detecting package manager)
+if command -v pacman &> /dev/null; then
+    pkgs=$(pacman -Qq | wc -l)
+elif command -v dpkg &> /dev/null; then
+    pkgs=$(dpkg -l | grep -c '^ii')
+elif command -v rpm &> /dev/null; then
+    pkgs=$(rpm -qa | wc -l)
+else
+    pkgs="Unknown"
+fi
+
+# Memory info
+mem_total=$(free -m | awk '/Mem:/ {print $2}')
+mem_used=$(free -m | awk '/Mem:/ {print $3}')
+memory="${mem_used}MiB / ${mem_total}MiB"
+
+# Print layout
+info=(
+    "${BOLD}${PURPLE}${user}${NC}@${BOLD}${PURPLE}${host}${NC}"
+    ""
+    "-------------------"
+    ""
+    "${BOLD}${PURPLE}OS:${NC} ${os}"
+    ""
+    "${BOLD}${PURPLE}Host:${NC} ${host}"
+    ""
+    "${BOLD}${PURPLE}Kernel:${NC} ${kernel}"
+    ""
+    "${BOLD}${PURPLE}Uptime:${NC} ${uptime}"
+    ""
+    "${BOLD}${PURPLE}Packages:${NC} ${pkgs}"
+    ""
+    "${BOLD}${PURPLE}Memory:${NC} ${memory}"
+)
+
+max_lines=${#logo[@]}
+if [ ${#info[@]} -gt $max_lines ]; then
+    max_lines=${#info[@]}
+fi
+
+echo ""
+for ((i=0; i<max_lines; i++)); do
+    line_logo="${logo[i]}"
+    line_info="${info[i]:-}"
+    
+    # Print logo in bold purple and info next to it
+    printf "  ${BOLD}${PURPLE}%-20s${NC}  %b\n" "$line_logo" "$line_info"
+done
+echo ""

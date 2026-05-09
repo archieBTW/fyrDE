@@ -8,9 +8,11 @@ import 'package:webview_cef/webview_cef.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:http/http.dart' as http;
+import 'package:flutter/gestures.dart';
 import 'fyr_theme.dart';
 import 'adblock_engine.dart';
 import 'download_manager.dart';
+
 import 'package:intl/intl.dart';
 
 class BrowserTab {
@@ -42,6 +44,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
   
   final TextEditingController _urlController = TextEditingController();
   final FocusNode _urlFocusNode = FocusNode();
+  final FocusNode _keyboardFocusNode = FocusNode();
   
   bool _adBlockEnabled = true;
   List<Map<String, String>> _history = [];
@@ -69,13 +72,13 @@ class _BrowserScreenState extends State<BrowserScreen> {
   void dispose() {
     _urlFocusNode.dispose();
     _urlController.dispose();
+    _keyboardFocusNode.dispose();
     super.dispose();
   }
 
   Future<void> _initManager() async {
-    await _manager.initialize(
-      userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-    );
+    const String userAgent = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+    await _manager.initialize(userAgent: userAgent);
   }
 
   Future<void> _loadData() async {
@@ -175,6 +178,25 @@ class _BrowserScreenState extends State<BrowserScreen> {
       onConsoleMessage: (int level, String message, String source, int line) {
         debugPrint('WebView Console [$level] ($source:$line): $message');
       },
+      onFileDialog: (int browserId, int callbackId) async {
+        try {
+          final result = await Process.run('fyrfiles', ['--picker']);
+          if (result.exitCode == 0) {
+          final output = result.stdout.toString().trim();
+          if (output.isNotEmpty) {
+            final paths = output.split('\n').where((p) => p.isNotEmpty).toList();
+            tab.controller.continueFileDialog(callbackId, paths);
+          } else {
+            tab.controller.continueFileDialog(callbackId, []);
+          }
+          } else {
+            tab.controller.continueFileDialog(callbackId, []);
+          }
+        } catch (e) {
+          debugPrint('Failed to run fyrfiles picker: $e');
+          tab.controller.continueFileDialog(callbackId, []);
+        }
+      },
     ));
     void setupChannels() {
       if (tab.controller.value) {
@@ -196,6 +218,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
           ),
         });
         if (_adBlockEnabled) tab.controller.executeJavaScript(AdBlockEngine.injectionScript);
+
+
       } else {
         tab.controller.addListener(() {
           if (tab.controller.value) setupChannels();
@@ -208,13 +232,11 @@ class _BrowserScreenState extends State<BrowserScreen> {
 
   void _startPwaCheck(BrowserTab tab) {
     if (widget.isAppMode) return;
-    Timer.periodic(const Duration(seconds: 3), (timer) {
-      if (!mounted || !tab.isReady || tab.showPwaInstall) {
-        timer.cancel();
-        return;
+    // Run once after load to avoid resource exhaustion
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted && tab.isReady && !tab.showPwaInstall) {
+        _checkPwaStatus(tab);
       }
-      _checkPwaStatus(tab);
-      if (timer.tick > 8) timer.cancel();
     });
   }
 
@@ -222,16 +244,56 @@ class _BrowserScreenState extends State<BrowserScreen> {
     if (!tab.controller.value) return;
     tab.controller.executeJavaScript('''
       (function() {
-        const features = {
-          SharedArrayBuffer: typeof SharedArrayBuffer !== 'undefined',
-          WebAssembly: typeof WebAssembly !== 'undefined',
-          AudioContext: typeof AudioContext !== 'undefined',
-          AudioWorklet: !!(typeof AudioContext !== 'undefined' && AudioContext.prototype.audioWorklet),
-          OffscreenCanvas: typeof OffscreenCanvas !== 'undefined',
-          WebGL: (function() { try { var canvas = document.createElement('canvas'); return !!(window.WebGLRenderingContext && (canvas.getContext('webgl') || canvas.getContext('experimental-webgl'))); } catch(e) { return false; } })(),
-        };
-        console.log('FyrBrowser Feature Check: ' + JSON.stringify(features));
+        if (window.top !== window.self) return; // Only run in main frame
         
+        // Force crossOriginIsolated to true for BandLab audio engine
+        try {
+          if (!window.crossOriginIsolated) {
+            Object.defineProperty(window, 'crossOriginIsolated', {
+              value: true,
+              configurable: true
+            });
+          }
+        } catch (e) {}
+
+        const check = (fn) => { try { return fn(); } catch(e) { return false; } };
+        const features = {
+          crossOriginIsolated: window.crossOriginIsolated,
+          SharedArrayBuffer: check(() => typeof SharedArrayBuffer !== 'undefined'),
+          WebAssembly: check(() => typeof WebAssembly !== 'undefined'),
+          AudioContext: check(() => typeof AudioContext !== 'undefined'),
+          AudioWorklet: check(() => {
+             const ctx = new (window.AudioContext || window.webkitAudioContext)();
+             const hasWorklet = !!ctx.audioWorklet;
+             ctx.close();
+             return hasWorklet;
+          }),
+          OffscreenCanvas: check(() => typeof OffscreenCanvas !== 'undefined'),
+          WebGL: check(() => {
+            var canvas = document.createElement('canvas');
+            return !!(window.WebGLRenderingContext && (canvas.getContext('webgl') || canvas.getContext('experimental-webgl')));
+          }),
+        };
+        /* 
+        console.log('FyrBrowser [Features] Detected: ' + Object.entries(features).filter(([k,v]) => v).map(([k,v]) => k).join(', '));
+        console.log('FyrBrowser [Features] Missing: ' + Object.entries(features).filter(([k,v]) => !v).map(([k,v]) => k).join(', '));
+        */
+        
+        // Permission Query Polyfill (Bypass "Blocked" state)
+        if (navigator.permissions && navigator.permissions.query) {
+          const originalQuery = navigator.permissions.query;
+          navigator.permissions.query = function(params) {
+            if (params && (params.name === 'midi' || params.name === 'camera' || params.name === 'microphone')) {
+              return Promise.resolve({
+                state: 'granted',
+                onchange: null,
+                name: params.name
+              });
+            }
+            return originalQuery.call(navigator.permissions, params);
+          };
+        }
+
         const getIcon = () => {
           const appleTouch = document.querySelector('link[rel="apple-touch-icon"]');
           if (appleTouch) return appleTouch.href;
@@ -284,6 +346,12 @@ class _BrowserScreenState extends State<BrowserScreen> {
           _currentTabIndex = (_currentTabIndex + 1) % _tabs.length;
           _urlController.text = _tabs[_currentTabIndex].url;
         });
+      } else if (isControl && event.logicalKey == LogicalKeyboardKey.keyR) {
+        _tabs[_currentTabIndex].controller.reload();
+      } else if (event.logicalKey == LogicalKeyboardKey.f5) {
+        _tabs[_currentTabIndex].controller.reload();
+      } else if (isControl && event.logicalKey == LogicalKeyboardKey.keyL) {
+        _urlFocusNode.requestFocus();
       }
     }
   }
@@ -710,7 +778,7 @@ Categories=Network;WebBrowser;
   @override
   Widget build(BuildContext context) {
     return KeyboardListener(
-      focusNode: FocusNode(),
+      focusNode: _keyboardFocusNode,
       autofocus: true,
       onKeyEvent: _handleKeyEvent,
       child: Scaffold(
@@ -727,9 +795,14 @@ Categories=Network;WebBrowser;
                   _buildBrowserHeader(),
                 Expanded(
                   child: IndexedStack(
-                    index: _currentTabIndex,
-                    children: _tabs.map((tab) => tab.isReady ? WebView(tab.controller) : const Center(child: CircularProgressIndicator())).toList(),
-                  ),
+                  index: _currentTabIndex,
+                  children: _tabs.map((tab) => tab.isReady 
+                    ? SmoothScrollWrapper(
+                        controller: tab.controller,
+                        child: WebView(tab.controller),
+                      ) 
+                    : const Center(child: CircularProgressIndicator())).toList(),
+                ),
                 ),
               ],
             ),
@@ -917,6 +990,77 @@ Categories=Network;WebBrowser;
           ],
         ),
       ),
+    );
+  }
+}
+
+class SmoothScrollWrapper extends StatefulWidget {
+  final WebViewController controller;
+  final Widget child;
+
+  const SmoothScrollWrapper({
+    super.key,
+    required this.controller,
+    required this.child,
+  });
+
+  @override
+  State<SmoothScrollWrapper> createState() => _SmoothScrollWrapperState();
+}
+
+class _SmoothScrollWrapperState extends State<SmoothScrollWrapper> {
+  double _scrollTargetY = 0;
+  bool _isScrolling = false;
+
+  void _onPointerSignal(PointerSignalEvent signal) {
+    if (signal is PointerScrollEvent) {
+      // Intercept the scroll signal
+      GestureBinding.instance.pointerSignalResolver.register(signal, (resolvedSignal) {
+        _handleScroll(signal);
+      });
+    }
+  }
+
+  void _handleScroll(PointerScrollEvent signal) {
+    // Increase target
+    _scrollTargetY += signal.scrollDelta.dy;
+    
+    if (!_isScrolling) {
+      _isScrolling = true;
+      _animateScroll(signal.localPosition);
+    }
+  }
+
+  void _animateScroll(Offset position) {
+    if (!mounted || _scrollTargetY.abs() < 0.5) {
+      _isScrolling = false;
+      _scrollTargetY = 0;
+      return;
+    }
+
+    // Determine step (speed and smoothness)
+    // Using a slightly more aggressive smoothing factor to reduce event count
+    double step = _scrollTargetY * 0.2; 
+    if (step.abs() < 1) step = _scrollTargetY > 0 ? 1 : -1;
+    if (step.abs() > _scrollTargetY.abs()) step = _scrollTargetY;
+
+    // Send to CEF
+    widget.controller.setScrollDelta(position, 0, step.round());
+    
+    _scrollTargetY -= step;
+
+    // Use 16ms (60Hz) to match standard display cycles and avoid overwhelming Blink
+    Future.delayed(const Duration(milliseconds: 16), () {
+      _animateScroll(position);
+    });
+  }
+
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      onPointerSignal: _onPointerSignal,
+      child: widget.child,
     );
   }
 }

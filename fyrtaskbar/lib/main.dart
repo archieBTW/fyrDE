@@ -396,10 +396,29 @@ class SystemState {
     notifications.value = [notification, ...notifications.value];
     activePopups.value = [...activePopups.value, notification];
 
+    // Play sound
+    _playNotificationSound(appName, title);
+
     if (notification.timeout > 0) {
       Timer(Duration(milliseconds: notification.timeout), () {
         dismissPopup(notification.id, reason: 1); // 1 = expired
       });
+    }
+  }
+
+  static void _playNotificationSound(String appName, String title) async {
+    bool isPriority = title.toLowerCase().contains('find my') || 
+                      title.toLowerCase().contains('incoming call') ||
+                      appName.toLowerCase().contains('phone');
+
+    if (isPriority) {
+      // Regardless of silent mode: unmute and set volume high for this sound
+      Process.run('sh', [
+        '-c',
+        'wpctl set-mute @DEFAULT_AUDIO_SINK@ 0; wpctl set-volume @DEFAULT_AUDIO_SINK@ 1.0; canberra-gtk-play -i phone-incoming-call; sleep 2; wpctl set-volume @DEFAULT_AUDIO_SINK@ ${volume.value}'
+      ]);
+    } else {
+      Process.run('canberra-gtk-play', ['-i', 'message']);
     }
   }
 
@@ -2813,6 +2832,22 @@ class NotificationCard extends StatelessWidget {
   }
 
   Widget _buildIcon() {
+    if (notification.icon == 'phone') {
+      return Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: FyrTheme.accentColor.withOpacity(0.2),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Icon(
+          Icons.smartphone,
+          color: FyrTheme.accentColor,
+          size: 24,
+        ),
+      );
+    }
+
     if (notification.icon.isEmpty) {
       return Container(
         width: 40,

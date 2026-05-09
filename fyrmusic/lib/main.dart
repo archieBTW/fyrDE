@@ -282,6 +282,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
   bool _loading = true;
   String _currentView = 'Songs';
   String _searchQuery = '';
+  String _sortBy = 'Title';
+  String? _selectedArtist;
+  String? _selectedAlbum;
   
   late final Player player = Player();
   Song? _currentSong;
@@ -504,6 +507,24 @@ class _LibraryScreenState extends State<LibraryScreen> {
     player.open(Media(song.path), play: true);
   }
 
+  void _showArtist(String artist) {
+    setState(() {
+      _currentView = 'Songs';
+      _selectedArtist = artist;
+      _selectedAlbum = null;
+      _searchQuery = '';
+    });
+  }
+
+  void _showAlbum(String album) {
+    setState(() {
+      _currentView = 'Songs';
+      _selectedAlbum = album;
+      _selectedArtist = null;
+      _searchQuery = '';
+    });
+  }
+
   Widget _buildTrafficLight(Color color, VoidCallback onTap) {
     return MouseRegion(
       cursor: SystemMouseCursors.click,
@@ -643,15 +664,90 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   Widget _buildMainContent() {
-    var filtered = _songs.where((s) => 
-      s.title.toLowerCase().contains(_searchQuery.toLowerCase()) || 
-      s.artist.toLowerCase().contains(_searchQuery.toLowerCase())
-    ).toList();
+    var filtered = _songs.where((s) {
+      final matchesSearch = s.title.toLowerCase().contains(_searchQuery.toLowerCase()) || 
+                           s.artist.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+                           s.genre.toLowerCase().contains(_searchQuery.toLowerCase());
+      final matchesArtist = _selectedArtist == null || s.artist == _selectedArtist;
+      final matchesAlbum = _selectedAlbum == null || s.album == _selectedAlbum;
+      return matchesSearch && matchesArtist && matchesAlbum;
+    }).toList();
 
-    if (filtered.isEmpty) {
+    // Sorting
+    switch (_sortBy) {
+      case 'Title':
+        filtered.sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+        break;
+      case 'Artist':
+        filtered.sort((a, b) => a.artist.toLowerCase().compareTo(b.artist.toLowerCase()));
+        break;
+      case 'Album':
+        filtered.sort((a, b) => a.album.toLowerCase().compareTo(b.album.toLowerCase()));
+        break;
+      case 'Genre':
+        filtered.sort((a, b) => a.genre.toLowerCase().compareTo(b.genre.toLowerCase()));
+        break;
+    }
+
+    if (filtered.isEmpty && _searchQuery.isEmpty && _selectedArtist == null && _selectedAlbum == null) {
       return Center(child: Text('No music found. Import a folder.', style: TextStyle(color: FyrTheme.textColorMuted, fontSize: 18)));
     }
 
+    return Column(
+      children: [
+        if (_selectedArtist != null || _selectedAlbum != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                IconButton(
+                  icon: Icon(Icons.arrow_back, color: FyrTheme.textColor),
+                  onPressed: () => setState(() {
+                    _selectedArtist = null;
+                    _selectedAlbum = null;
+                  }),
+                ),
+                Text(
+                  _selectedArtist ?? _selectedAlbum!,
+                  style: TextStyle(color: FyrTheme.textColor, fontSize: 20, fontWeight: FontWeight.bold),
+                ),
+              ],
+            ),
+          ),
+        
+        if (_currentView == 'Songs')
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                Text('Sort by: ', style: TextStyle(color: FyrTheme.textColorMuted)),
+                DropdownButton<String>(
+                  value: _sortBy,
+                  dropdownColor: FyrTheme.surfaceColor,
+                  style: TextStyle(color: FyrTheme.textColor),
+                  underline: SizedBox(),
+                  items: ['Title', 'Artist', 'Album', 'Genre'].map((String value) {
+                    return DropdownMenuItem<String>(
+                      value: value,
+                      child: Text(value),
+                    );
+                  }).toList(),
+                  onChanged: (v) {
+                    if (v != null) setState(() => _sortBy = v);
+                  },
+                ),
+              ],
+            ),
+          ),
+
+        Expanded(
+          child: _buildListOrGrid(filtered),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildListOrGrid(List<Song> filtered) {
     if (_currentView == 'Songs') {
       return ListView.builder(
         itemCount: filtered.length,
@@ -672,7 +768,23 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 ? ClipRRect(borderRadius: BorderRadius.circular(4), child: Image.file(File(s.artworkPath!), width: 40, height: 40, fit: BoxFit.cover))
                 : Icon(Icons.music_note, color: FyrTheme.textColorMuted),
               title: Text(s.title, style: TextStyle(color: FyrTheme.textColor)),
-              subtitle: Text(s.artist, style: TextStyle(color: FyrTheme.textColorMuted)),
+              subtitle: Row(
+                children: [
+                  InkWell(
+                    onTap: () => _showArtist(s.artist),
+                    child: Text(s.artist, style: TextStyle(color: FyrTheme.accentColor, fontSize: 12)),
+                  ),
+                  Text(' • ', style: TextStyle(color: FyrTheme.textColorMuted)),
+                  InkWell(
+                    onTap: () => _showAlbum(s.album),
+                    child: Text(s.album, style: TextStyle(color: FyrTheme.textColorMuted, fontSize: 12)),
+                  ),
+                  if (s.genre.isNotEmpty) ...[
+                    Text(' • ', style: TextStyle(color: FyrTheme.textColorMuted)),
+                    Text(s.genre, style: TextStyle(color: FyrTheme.textColorMuted, fontSize: 12)),
+                  ],
+                ],
+              ),
               trailing: Text('${s.durationSeconds ~/ 60}:${(s.durationSeconds % 60).toString().padLeft(2, '0')}', style: TextStyle(color: FyrTheme.textColorMuted)),
               onTap: () => _playSong(s),
             ),
@@ -680,33 +792,56 @@ class _LibraryScreenState extends State<LibraryScreen> {
         },
       );
     } else if (_currentView == 'Albums') {
-      final albums = filtered.map((e) => e.album).toSet().toList();
+      final albumMap = <String, List<Song>>{};
+      for (var s in _songs) {
+        albumMap.putIfAbsent(s.album, () => []).add(s);
+      }
+      final albums = albumMap.keys.toList()..sort();
+
       return GridView.builder(
         padding: EdgeInsets.all(24),
         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 4, childAspectRatio: 0.8, crossAxisSpacing: 16, mainAxisSpacing: 16),
         itemCount: albums.length,
         itemBuilder: (context, index) {
-          return Card(
-            color: FyrTheme.cardColor,
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.album, size: 64, color: FyrTheme.textColorMuted),
-                SizedBox(height: 16),
-                Text(albums[index], textAlign: TextAlign.center, style: TextStyle(color: FyrTheme.textColor, fontWeight: FontWeight.bold)),
-              ],
+          final albumName = albums[index];
+          final songs = albumMap[albumName]!;
+          final firstWithArt = songs.firstWhere((s) => s.artworkPath != null, orElse: () => songs.first);
+
+          return GestureDetector(
+            onTap: () => _showAlbum(albumName),
+            child: Card(
+              color: FyrTheme.cardColor,
+              clipBehavior: Clip.antiAlias,
+              child: Column(
+                children: [
+                  Expanded(
+                    child: firstWithArt.artworkPath != null
+                      ? Image.file(File(firstWithArt.artworkPath!), fit: BoxFit.cover, width: double.infinity)
+                      : Container(
+                          color: Colors.black12,
+                          child: Center(child: Icon(Icons.album, size: 64, color: FyrTheme.textColorMuted)),
+                        ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: Text(albumName, textAlign: TextAlign.center, style: TextStyle(color: FyrTheme.textColor, fontWeight: FontWeight.bold), maxLines: 2, overflow: TextOverflow.ellipsis),
+                  ),
+                ],
+              ),
             ),
           );
         },
       );
     } else {
-      final artists = filtered.map((e) => e.artist).toSet().toList();
+      final artists = filtered.map((e) => e.artist).toSet().toList()..sort();
       return ListView.builder(
         itemCount: artists.length,
         itemBuilder: (context, index) {
+          final artist = artists[index];
           return ListTile(
             leading: Icon(Icons.person, color: FyrTheme.textColorMuted),
-            title: Text(artists[index], style: TextStyle(color: FyrTheme.textColor)),
+            title: Text(artist, style: TextStyle(color: FyrTheme.textColor)),
+            onTap: () => _showArtist(artist),
           );
         },
       );

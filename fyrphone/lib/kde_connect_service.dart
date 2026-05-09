@@ -259,6 +259,13 @@ class KdeConnectService {
     await remote.callMethod('org.kde.kdeconnect.device.ping', 'sendPing', []);
   }
 
+  Future<void> ring(String id) async {
+    final remote = DBusRemoteObject(_client,
+        name: 'org.kde.kdeconnect',
+        path: DBusObjectPath('/modules/kdeconnect/devices/$id/findmyphone'));
+    await remote.callMethod('org.kde.kdeconnect.device.findmyphone', 'ring', []);
+  }
+
   Future<void> mountSftp(String id) async {
     final remote = DBusRemoteObject(_client,
         name: 'org.kde.kdeconnect',

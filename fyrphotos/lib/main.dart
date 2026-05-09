@@ -180,6 +180,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   List<Photo> _photos = [];
   bool _loading = true;
   String _currentView = 'All Photos';
+  String? _selectedAlbum;
 
   @override
   void initState() {
@@ -307,7 +308,23 @@ class _LibraryScreenState extends State<LibraryScreen> {
               color: FyrTheme.bgColor,
               child: Column(
                 children: [
-                  DragToMoveArea(child: Container(height: 48)),
+                  DragToMoveArea(
+                    child: Container(
+                      height: 48,
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: _selectedAlbum != null
+                        ? Row(
+                            children: [
+                              IconButton(
+                                icon: Icon(Icons.arrow_back, color: FyrTheme.textColor),
+                                onPressed: () => setState(() => _selectedAlbum = null),
+                              ),
+                              Text(_selectedAlbum!, style: TextStyle(color: FyrTheme.textColor, fontSize: 18, fontWeight: FontWeight.bold)),
+                            ],
+                          )
+                        : null,
+                    ),
+                  ),
                   Expanded(
                     child: _loading 
                       ? Center(child: CircularProgressIndicator()) 
@@ -339,21 +356,27 @@ class _LibraryScreenState extends State<LibraryScreen> {
       return Center(child: Text('No photos found. Import a folder.', style: TextStyle(color: FyrTheme.textColorMuted, fontSize: 18)));
     }
 
-    if (_currentView == 'All Photos') {
+    if (_currentView == 'All Photos' || _selectedAlbum != null) {
+      final photosToShow = _selectedAlbum != null 
+        ? _photos.where((p) => p.album == _selectedAlbum).toList()
+        : _photos;
+
       return GridView.builder(
         padding: EdgeInsets.all(16),
         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 6, crossAxisSpacing: 8, mainAxisSpacing: 8),
-        itemCount: _photos.length,
+        itemCount: photosToShow.length,
         itemBuilder: (context, index) {
           return GestureDetector(
-            onTap: () => _openGallery(index, _photos),
+            onTap: () => _openGallery(index, photosToShow),
             child: Container(
               decoration: BoxDecoration(
+                color: Colors.black12,
                 borderRadius: BorderRadius.circular(4),
-                image: DecorationImage(
-                  image: FileImage(File(_photos[index].path)),
-                  fit: BoxFit.cover,
-                )
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Image(
+                image: ResizeImage(FileImage(File(photosToShow[index].path)), width: 300),
+                fit: BoxFit.cover,
               ),
             ),
           );
@@ -368,7 +391,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
         itemBuilder: (context, index) {
           final albumPhotos = _photos.where((p) => p.album == albums[index]).toList();
           return GestureDetector(
-            onTap: () => _openGallery(0, albumPhotos),
+            onTap: () => setState(() => _selectedAlbum = albums[index]),
             child: Card(
               color: FyrTheme.cardColor,
               clipBehavior: Clip.antiAlias,
@@ -377,7 +400,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 children: [
                   Expanded(
                     child: albumPhotos.isNotEmpty 
-                      ? Image.file(File(albumPhotos.first.path), fit: BoxFit.cover)
+                      ? Image(
+                          image: ResizeImage(FileImage(File(albumPhotos.first.path)), width: 400),
+                          fit: BoxFit.cover,
+                        )
                       : Container(color: Colors.black12),
                   ),
                   Padding(

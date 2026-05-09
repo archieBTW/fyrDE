@@ -15,6 +15,8 @@ void main(List<String> args) async {
     if (arg.startsWith('--app=')) {
       initialUrl = arg.substring(6);
       isAppMode = true;
+    } else if (!arg.startsWith('-')) {
+      initialUrl = arg;
     }
   }
 

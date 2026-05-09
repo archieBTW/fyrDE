@@ -260,7 +260,7 @@ class _JournalDayItemState extends State<JournalDayItem> {
         drawSpirals: true,
       ),
       child: Container(
-        padding: EdgeInsets.zero,
+        padding: const EdgeInsets.only(bottom: 30),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [

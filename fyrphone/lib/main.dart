@@ -403,10 +403,10 @@ class _PhoneHomePageState extends State<PhoneHomePage> {
             spacing: 12,
             runSpacing: 12,
             children: [
-              _buildActionCard(Icons.notifications, 'Ping', 'Ring your device', () {
-                _kdeService.ping(device.id);
+              _buildActionCard(Icons.notifications_active, 'Ring', 'Find your device', () {
+                _kdeService.ring(device.id);
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Pinging ${device.name}...')),
+                  SnackBar(content: Text('Ringing ${device.name}...')),
                 );
               }),
               _buildActionCard(Icons.file_present, 'Files', 'Browse device files', () async {

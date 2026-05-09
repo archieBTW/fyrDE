@@ -1,39 +1,33 @@
 class AdBlockEngine {
   static const List<String> adDomains = [
-    'doubleclick.net',
     'googleadservices.com',
+    'doubleclick.net',
     'googlesyndication.com',
+    'google-analytics.com',
     'adnxs.com',
-    'carbonads.net',
-    'adservice.google.com',
-    'adform.net',
-    'amazon-adsystem.com',
-    'app-measurement.com',
-    'bidswitch.net',
-    'criteo.com',
-    'facebook.net',
-    'openx.net',
-    'pubmatic.com',
     'rubiconproject.com',
-    'scorecardresearch.com',
+    'pubmatic.com',
+    'openx.net',
+    'appnexus.com',
+    'criteo.com',
+    'amazon-adsystem.com',
+    'facebook.net',
     'taboola.com',
     'outbrain.com',
+    'scorecardresearch.com',
     'quantserve.com',
-    'zedo.com',
   ];
 
   static const List<String> adSelectors = [
-    '.ad',
-    '.ads',
     '.ad-container',
     '.ad-slot',
-    '.advertisement',
-    '[id^="ad-"]',
-    '[class^="ad-"]',
-    '.gpt-ad',
-    '.top-ad',
-    '.bottom-ad',
-    '.side-ad',
+    '.ad-wrapper',
+    '.banner-ad',
+    'iframe[src*="ads"]',
+    'iframe[src*="googleads"]',
+    'div[id*="google_ads"]',
+    '#ad-banner',
+    '#ad-sidebar',
     '#ad-wrapper',
     '.adsbygoogle',
     'ins.adsbygoogle',
@@ -43,45 +37,20 @@ class AdBlockEngine {
   ];
 
   static String get injectionScript {
-    final domainsJson = adDomains.map((d) => "'$d'").join(',');
+    // Return a CSS-only injection to avoid JS "Illegal invocation" errors
+    final selectors = adSelectors.join(',');
     return '''
       (function() {
-        const adDomains = [$domainsJson];
-        
-        // Block Fetch
-        const originalFetch = window.fetch;
-        window.fetch = function() {
-          let url = arguments[0];
-          if (url instanceof Request) url = url.url;
-          if (typeof url === 'string') {
-            if (adDomains.some(domain => url.includes(domain))) {
-              console.log('FyrBrowser blocked fetch to: ' + url);
-              return Promise.reject(new Error('Blocked by FyrBrowser AdBlock'));
-            }
-          }
-          return originalFetch.apply(window, arguments);
-        };
-
-        // Block XHR
-        const originalOpen = XMLHttpRequest.prototype.open;
-        XMLHttpRequest.prototype.open = function() {
-          const url = arguments[1];
-          if (typeof url === 'string') {
-            if (adDomains.some(domain => url.includes(domain))) {
-              console.log('FyrBrowser blocked XHR to: ' + url);
-              return;
-            }
-          }
-          return originalOpen.apply(this, arguments);
-        };
-
-        // CSS Hiding
+        if (window._fyr_adblock_css_initialized) return;
+        window._fyr_adblock_css_initialized = true;
         const style = document.createElement('style');
-        style.innerHTML = '${adSelectors.join(',')} { display: none !important; visibility: hidden !important; height: 0 !important; width: 0 !important; }';
+        style.id = 'fyr-adblock-styles';
+        style.innerHTML = '$selectors { display: none !important; visibility: hidden !important; pointer-events: none !important; }';
         document.head.appendChild(style);
-
-        console.log('FyrBrowser AdBlock Injected');
+        console.log('FyrBrowser AdBlock Active (CSS-Only Mode)');
       })();
     ''';
   }
+
+  static List<String> get selectors => adSelectors;
 }

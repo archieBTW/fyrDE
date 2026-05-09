@@ -23,6 +23,13 @@ static void first_frame_cb(MyApplication* self, FlView* view) {
 // Implements GApplication::activate.
 static void my_application_activate(GApplication* application) {
   MyApplication* self = MY_APPLICATION(application);
+
+  GList* windows = gtk_application_get_windows(GTK_APPLICATION(application));
+  if (windows != nullptr) {
+    gtk_window_present(GTK_WINDOW(windows->data));
+    return;
+  }
+
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
 
@@ -85,16 +92,21 @@ static void my_application_activate(GApplication* application) {
 static gboolean my_application_local_command_line(GApplication* application,
                                                   gchar*** arguments,
                                                   int* exit_status) {
-  MyApplication* self = MY_APPLICATION(application);
-  // Strip out the first argument as it is the binary name.
-  self->dart_entrypoint_arguments = g_strdupv(*arguments + 1);
-
   g_autoptr(GError) error = nullptr;
   if (!g_application_register(application, nullptr, &error)) {
     g_warning("Failed to register: %s", error->message);
     *exit_status = 1;
     return TRUE;
   }
+
+  if (g_application_get_is_remote(application)) {
+    *exit_status = 0;
+    return TRUE;
+  }
+
+  MyApplication* self = MY_APPLICATION(application);
+  // Strip out the first argument as it is the binary name.
+  self->dart_entrypoint_arguments = g_strdupv(*arguments + 1);
 
   g_application_activate(application);
   *exit_status = 0;
@@ -147,5 +159,5 @@ MyApplication* my_application_new() {
 
   return MY_APPLICATION(g_object_new(my_application_get_type(),
                                      "application-id", APPLICATION_ID, "flags",
-                                     G_APPLICATION_NON_UNIQUE, nullptr));
+                                     G_APPLICATION_FLAGS_NONE, nullptr));
 }
