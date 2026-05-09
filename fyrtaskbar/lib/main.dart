@@ -510,7 +510,7 @@ class AppService {
   static Future<List<DesktopApp>> getInstalledApps() async {
     if (cachedApps != null) return cachedApps!;
 
-    List<DesktopApp> apps = [];
+    Map<String, DesktopApp> appMap = {};
     List<String> searchPaths = [
       '/usr/share/applications',
       '${Platform.environment['HOME']}/.local/share/applications',
@@ -524,6 +524,7 @@ class AppService {
           if (entity is File && entity.path.endsWith('.desktop')) {
             try {
               final content = await entity.readAsString();
+              final fileId = entity.path.split('/').last;
               String? name;
               String? exec;
               String? icon;
@@ -536,12 +537,14 @@ class AppService {
                   exec = line.substring(5);
                 } else if (line.startsWith('Icon=') && icon == null) {
                   icon = line.substring(5);
-                } else if (line.startsWith('NoDisplay=true')) {
-                  noDisplay = true;
+                } else if (line.toLowerCase().startsWith('nodisplay=')) {
+                  noDisplay = line.split('=')[1].trim().toLowerCase() == 'true';
                 }
               }
 
-              if (name != null && exec != null && !noDisplay) {
+              if (noDisplay) {
+                appMap.remove(fileId);
+              } else if (name != null && exec != null) {
                 // clean up exec line
                 exec = exec.replaceAll(RegExp(r' %[fFuU]'), '');
                 if (icon != null && !icon.startsWith('/')) {
@@ -574,7 +577,7 @@ class AppService {
                     }
                   }
                 }
-                apps.add(DesktopApp(name: name, exec: exec, icon: icon ?? '', path: entity.path));
+                appMap[fileId] = DesktopApp(name: name, exec: exec, icon: icon ?? '', path: entity.path);
               }
             } catch (e) {}
           }
@@ -582,6 +585,7 @@ class AppService {
       }
     }
 
+    List<DesktopApp> apps = appMap.values.toList();
     apps.sort((a, b) => a.name.compareTo(b.name));
     cachedApps = apps;
     return apps;

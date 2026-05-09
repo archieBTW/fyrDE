@@ -94,6 +94,7 @@ usage() {
     echo "  -d          Install system dependencies only"
     echo "  -f          Install Fyr Fetch tool and add to zshrc"
     echo "  -z          Setup ZSH and Oh-My-Zsh"
+    echo "  -H          Hide redundant dependency apps (mpv, foot, etc.)"
     echo "  -F          Force full installation (default if no flags provided)"
     echo "  -h          Show this help message"
 }
@@ -130,7 +131,7 @@ install_deps() {
             "wireplumber" "pipewire" "pipewire-pulse" "wlsunset" "cmake" "cpio" "pkg-config" "gcc" "wf-recorder" "grim" "ninja" "clang" "alsa-utils"
             "meson" "scdoc" "wayland-protocols" "pcre2" "json-c" "pango" "cairo" "gdk-pixbuf2" "unzip" "virt-viewer" "libvirt" "virt-install" "qemu-desktop"
             "bluez" "bluez-utils" "xdg-utils" "slurp" "libnotify" "polkit-gnome" "network-manager-applet" "pavucontrol" "playerctl" "jq" "libcanberra" "psmisc" "pamixer" "sddm" "accountsservice" "qt5-declarative" "qt5-quickcontrols" "qt5-quickcontrols2" "qt5-graphicaleffects" "kdeconnect"
-            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "mpv" "ffmpeg" "noto-fonts-emoji" "zsh" "xorg-server-xvfb" "p7zip" "zip" "tar" "gzip" "bzip2" "nodejs" "npm" "clang" "virglrenderer" "libpulse"
+            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "mpv" "ffmpeg" "noto-fonts-emoji" "zsh" "xorg-server-xvfb" "p7zip" "zip" "tar" "gzip" "bzip2" "nodejs" "npm" "clang" "virglrenderer" "libpulse"
             "gstreamer" "gst-plugins-base" "gst-plugins-good" "gst-plugins-bad" "gst-plugins-ugly" "gst-libav" "gst-plugin-pipewire" "libcamera" "gst-plugin-libcamera"
         )
         sudo pacman -S --needed --noconfirm "${deps[@]}"
@@ -145,7 +146,7 @@ install_deps() {
             "xclip" "wl-clipboard" "brightnessctl" "wireplumber" "pipewire" "pipewire-pulse" "cmake" "cpio" "libasound2-dev" "alsa-utils"
             "pkg-config" "gcc" "wf-recorder" "grim" "ninja-build" "clang" "curl" "git" "unzip" "xz-utils" "zip" "libglu1-mesa" "sway" "virt-viewer" "libvirt-clients" "libvirt-daemon-system" "virtinst" "qemu-kvm" "qemu-system"
             "bluez" "bluez-tools" "xdg-utils" "slurp" "libnotify-bin" "polkit-gnome" "network-manager-gnome" "pavucontrol" "playerctl" "jq" "libcanberra-gtk3-module" "libcanberra-gtk-module" "psmisc" "pamixer" "sddm" "accountsservice" "policykit-1-gnome" "qml-module-qtquick-controls" "qml-module-qtquick-controls2" "qml-module-qtgraphicaleffects" "kdeconnect"
-            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "libmpv-dev" "ffmpeg" "fonts-noto-color-emoji" "zsh" "xvfb" "p7zip-full" "tar" "gzip" "bzip2" "nodejs" "npm" "clangd" "libvirglrenderer-dev" "libpulse-dev"
+            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "libmpv-dev" "ffmpeg" "fonts-noto-color-emoji" "zsh" "xvfb" "p7zip-full" "tar" "gzip" "bzip2" "nodejs" "npm" "clangd" "libvirglrenderer-dev" "libpulse-dev"
             "libgstreamer1.0-dev" "libgstreamer-plugins-base1.0-dev" "gstreamer1.0-plugins-base" "gstreamer1.0-plugins-good" "gstreamer1.0-plugins-bad" "gstreamer1.0-libav"
         )
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${deps[@]}"
@@ -160,7 +161,7 @@ install_deps() {
             "xclip" "wl-clipboard" "brightnessctl" "wireplumber" "pipewire" "pipewire-pulseaudio" "cmake" "cpio"
             "pkgconf" "gcc" "wf-recorder" "grim" "ninja-build" "clang" "curl" "git" "unzip" "zip" "mesa-libGLU" "sway" "virt-viewer" "libvirt" "virt-install" "qemu-kvm"
             "bluez" "bluez-utils" "xdg-utils" "slurp" "libnotify" "polkit-gnome" "nm-connection-editor" "pavucontrol" "playerctl" "jq" "libcanberra-gtk3" "psmisc" "pamixer" "sddm" "accountsservice" "lxqt-policykit" "qt5-qtquickcontrols" "qt5-qtquickcontrols2" "qt5-qtgraphicaleffects" "kdeconnect"
-            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "firefox" "mpv-libs-devel" "ffmpeg" "google-noto-emoji-color-fonts" "zsh" "xorg-x11-server-Xvfb" "p7zip" "tar" "gzip" "bzip2" "nodejs" "npm" "clang" "virglrenderer-devel"
+            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "mpv-libs-devel" "ffmpeg" "google-noto-emoji-color-fonts" "zsh" "xorg-x11-server-Xvfb" "p7zip" "tar" "gzip" "bzip2" "nodejs" "npm" "clang" "virglrenderer-devel"
             "gstreamer1-devel" "gstreamer1-plugins-base-devel" "gstreamer1-plugins-good" "gstreamer1-plugins-bad-free" "gstreamer1-libav"
         )
         sudo dnf install -y "${deps[@]}"
@@ -568,6 +569,58 @@ EOF
     fi
 }
 
+hide_redundant_apps() {
+    next_step "Hiding redundant applications..."
+    echo "Hiding mpv and kdeconnect from menus..."
+    
+    mkdir -p "$HOME/.local/share/applications"
+    
+    # Redundant Apps
+    REDUNDANT_DESKTOPS=(
+        "mpv.desktop"
+        "org.kde.kdeconnect.app.desktop"
+        "org.kde.kdeconnect.sms.desktop"
+        "org.kde.kdeconnect.nonplasma.desktop"
+        "org.kde.kdeconnect.settings.desktop"
+        "org.kde.kdeconnect.handler.desktop"
+        "foot.desktop"
+        "footclient.desktop"
+        "foot-server.desktop"
+        "pavucontrol.desktop"
+        "nm-connection-editor.desktop"
+        "avahi-discover.desktop"
+        "bssh.desktop"
+        "bvnc.desktop"
+        "cmake-gui.desktop"
+        "qv4l2.desktop"
+        "qvidcap.desktop"
+        "zenity.desktop"
+        "ktelnetservice6.desktop"
+        "google-maps-geo-handler.desktop"
+        "openstreetmap-geo-handler.desktop"
+        "wheel-geo-handler.desktop"
+        "qemu.desktop"
+        "org.pulseaudio.pavucontrol.desktop"
+        "remote-viewer.desktop"
+        "virt-viewer.desktop"
+    )
+
+    for desktop in "${REDUNDANT_DESKTOPS[@]}"; do
+        if [ -f "/usr/share/applications/$desktop" ]; then
+            echo "Overriding $desktop in local share..."
+            cp "/usr/share/applications/$desktop" "$HOME/.local/share/applications/"
+            # Remove any existing NoDisplay= line to avoid duplicates
+            sed -i '/^NoDisplay=/d' "$HOME/.local/share/applications/$desktop"
+            # Add NoDisplay=true
+            echo "NoDisplay=true" >> "$HOME/.local/share/applications/$desktop"
+        fi
+    done
+    
+    if command -v update-desktop-database &> /dev/null; then
+        update-desktop-database "$HOME/.local/share/applications" || true
+    fi
+}
+
 setup_fetch() {
     next_step "Installing Fyr Fetch..."
     mkdir -p ~/.config/fyr
@@ -948,6 +1001,7 @@ INSTALL_SDDM=false
 INSTALL_THEMES=false
 INSTALL_ZSH=false
 INSTALL_FETCH=false
+HIDE_REDUNDANT=false
 
 setup_zsh() {
     next_step "Configuring ZSH..."
@@ -971,7 +1025,7 @@ setup_zsh() {
 
 APP_TO_REINSTALL=""
 
-while getopts "a:sldthfFz" opt; do
+while getopts "a:sldthfFzH" opt; do
     MODULAR=true
     case $opt in
         a) APP_TO_REINSTALL="$OPTARG" ;;
@@ -981,6 +1035,7 @@ while getopts "a:sldthfFz" opt; do
         d) INSTALL_DEPS=true ;;
         z) INSTALL_ZSH=true ;;
         f) INSTALL_FETCH=true ;;
+        H) HIDE_REDUNDANT=true ;;
         F) MODULAR=false ;;
         h) usage; exit 0 ;;
         *) usage; exit 1 ;;
@@ -989,7 +1044,7 @@ done
 
 if [ "$MODULAR" = "false" ]; then
     echo "Starting full installation..."
-    TOTAL_STEPS=$(( 9 + ${#flutter_apps[@]} ))
+    TOTAL_STEPS=$(( 10 + ${#flutter_apps[@]} ))
     install_deps
     setup_zsh
     install_flutter
@@ -1000,6 +1055,7 @@ if [ "$MODULAR" = "false" ]; then
     setup_sway_config
     setup_themes
     setup_sddm
+    hide_redundant_apps
 else
     echo "Starting modular installation..."
     # Calculate steps
@@ -1011,6 +1067,7 @@ else
     [ "$INSTALL_SDDM" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
     [ "$INSTALL_THEMES" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
     [ "$INSTALL_FETCH" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
+    [ "$HIDE_REDUNDANT" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
     
     if [ "$TOTAL_STEPS" -eq 0 ]; then TOTAL_STEPS=1; fi
 
@@ -1024,6 +1081,7 @@ else
     if [ "$INSTALL_SDDM" = "true" ]; then setup_sddm; fi
     if [ "$INSTALL_THEMES" = "true" ]; then setup_themes; fi
     if [ "$INSTALL_FETCH" = "true" ]; then setup_fetch; fi
+    if [ "$HIDE_REDUNDANT" = "true" ]; then hide_redundant_apps; fi
 fi
 
 printf "\n"

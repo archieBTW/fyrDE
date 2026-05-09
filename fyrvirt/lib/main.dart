@@ -297,8 +297,8 @@ class _FyrVirtState extends State<FyrVirt> {
 
     showDialog(
       context: context,
-      builder: (context) {
-        return StatefulBuilder(builder: (context, setDialogState) {
+      builder: (dialogContext) {
+        return StatefulBuilder(builder: (dialogContext, setDialogState) {
           return AlertDialog(
             backgroundColor: const Color(0xFF2A282C),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
@@ -389,7 +389,7 @@ class _FyrVirtState extends State<FyrVirt> {
             ),
             actions: [
               TextButton(
-                onPressed: () => Navigator.pop(context),
+                onPressed: () => Navigator.pop(dialogContext),
                 child: Text('Cancel', style: TextStyle(color: FyrTheme.textColorMuted)),
               ),
               ElevatedButton(
@@ -401,9 +401,14 @@ class _FyrVirtState extends State<FyrVirt> {
                   final iso = isoController.text;
                   final desc = descController.text;
 
-                  if (name.isEmpty || iso.isEmpty) return;
+                  if (name.isEmpty || iso.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Name and ISO Path are required')),
+                    );
+                    return;
+                  }
 
-                  Navigator.pop(context);
+                  Navigator.pop(dialogContext);
                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Creating VM...')));
 
                   try {
@@ -413,7 +418,7 @@ class _FyrVirtState extends State<FyrVirt> {
                       '--vcpus', cpus,
                       '--disk', 'size=$disk,bus=virtio',
                       '--cdrom', iso,
-                      '--os-variant', 'auto',
+                      '--osinfo', 'detect=on,require=off',
                       '--graphics', 'spice,listen=none',
                       '--connect', 'qemu:///session',
                       '--noautoconsole'
@@ -434,7 +439,7 @@ class _FyrVirtState extends State<FyrVirt> {
                     if (network == 'Bridge') {
                       args.addAll(['--network', 'bridge=br0']);
                     } else {
-                      args.addAll(['--network', 'network=default']);
+                      args.addAll(['--network', 'type=user']);
                     }
 
                     final result = await Process.run('virt-install', args);
@@ -517,8 +522,8 @@ class _FyrVirtState extends State<FyrVirt> {
 
     showDialog(
       context: context,
-      builder: (context) {
-        return StatefulBuilder(builder: (context, setDialogState) {
+      builder: (dialogContext) {
+        return StatefulBuilder(builder: (dialogContext, setDialogState) {
           return AlertDialog(
             backgroundColor: const Color(0xFF2A282C),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
@@ -571,7 +576,7 @@ class _FyrVirtState extends State<FyrVirt> {
             ),
             actions: [
               TextButton(
-                onPressed: () => Navigator.pop(context),
+                onPressed: () => Navigator.pop(dialogContext),
                 child: Text('Cancel', style: TextStyle(color: FyrTheme.textColorMuted)),
               ),
               ElevatedButton(
@@ -613,7 +618,7 @@ class _FyrVirtState extends State<FyrVirt> {
                     }
                   }
 
-                  if (context.mounted) Navigator.pop(context);
+                  if (context.mounted) Navigator.pop(dialogContext);
                 },
                 style: ElevatedButton.styleFrom(backgroundColor: FyrTheme.accentColor),
                 child: const Text('Save Changes', style: TextStyle(color: Colors.white)),
