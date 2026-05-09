@@ -271,6 +271,7 @@ class _FyrFilesState extends State<FyrFiles> {
   int? _lastSelectedIndex;
   final ScrollController _scrollController = ScrollController();
   String? previewImagePath;
+  final FocusNode _mainFocusNode = FocusNode();
 
   void _updateSelection() {
     if (dragStart == null || dragCurrent == null) return;
@@ -527,6 +528,13 @@ class _FyrFilesState extends State<FyrFiles> {
     } else {
       return Directory(Platform.environment['HOME'] ?? '/home/');
     }
+  }
+
+  @override
+  void dispose() {
+    _mainFocusNode.dispose();
+    _scrollController.dispose();
+    super.dispose();
   }
 
   @override
@@ -1001,37 +1009,54 @@ class _FyrFilesState extends State<FyrFiles> {
       );
     }
 
-    return Draggable<List<String>>(
-      data: isSelected ? selectedPaths.toList() : [file.path],
-      feedback: Material(
-        color: Colors.transparent,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          decoration: BoxDecoration(
-            color: FyrTheme.accentColor.withOpacity(0.9),
-            borderRadius: BorderRadius.circular(8),
-            boxShadow: [
-              BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 8, spreadRadius: 2)
-            ],
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(isDir ? Icons.folder : Icons.file_copy, color: Colors.white, size: 20),
-              const SizedBox(width: 8),
-              Text(
-                isSelected && selectedPaths.length > 1 
-                  ? '${selectedPaths.length} items' 
-                  : p.basename(file.path),
-                style: const TextStyle(color: Colors.white, fontSize: 14),
-              ),
-            ],
-          ),
-        ),
-      ),
-      onDragStarted: () {
+    return GestureDetector(
+      onDoubleTap: () async {
+        if (isDir) {
+          openDirectory(file as Directory);
+        } else {
+          var filePath = file.path;
+          if (isPicker) {
+            stdout.write(filePath);
+            await stdout.flush();
+            exit(0);
+          }
+          var result = await Process.run('xdg-open', [filePath]);
+          if (result.exitCode != 0) {
+            stderr.writeln('Could not open $filePath: ${result.stderr}');
+          }
+        }
+      },
+      onLongPressStart: (LongPressStartDetails event) {
+        isFileContextMenuShown = true;
+        openIconContextMenu(context, event, file).then((value) => isFileContextMenuShown = false);
+      },
+      onPanStart: (details) {
         List<String> paths = isSelected ? selectedPaths.toList() : [file.path];
         dragChannel.invokeMethod('startDrag', paths);
+      },
+      onTap: () {
+        bool isControlPressed = HardwareKeyboard.instance.isControlPressed;
+        bool isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
+        setState(() {
+          if (isControlPressed) {
+            if (selectedPaths.contains(file.path)) {
+              selectedPaths.remove(file.path);
+            } else {
+              selectedPaths.add(file.path);
+              _lastSelectedIndex = index;
+            }
+          } else if (isShiftPressed && _lastSelectedIndex != null) {
+            int start = min(_lastSelectedIndex!, index);
+            int end = max(_lastSelectedIndex!, index);
+            for (int i = start; i <= end; i++) {
+              selectedPaths.add(files[i].path);
+            }
+          } else {
+            selectedPaths.clear();
+            selectedPaths.add(file.path);
+            _lastSelectedIndex = index;
+          }
+        });
       },
       child: Listener(
         behavior: HitTestBehavior.translucent,
@@ -1041,52 +1066,7 @@ class _FyrFilesState extends State<FyrFiles> {
             openIconContextMenuRightClick(context, event, file).then((value) => isFileContextMenuShown = false);
           }
         },
-        child: GestureDetector(
-          onDoubleTap: () async {
-            if (isDir) {
-              openDirectory(file as Directory);
-            } else {
-              var filePath = file.path;
-              if (isPicker) { stdout.write(filePath); await stdout.flush(); exit(0); }
-              var result = await Process.run('xdg-open', [filePath]);
-              if (result.exitCode != 0) { stderr.writeln('Could not open $filePath: ${result.stderr}'); }
-            }
-          },
-          onLongPressStart: (LongPressStartDetails event) {
-            isFileContextMenuShown = true;
-            openIconContextMenu(context, event, file).then((value) => isFileContextMenuShown = false);
-          },
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: () {
-                bool isControlPressed = HardwareKeyboard.instance.isControlPressed;
-                bool isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
-                setState(() {
-                  if (isControlPressed) {
-                    if (selectedPaths.contains(file.path)) {
-                      selectedPaths.remove(file.path);
-                    } else {
-                      selectedPaths.add(file.path);
-                      _lastSelectedIndex = index;
-                    }
-                  } else if (isShiftPressed && _lastSelectedIndex != null) {
-                    int start = min(_lastSelectedIndex!, index);
-                    int end = max(_lastSelectedIndex!, index);
-                    for (int i = start; i <= end; i++) {
-                      selectedPaths.add(files[i].path);
-                    }
-                  } else {
-                    selectedPaths.clear();
-                    selectedPaths.add(file.path);
-                    _lastSelectedIndex = index;
-                  }
-                });
-              },
-              child: content,
-            ),
-          ),
-        ),
+        child: content,
       ),
     );
   }
@@ -1097,10 +1077,14 @@ class _FyrFilesState extends State<FyrFiles> {
     Stream<List<FileSystemEntity>> fileStream = watchDirectory();
 
     return RawKeyboardListener(
-      focusNode: FocusNode(),
+      focusNode: _mainFocusNode,
       autofocus: true,
       onKey: (event) {
         if (event is RawKeyDownEvent) {
+          // If a text field is focused, don't trigger global shortcuts
+          if (FocusManager.instance.primaryFocus?.context?.widget is EditableText) {
+            return;
+          }
           if (event.logicalKey == LogicalKeyboardKey.controlLeft ||
               event.logicalKey == LogicalKeyboardKey.controlRight) {
           } else if (event.logicalKey == LogicalKeyboardKey.keyA && event.isControlPressed) {
@@ -1419,6 +1403,7 @@ class _FyrFilesState extends State<FyrFiles> {
         setState(() {});
       },
       child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
                   onTap: () {
                     setState(() {
                       selectedPaths.clear();
@@ -1563,6 +1548,53 @@ class _FyrFilesState extends State<FyrFiles> {
   }
 
 
+
+  Future<void> _showRenameDialog(BuildContext context, FileSystemEntity file) async {
+    String fileName = p.basename(file.path);
+    int lastDotIndex = fileName.lastIndexOf('.');
+    int selectionEnd = (lastDotIndex <= 0) ? fileName.length : lastDotIndex;
+
+    TextEditingController renameController = TextEditingController(text: fileName);
+    renameController.selection = TextSelection(baseOffset: 0, extentOffset: selectionEnd);
+
+    void doRename() {
+      String newName = renameController.text;
+      if (newName.isNotEmpty && newName != fileName) {
+        String newPath = p.join(p.dirname(file.path), newName);
+        try {
+          file.renameSync(newPath);
+        } catch (e) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error renaming: $e')),
+          );
+        }
+      }
+      Navigator.pop(context);
+    }
+
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Rename File'),
+        content: TextField(
+          controller: renameController,
+          autofocus: true,
+          onSubmitted: (_) => doRename(),
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: doRename,
+            child: const Text('Rename'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<dynamic> openIconContextMenuRightClick(
       BuildContext context, PointerDownEvent event, FileSystemEntity file) {
     return showMenu(
@@ -1589,34 +1621,7 @@ class _FyrFilesState extends State<FyrFiles> {
             title: const Text('Rename'),
             onTap: () async {
               Navigator.pop(context);
-              TextEditingController renameController =
-                  TextEditingController(text: file.uri.pathSegments.last);
-              await showDialog(
-                context: context,
-                builder: (context) => AlertDialog(
-                  title: const Text('Rename File'),
-                  content: TextField(
-                    controller: renameController,
-                  ),
-                  actions: [
-                    ElevatedButton(
-                      onPressed: () {
-                        Navigator.pop(context);
-                      },
-                      child: const Text('Cancel'),
-                    ),
-                    ElevatedButton(
-                      onPressed: () {
-                        String newName = renameController.text;
-                        String newPath = p.join(p.dirname(file.path), newName);
-                        file.renameSync(newPath);
-                        Navigator.pop(context);
-                      },
-                      child: const Text('Rename'),
-                    ),
-                  ],
-                ),
-              );
+              await _showRenameDialog(context, file);
             },
           ),
         ),
@@ -2021,34 +2026,7 @@ class _FyrFilesState extends State<FyrFiles> {
             title: const Text('Rename'),
             onTap: () async {
               Navigator.pop(context);
-              TextEditingController renameController =
-                  TextEditingController(text: file.uri.pathSegments.last);
-              await showDialog(
-                context: context,
-                builder: (context) => AlertDialog(
-                  title: const Text('Rename File'),
-                  content: TextField(
-                    controller: renameController,
-                  ),
-                  actions: [
-                    ElevatedButton(
-                      onPressed: () {
-                        Navigator.pop(context);
-                      },
-                      child: const Text('Cancel'),
-                    ),
-                    ElevatedButton(
-                      onPressed: () {
-                        String newName = renameController.text;
-                        String newPath = p.join(p.dirname(file.path), newName);
-                        file.renameSync(newPath);
-                        Navigator.pop(context);
-                      },
-                      child: const Text('Rename'),
-                    ),
-                  ],
-                ),
-              );
+              await _showRenameDialog(context, file);
             },
           ),
         ),
