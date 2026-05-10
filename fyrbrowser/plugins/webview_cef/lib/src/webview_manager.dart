@@ -22,6 +22,7 @@ class WebviewManager extends ValueNotifier<bool> {
   InjectUserScripts? _injectUserScripts = InjectUserScripts();
 
   void Function(WebViewController)? onPopupCreated;
+  static void Function(String)? onNativeLog;
 
   int nextIndex = 1;
 
@@ -201,6 +202,9 @@ class WebviewManager extends ValueNotifier<bool> {
       case 'onBrowserClose':
         int browserId = call.arguments["browserId"] as int;
         _webViews[browserId]?.listener?.onClose?.call();
+        return;
+      case 'onNativeLog':
+        onNativeLog?.call(call.arguments as String);
         return;
       default:
     }

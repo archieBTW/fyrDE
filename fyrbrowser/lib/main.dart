@@ -1,11 +1,16 @@
 import 'dart:io';
+import 'package:webview_cef/webview_cef.dart';
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 import 'fyr_theme.dart';
 import 'browser_screen.dart';
+import 'logger_service.dart';
 
 void main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+  await LoggerService().initialize();
+  logger.i('FyrBrowser starting...');
+  WebviewManager.onNativeLog = (msg) => logger.d('[Native] $msg');
   await windowManager.ensureInitialized();
 
   String? initialUrl;
@@ -36,6 +41,11 @@ void main(List<String> args) async {
   });
 
   FyrTheme.initialize();
+
+  FlutterError.onError = (FlutterErrorDetails details) {
+    logger.e('Flutter Error', details.exception, details.stack);
+  };
+
   runApp(FyrBrowser(initialUrl: initialUrl, isAppMode: isAppMode));
 }
 

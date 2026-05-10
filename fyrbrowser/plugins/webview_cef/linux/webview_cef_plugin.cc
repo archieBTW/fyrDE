@@ -278,6 +278,16 @@ void webview_cef_plugin_register_with_registrar(FlPluginRegistrar *registrar)
                                             g_object_ref(plugin),
                                             g_object_unref);
 
+  plugin->m_plugin->setLogNativeFunc([=](std::string message) {
+    g_main_context_invoke(NULL, [](gpointer user_data) -> gboolean {
+      auto data = static_cast<std::pair<FlMethodChannel*, std::string>*>(user_data);
+      g_autoptr(FlValue) args = fl_value_new_string(data->second.c_str());
+      fl_method_channel_invoke_method(data->first, "onNativeLog", args, NULL, NULL, NULL);
+      delete data;
+      return FALSE;
+    }, new std::pair<FlMethodChannel*, std::string>(channel, message));
+  });
+
   plugin->m_plugin->setInvokeMethodFunc([=](std::string method, WValue *arguments) {
     FlValue *args = encode_wavlue_to_flvalue(arguments);
     g_main_context_invoke(NULL, [](gpointer user_data) -> gboolean {

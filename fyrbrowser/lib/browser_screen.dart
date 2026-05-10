@@ -12,6 +12,7 @@ import 'package:flutter/gestures.dart';
 import 'fyr_theme.dart';
 import 'adblock_engine.dart';
 import 'download_manager.dart';
+import 'logger_service.dart';
 
 import 'package:intl/intl.dart';
 
@@ -66,6 +67,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
           _currentTabIndex = _tabs.length - 1;
           _urlController.text = newTab.url;
         });
+        logger.i('Popup created: ${newTab.url}');
         Future.microtask(() {
           if (mounted) {
             _urlFocusNode.requestFocus();
@@ -131,7 +133,9 @@ class _BrowserScreenState extends State<BrowserScreen> {
   }
 
   void _addNewTab({String? url}) {
-    final newTab = BrowserTab(url: url ?? 'https://start.duckduckgo.com');
+    final newUrl = url ?? 'https://start.duckduckgo.com';
+    logger.i('Adding new tab: $newUrl');
+    final newTab = BrowserTab(url: newUrl);
     newTab.controller = _manager.createWebView();
     
     setState(() {
@@ -162,6 +166,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
           if (url != 'about:blank' || tab.isReady) {
             tab.url = url;
           }
+          logger.d('URL changed in tab ${tab.title}: $url');
           if (_tabs.indexOf(tab) == _currentTabIndex) _urlController.text = tab.url;
           tab.showPwaInstall = false;
           tab.pwaIconUrl = null;
@@ -204,7 +209,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
         _showContextMenu(x, y, typeFlags, linkUrl, sourceUrl, selectionText, isEditable);
       },
       onConsoleMessage: (int level, String message, String source, int line) {
-        debugPrint('WebView Console [$level] ($source:$line): $message');
+        logger.d('WebView Console [$level] ($source:$line): $message');
       },
       onFileDialog: (int browserId, int callbackId) async {
         try {

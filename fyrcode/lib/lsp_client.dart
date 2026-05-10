@@ -73,6 +73,7 @@ class LspClient {
             'codeActionLiteralSupport': {
               'codeActionKind': {
                 'valueSet': [
+                  'quickfix',
                   'refactor',
                   'refactor.extract',
                   'refactor.inline',
@@ -137,8 +138,9 @@ class LspClient {
     int startLine,
     int startCharacter,
     int endLine,
-    int endCharacter,
-  ) async {
+    int endCharacter, {
+    List<dynamic>? diagnostics,
+  }) async {
     if (!_isInitialized || _peer == null || _peer!.isClosed) return null;
     try {
       final result = await _peer!.sendRequest('textDocument/codeAction', {
@@ -147,7 +149,7 @@ class LspClient {
           'start': {'line': startLine, 'character': startCharacter},
           'end': {'line': endLine, 'character': endCharacter},
         },
-        'context': {'diagnostics': []},
+        'context': {'diagnostics': diagnostics ?? []},
       });
       return result as List<dynamic>?;
     } catch (e) {

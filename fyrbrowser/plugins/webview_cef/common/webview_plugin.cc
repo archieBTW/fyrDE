@@ -39,6 +39,9 @@ namespace webview_cef {
 				{
 					m_renderers[browserId]->onFrame(buffer, width, height);
 				}
+				else if (m_logFunc) {
+					m_logFunc("onPaintCallback: No renderer for browserId " + std::to_string(browserId));
+				}
 			};
 
 			m_handler->onTooltipEvent = [=](int browserId, std::string text) {
@@ -696,6 +699,10 @@ namespace webview_cef {
 		m_invokeFunc = func;
 	}
 
+	void WebviewPlugin::setLogNativeFunc(std::function<void(std::string)> func){
+		m_logFunc = func;
+	}
+
 	void WebviewPlugin::setCreateTextureFunc(std::function<std::shared_ptr<WebviewTexture>()> func)
 	{
 		m_createTextureFunc = func;
@@ -770,6 +777,13 @@ namespace webview_cef {
         }
         
         cefs.persist_session_cookies = true;
+
+        // FyrBrowser: Enable internal CEF logging
+        if (homedir != nullptr) {
+            std::string log_path = std::string(homedir) + "/.config/fyrbrowser/logs/cef.log";
+            CefString(&cefs.log_file) = log_path;
+            cefs.log_severity = LOGSEVERITY_DEFAULT; // Adjust if needed (LOGSEVERITY_VERBOSE, etc.)
+        }
 
 		if(!userAgent.empty()){
 			CefString(&cefs.user_agent) = userAgent;

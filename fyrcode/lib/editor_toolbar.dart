@@ -4,7 +4,13 @@ import 'package:google_fonts/google_fonts.dart';
 import 'fyr_theme.dart';
 
 class LspSelectionToolbarController implements SelectionToolbarController {
-  final Future<List<dynamic>> Function(int startLine, int startCol, int endLine, int endCol) getCodeActions;
+  final Future<List<dynamic>> Function(
+    int startLine,
+    int startCol,
+    int endLine,
+    int endCol,
+    List<dynamic> diagnostics,
+  ) getCodeActions;
   final Function(dynamic action) onCodeActionSelected;
 
   LspSelectionToolbarController({
@@ -40,6 +46,7 @@ class LspSelectionToolbarController implements SelectionToolbarController {
       isBaseFirst ? startCol : endCol,
       isBaseFirst ? endLine : startLine,
       isBaseFirst ? endCol : startCol,
+      [], // Placeholder, will be populated by the callback in code_editor_pane
     );
     
     if (!context.mounted) return;
@@ -47,7 +54,7 @@ class LspSelectionToolbarController implements SelectionToolbarController {
     final RenderBox overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
     final Offset anchor = anchors.primaryAnchor;
 
-    // Filter for refactorings and wrap actions
+    // Filter for refactorings and quickfixes (including imports)
     final refactors = actions.where((a) {
       final kind = a['kind']?.toString() ?? '';
       final title = a['title']?.toString().toLowerCase() ?? '';
@@ -55,19 +62,17 @@ class LspSelectionToolbarController implements SelectionToolbarController {
              kind.startsWith('quickfix') || 
              title.contains('wrap') || 
              title.contains('extract') ||
-             title.contains('move');
+             title.contains('move') ||
+             title.contains('import');
     }).toList();
-
-    if (refactors.isEmpty) {
-      // If no refactors, maybe show a minimal default menu or nothing
-      // For now, let's just show "No refactorings available" to be helpful
-      // or just don't show anything if that's preferred.
-      // The user specifically asked for refactor snippets.
-    }
 
     showMenu(
       context: context,
       color: FyrTheme.bgColor,
+      constraints: const BoxConstraints(
+        minWidth: 250,
+        maxWidth: 800, // Allow it to grow up to 800px
+      ),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
         side: BorderSide(color: FyrTheme.dividerColor, width: 1),
@@ -117,7 +122,7 @@ class LspSelectionToolbarController implements SelectionToolbarController {
         PopupMenuItem(
           enabled: false,
           child: Text(
-            'REFACTOR',
+            'ACTIONS',
             style: GoogleFonts.jetBrainsMono(
               fontSize: 11,
               fontWeight: FontWeight.bold,
@@ -129,7 +134,7 @@ class LspSelectionToolbarController implements SelectionToolbarController {
           const PopupMenuItem(
             enabled: false,
             child: Text(
-              'No refactorings available',
+              'No actions available',
               style: TextStyle(color: Colors.grey, fontSize: 13),
             ),
           )
@@ -147,6 +152,7 @@ class LspSelectionToolbarController implements SelectionToolbarController {
                     color: FyrTheme.textColor,
                     fontSize: 13,
                   ),
+                  softWrap: false,
                 ),
               ],
             ),
@@ -161,6 +167,5 @@ class LspSelectionToolbarController implements SelectionToolbarController {
 
   @override
   void hide(BuildContext context) {
-    // showMenu is dismissed by clicking outside or selecting
   }
 }

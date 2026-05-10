@@ -1,6 +1,7 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/gestures.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:re_editor/re_editor.dart';
 import 'package:re_highlight/languages/dart.dart';
@@ -1137,64 +1138,128 @@ class CodeEditorPaneState extends State<CodeEditorPane> {
                           removeBottom: true,
                           child: DragAutoScroller(
                             controller: _scrollController.verticalScroller,
-                            child: CodeEditor(
-                            padding: EdgeInsets.zero,
-                            key: ValueKey(widget.filePath),
-                            controller: _controller!,
-                            focusNode: _focusNode,
-                            scrollController: _scrollController,
-                            findController: _findController,
-                            toolbarController: LspSelectionToolbarController(
-                          getCodeActions:
-                              (startLine, startCol, endLine, endCol) async {
-                            return await _lspClient?.getCodeActions(
-                                  widget.filePath,
-                                  startLine,
-                                  startCol,
-                                  endLine,
-                                  endCol,
-                                ) ??
-                                [];
-                          },
-                          onCodeActionSelected: _handleCodeAction,
-                        ),
-                        wordWrap: false,
-                        style: CodeEditorStyle(
-                          fontSize: widget.fontSize,
-                          fontFamily: GoogleFonts.jetBrainsMono().fontFamily,
-                          codeTheme: CodeHighlightTheme(
-                            languages: {
-                              'dart': CodeHighlightThemeMode(mode: langDart),
-                            },
-                            theme: catppuccinTheme,
+                            child: GestureDetector(
+                              onSecondaryTapDown: (details) {
+                                // Calculate line and column from the click position
+                                final offset = details.localPosition;
+                                
+                                double gutterWidth = 56.0;
+                                if (_gutterKey.currentContext != null) {
+                                  final RenderBox? box = _gutterKey.currentContext!.findRenderObject() as RenderBox?;
+                                  if (box != null && box.hasSize) {
+                                    gutterWidth = box.size.width;
+                                  }
+                                }
+
+                                final scrollX = _scrollController.horizontalScroller.hasClients ? _scrollController.horizontalScroller.offset : 0;
+                                final scrollY = _scrollController.verticalScroller.hasClients ? _scrollController.verticalScroller.offset : 0;
+
+                                // We need to account for the same topOffset as in hover
+                                double topOffset = 0.0;
+                                if (_gutterKey.currentContext != null) {
+                                  final RenderBox? box = _gutterKey.currentContext!.findRenderObject() as RenderBox?;
+                                  final RenderBox? editorBox = context.findRenderObject() as RenderBox?;
+                                  if (box != null && editorBox != null && box.attached && editorBox.attached && box.hasSize && editorBox.hasSize) {
+                                    try {
+                                      final globalBox = box.localToGlobal(Offset.zero);
+                                      final globalEditor = editorBox.localToGlobal(Offset.zero);
+                                      topOffset = globalBox.dy - globalEditor.dy;
+                                    } catch (_) {}
+                                  }
+                                }
+
+                                final x = offset.dx - gutterWidth + scrollX;
+                                final y = (offset.dy - topOffset) + scrollY;
+
+                                final line = (y / _lineHeight).floor();
+                                final col = (x / _charWidth).floor();
+
+                                if (line >= 0 && line < _controller!.codeLines.length) {
+                                  final lineText = _controller!.codeLines[line].text;
+                                  final safeCol = col.clamp(0, lineText.length);
+                                  
+                                  setState(() {
+                                    _controller!.selection = CodeLineSelection.collapsed(
+                                      index: line,
+                                      offset: safeCol,
+                                    );
+                                  });
+                                  
+                                  // The re_editor should now show the toolbar automatically 
+                                  // because the selection changed via secondary tap.
+                                  // If it doesn't, we might need more aggressive measures,
+                                  // but this is the standard Flutter-friendly way.
+                                }
+                              },
+                              child: CodeEditor(
+                              padding: EdgeInsets.zero,
+                              key: ValueKey(widget.filePath),
+                              controller: _controller!,
+                              focusNode: _focusNode,
+                              scrollController: _scrollController,
+                              findController: _findController,
+                              toolbarController: LspSelectionToolbarController(
+                        getCodeActions: (startLine, startCol, endLine, endCol, _) async {
+                          // Filter diagnostics that overlap with the requested range
+                          final relevantDiagnostics = _diagnostics.where((diag) {
+                            final range = diag['range'];
+                            if (range == null) return false;
+                            final dStartLine = range['start']['line'] as int;
+                            final dEndLine = range['end']['line'] as int;
+                            // Simple line-based overlap check
+                            return (dStartLine <= endLine && dEndLine >= startLine);
+                          }).toList();
+
+                          return await _lspClient?.getCodeActions(
+                                widget.filePath,
+                                startLine,
+                                startCol,
+                                endLine,
+                                endCol,
+                                diagnostics: relevantDiagnostics,
+                              ) ??
+                              [];
+                        },
+                        onCodeActionSelected: _handleCodeAction,
+                      ),
+                          wordWrap: false,
+                          style: CodeEditorStyle(
+                            fontSize: widget.fontSize,
+                            fontFamily: GoogleFonts.jetBrainsMono().fontFamily,
+                            codeTheme: CodeHighlightTheme(
+                              languages: {
+                                'dart': CodeHighlightThemeMode(mode: langDart),
+                              },
+                              theme: catppuccinTheme,
+                            ),
                           ),
-                        ),
-                        indicatorBuilder:
-                            (
-                              context,
-                              editingController,
-                              chunkController,
-                              notifier,
-                            ) {
-                              return Row(
-                                key: _gutterKey,
-                                children: [
-                                  DefaultCodeLineNumber(
-                                    controller: editingController,
-                                    notifier: notifier,
-                                    textStyle: _editorTextStyle.copyWith(
-                                      color: FyrTheme.textColorMuted,
+                          indicatorBuilder:
+                              (
+                                context,
+                                editingController,
+                                chunkController,
+                                notifier,
+                              ) {
+                                return Row(
+                                  key: _gutterKey,
+                                  children: [
+                                    DefaultCodeLineNumber(
+                                      controller: editingController,
+                                      notifier: notifier,
+                                      textStyle: _editorTextStyle.copyWith(
+                                        color: FyrTheme.textColorMuted,
+                                      ),
                                     ),
-                                  ),
-                                  DefaultCodeChunkIndicator(
-                                    width: 20,
-                                    controller: chunkController,
-                                    notifier: notifier,
-                                  ),
-                                ],
-                              );
-                            },
-                        ),
+                                    DefaultCodeChunkIndicator(
+                                      width: 20,
+                                      controller: chunkController,
+                                      notifier: notifier,
+                                    ),
+                                  ],
+                                );
+                              },
+                          ),
+                            ),
                           ),
                         ),
                       ),
