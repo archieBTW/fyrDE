@@ -29,6 +29,9 @@ dev_dependencies:
 flutter:
   uses-material-design: true
 
+  assets:
+    - assets/icons/fyr_icon.png
+
   fonts:
     - family: San Francisco
       fonts:
