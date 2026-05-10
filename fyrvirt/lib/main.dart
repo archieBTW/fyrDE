@@ -263,6 +263,32 @@ class _FyrVirtState extends State<FyrVirt> {
     refreshVMs();
   }
 
+  Future<void> deleteVM(VMInfo vm) async {
+    try {
+      if (vm.isRunning) {
+        await Process.run('virsh', ['-c', 'qemu:///session', 'destroy', vm.name]);
+      }
+      final result = await Process.run('virsh', [
+        '-c', 'qemu:///session',
+        'undefine', vm.name,
+        '--remove-all-storage',
+        '--nvram',
+        '--managed-save'
+      ]);
+
+      if (result.exitCode != 0) {
+        throw Exception(result.stderr.toString().trim());
+      }
+      refreshVMs();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error deleting VM: $e'), backgroundColor: Colors.redAccent),
+        );
+      }
+    }
+  }
+
   Future<void> launchVM(String name, {bool fullscreen = false}) async {
     try {
       List<String> args = ['-c', 'qemu:///session', '--attach'];
@@ -630,6 +656,56 @@ class _FyrVirtState extends State<FyrVirt> {
     );
   }
 
+  Future<void> _showDeleteConfirmation(VMInfo vm) async {
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF2A282C),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Row(
+            children: [
+              const Icon(Icons.warning_amber_rounded, color: Colors.redAccent),
+              const SizedBox(width: 12),
+              const Text('Delete Virtual Machine?', style: TextStyle(color: Colors.white)),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Are you sure you want to delete "${vm.name}"?',
+                style: const TextStyle(color: Colors.white70),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'This action will permanently delete the VM configuration and all associated storage disks. This cannot be undone.',
+                style: TextStyle(color: Colors.redAccent, fontSize: 13, fontWeight: FontWeight.w500),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: Text('Cancel', style: TextStyle(color: FyrTheme.textColorMuted)),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(dialogContext);
+                deleteVM(vm);
+              },
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+              child: const Text('Confirm Delete', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final filteredVMs = vms.where((vm) {
@@ -917,6 +993,11 @@ class _FyrVirtState extends State<FyrVirt> {
                   icon: Icon(Icons.settings_outlined, color: FyrTheme.textColorMuted, size: 24),
                   onPressed: () => _showSettings(vm),
                   tooltip: 'Settings',
+                ),
+                IconButton(
+                  icon: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent, size: 24),
+                  onPressed: () => _showDeleteConfirmation(vm),
+                  tooltip: 'Delete VM',
                 ),
               ],
             ),
