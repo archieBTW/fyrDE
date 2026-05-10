@@ -38,9 +38,7 @@ namespace stringpatch
 
 #include "webview_js_handler.h"
 
-namespace {
-// The only browser that currently get focused
-CefRefPtr<CefBrowser> current_focused_browser_ = nullptr;
+// namespace
 
 // Returns a data: URI with the specified contents.
 std::string GetDataURI(const std::string& data, const std::string& mime_type) {
@@ -49,7 +47,7 @@ std::string GetDataURI(const std::string& data, const std::string& mime_type) {
         .ToString();
 }
 
-}  // namespace
+
 
 WebviewHandler::WebviewHandler() {
 
@@ -67,7 +65,6 @@ bool WebviewHandler::OnProcessMessageReceived(
 	std::string message_name = message->GetName();
     if (message_name == kFocusedNodeChangedMessage)
     {
-        current_focused_browser_ = browser;
         bool editable = message->GetArgumentList()->GetBool(0);
         onFocusedNodeChangeMessage(browser->GetIdentifier(), editable);
         if (editable) {
@@ -92,6 +89,7 @@ bool WebviewHandler::OnProcessMessageReceived(
         CefRefPtr<CefValue> param = message->GetArgumentList()->GetValue(1);
 
         if(!callbackId.empty()){
+            std::lock_guard<std::recursive_mutex> lock(m_mutex);
             auto it = js_callbacks_.find(callbackId.ToString());
             if(it != js_callbacks_.end()){
                 it->second(param);
@@ -149,7 +147,7 @@ bool WebviewHandler::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
 }
 
 void WebviewHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
-    CEF_REQUIRE_UI_THREAD();
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     browser_map_.emplace(browser->GetIdentifier(), browser_info());
     browser_map_[browser->GetIdentifier()].browser = browser;
     
@@ -175,7 +173,7 @@ bool WebviewHandler::DoClose(CefRefPtr<CefBrowser> browser) {
 }
 
 void WebviewHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
-    CEF_REQUIRE_UI_THREAD();
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     browser_map_.erase(browser->GetIdentifier());
 }
 
@@ -296,6 +294,7 @@ bool WebviewHandler::IsChromeRuntimeEnabled() {
 
 void WebviewHandler::closeBrowser(int browserId)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browserId);
     if(it != browser_map_.end()){
         it->second.browser->GetHost()->CloseBrowser(true);
@@ -321,7 +320,7 @@ void WebviewHandler::createBrowser(std::string url, std::function<void(int)> cal
 }
 
 void WebviewHandler::sendScrollEvent(int browserId, int x, int y, int deltaX, int deltaY) {
-
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browserId);
     if (it != browser_map_.end()) {
         CefMouseEvent ev;
@@ -345,6 +344,7 @@ void WebviewHandler::sendScrollEvent(int browserId, int x, int y, int deltaX, in
 
 void WebviewHandler::changeSize(int browserId, float a_dpi, int w, int h)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browserId);
     if (it != browser_map_.end()) {
         it->second.dpi = a_dpi;
@@ -356,6 +356,7 @@ void WebviewHandler::changeSize(int browserId, float a_dpi, int w, int h)
 
 void WebviewHandler::cursorClick(int browserId, int x, int y, bool up, int button)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browserId);
     if (it != browser_map_.end()) {
         CefMouseEvent ev;
@@ -381,6 +382,7 @@ void WebviewHandler::cursorClick(int browserId, int x, int y, bool up, int butto
 
 void WebviewHandler::cursorMove(int browserId, int x , int y, bool dragging)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browserId);
     if (it != browser_map_.end()) {
         CefMouseEvent ev;
@@ -402,6 +404,7 @@ bool WebviewHandler::StartDragging(CefRefPtr<CefBrowser> browser,
                                   DragOperationsMask allowed_ops,
                                   int x,
                                   int y){
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browser->GetIdentifier());
     if (it != browser_map_.end() && it->second.browser->IsSame(browser)) {
         CefMouseEvent ev;
@@ -416,7 +419,7 @@ bool WebviewHandler::StartDragging(CefRefPtr<CefBrowser> browser,
 
 void WebviewHandler::OnImeCompositionRangeChanged(CefRefPtr<CefBrowser> browser, const CefRange &selection_range, const CefRenderHandler::RectList &character_bounds)
 {
-    CEF_REQUIRE_UI_THREAD();
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browser->GetIdentifier());
     if(it == browser_map_.end() || !it->second.browser.get() || browser->IsPopup()) {
         return;
@@ -439,17 +442,18 @@ void WebviewHandler::OnImeCompositionRangeChanged(CefRefPtr<CefBrowser> browser,
     }
 }
 
-void WebviewHandler::sendKeyEvent(CefKeyEvent& ev)
+void WebviewHandler::sendKeyEvent(int browserId, CefKeyEvent& ev)
 {
-    auto browser = current_focused_browser_;
-    if (!browser.get()) {
-        return;
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    auto it = browser_map_.find(browserId);
+    if (it != browser_map_.end() && it->second.browser.get()) {
+        it->second.browser->GetHost()->SendKeyEvent(ev);
     }
-    browser->GetHost()->SendKeyEvent(ev);
 }
 
 void WebviewHandler::loadUrl(int browserId, std::string url)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browserId);
     if (it != browser_map_.end()) {
         it->second.browser->GetMainFrame()->LoadURL(url);
@@ -535,6 +539,7 @@ void WebviewHandler::imeCommitText(int browserId, std::string text)
 
 void WebviewHandler::setClientFocus(int browserId, bool focus)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browserId);
     if (it==browser_map_.end() || !it->second.browser.get()) {
         return;
@@ -674,6 +679,7 @@ void WebviewHandler::executeJavaScript(int browserId, const std::string code, st
 
 void WebviewHandler::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect &rect) {
     CEF_REQUIRE_UI_THREAD();
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browser->GetIdentifier());
     if(it == browser_map_.end() || !it->second.browser.get()) {
         return;

@@ -401,6 +401,10 @@ EOF
             ;;
         "fyrtext")
             sudo ln -sf /opt/fyrtext/fyrtext /usr/local/bin/fyrtext
+            if [ -f "./fyrtext/assets/icons/textEditor.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrtext/assets/icons/textEditor.png /usr/share/icons/hicolor/512x512/apps/fyrtext.png
+            fi
             sudo cp ./fyrtext/fyrtext.desktop /usr/share/applications/fyrtext.desktop
             xdg-mime default fyrtext.desktop text/plain || true
             ;;

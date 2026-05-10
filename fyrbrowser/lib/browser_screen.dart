@@ -66,8 +66,12 @@ class _BrowserScreenState extends State<BrowserScreen> {
           _currentTabIndex = _tabs.length - 1;
           _urlController.text = newTab.url;
         });
-        _urlFocusNode.requestFocus();
-        _urlController.selection = TextSelection(baseOffset: 0, extentOffset: _urlController.text.length);
+        Future.microtask(() {
+          if (mounted) {
+            _urlFocusNode.requestFocus();
+            _urlController.selection = TextSelection(baseOffset: 0, extentOffset: _urlController.text.length);
+          }
+        });
       };
       _addNewTab(url: widget.initialUrl);
     });
@@ -135,8 +139,13 @@ class _BrowserScreenState extends State<BrowserScreen> {
       _currentTabIndex = _tabs.length - 1;
       _urlController.text = newTab.url;
     });
-    _urlFocusNode.requestFocus();
-    _urlController.selection = TextSelection(baseOffset: 0, extentOffset: _urlController.text.length);
+    
+    Future.microtask(() {
+      if (mounted) {
+        _urlFocusNode.requestFocus();
+        _urlController.selection = TextSelection(baseOffset: 0, extentOffset: _urlController.text.length);
+      }
+    });
 
     _setupTabListeners(newTab);
     newTab.controller.initialize(newTab.url).then((_) {
@@ -274,9 +283,10 @@ class _BrowserScreenState extends State<BrowserScreen> {
 
   void _startPwaCheck(BrowserTab tab) {
     if (widget.isAppMode) return;
-    // Run once after load to avoid resource exhaustion
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted && tab.isReady && !tab.showPwaInstall) {
+    // Debounce PWA checks to avoid task flooding during rapid navigation or redirects
+    final String targetUrl = tab.url;
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted && tab.isReady && !tab.showPwaInstall && tab.url == targetUrl && !tab.isLoading) {
         _checkPwaStatus(tab);
       }
     });

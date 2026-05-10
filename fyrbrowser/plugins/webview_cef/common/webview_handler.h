@@ -11,6 +11,7 @@
 #include <set>
 #include <list>
 #include <unordered_map>
+#include <mutex>
 
 #include "webview_cookieVisitor.h"
 
@@ -228,7 +229,7 @@ public:
     void changeSize(int browserId, float a_dpi, int width, int height);
     void cursorClick(int browserId, int x, int y, bool up, int button);
     void cursorMove(int browserId, int x, int y, bool dragging);
-    void sendKeyEvent(CefKeyEvent& ev);
+    void sendKeyEvent(int browserId, CefKeyEvent& ev);
     void loadUrl(int browserId, std::string url);
     void goForward(int browserId);
     void goBack(int browserId);
@@ -256,6 +257,7 @@ private:
     std::unordered_map<std::string, std::function<void(CefRefPtr<CefValue>)>> js_callbacks_;
     std::unordered_map<int, CefRefPtr<CefFileDialogCallback>> file_dialog_callbacks_;
     int last_callback_id_ = 0;
+    std::recursive_mutex m_mutex;
     // Include the default reference counting implementation.
     IMPLEMENT_REFCOUNTING(WebviewHandler);
 

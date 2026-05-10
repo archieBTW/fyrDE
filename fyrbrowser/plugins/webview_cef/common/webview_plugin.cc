@@ -670,7 +670,19 @@ namespace webview_cef {
 
 	void WebviewPlugin::sendKeyEvent(CefKeyEvent& ev)
 	{
-		m_handler->sendKeyEvent(ev);
+		std::lock_guard<std::recursive_mutex> lock(m_mutex);
+		int focusedId = -1;
+		for (auto const& [id, renderer] : m_renderers) {
+			if (renderer && renderer->isFocused) {
+				focusedId = id;
+				break;
+			}
+		}
+
+		if (focusedId != -1) {
+			m_handler->sendKeyEvent(focusedId, ev);
+		}
+
 		if(ev.type == KEYEVENT_RAWKEYDOWN && ev.windows_key_code == 0x7B && (ev.modifiers & EVENTFLAG_CONTROL_DOWN) != 0){
 			for(auto render : m_renderers){
 				if(render.second.get()->isFocused){
