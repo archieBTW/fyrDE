@@ -355,7 +355,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
       } else if (event.logicalKey == LogicalKeyboardKey.f5) {
         _tabs[_currentTabIndex].controller.reload();
       } else if (isControl && event.logicalKey == LogicalKeyboardKey.keyL) {
-        _urlFocusNode.requestFocus();
+        FocusScope.of(context).requestFocus(_urlFocusNode);
       }
     }
   }
@@ -944,7 +944,17 @@ Categories=Network;WebBrowser;
     final textColor = FyrTheme.textColor;
     final currentTab = _tabs.isNotEmpty ? _tabs[_currentTabIndex] : null;
 
-    return DragToMoveArea(
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onPanStart: (details) => windowManager.startDragging(),
+      onTap: () => FocusScope.of(context).requestFocus(_urlFocusNode),
+      onDoubleTap: () {
+        FocusScope.of(context).requestFocus(_urlFocusNode);
+        _urlController.selection = TextSelection(
+          baseOffset: 0,
+          extentOffset: _urlController.text.length,
+        );
+      },
       child: Container(
         height: 60,
         padding: const EdgeInsets.symmetric(horizontal: 16),

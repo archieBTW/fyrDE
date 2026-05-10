@@ -393,7 +393,7 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
   @override
   Widget build(BuildContext context) {
     return Focus(
-      autofocus: true,
+      autofocus: false,
       focusNode: _focusNode,
       canRequestFocus: true,
       debugLabel: "webview_cef",
