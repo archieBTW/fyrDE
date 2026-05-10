@@ -32,8 +32,11 @@ namespace webview_cef {
 	void WebviewPlugin::initCallback() {
 		if (!m_init)
 		{
-			m_handler->onPaintCallback = [=](int browserId, const void* buffer, int32_t width, int32_t height) {
-				if (m_renderers.find(browserId) != m_renderers.end() && m_renderers[browserId] != nullptr) {
+			m_handler->onPaintCallback = [=](int browserId, const void* buffer, int32_t width, int32_t height)
+			{
+				std::lock_guard<std::recursive_mutex> lock(m_mutex);
+				if (m_renderers.count(browserId))
+				{
 					m_renderers[browserId]->onFrame(buffer, width, height);
 				}
 			};
@@ -327,6 +330,55 @@ namespace webview_cef {
 				}
 			};
 
+			m_handler->onBeforePopup = [=](int browserId, std::string targetUrl)
+			{
+				if (m_invokeFunc)
+				{
+					WValue* bId = webview_value_new_int(browserId);
+					WValue* wUrl = webview_value_new_string(const_cast<char*>(targetUrl.c_str()));
+					WValue* retMap = webview_value_new_map();
+					webview_value_set_string(retMap, "browserId", bId);
+					webview_value_set_string(retMap, "targetUrl", wUrl);
+					m_invokeFunc("onBeforePopup", retMap);
+					webview_value_unref(bId);
+					webview_value_unref(wUrl);
+					webview_value_unref(retMap);
+				}
+			};
+
+			m_handler->onPopupCreated = [=](int browserId)
+			{
+				std::lock_guard<std::recursive_mutex> lock(m_mutex);
+				if (m_invokeFunc)
+				{
+					std::shared_ptr<WebviewTexture> renderer = m_createTextureFunc();
+					m_renderers[browserId] = renderer;
+
+					WValue* bId = webview_value_new_int(browserId);
+					WValue* tId = webview_value_new_int(renderer->textureId);
+					WValue* retMap = webview_value_new_map();
+					webview_value_set_string(retMap, "browserId", bId);
+					webview_value_set_string(retMap, "textureId", tId);
+					m_invokeFunc("onPopupCreated", retMap);
+					webview_value_unref(bId);
+					webview_value_unref(tId);
+					webview_value_unref(retMap);
+				}
+			};
+
+			m_handler->onBrowserClose = [=](int browserId)
+			{
+				if (m_invokeFunc)
+				{
+					WValue* bId = webview_value_new_int(browserId);
+					WValue* retMap = webview_value_new_map();
+					webview_value_set_string(retMap, "browserId", bId);
+					m_invokeFunc("onBrowserClose", retMap);
+					webview_value_unref(bId);
+					webview_value_unref(retMap);
+				}
+			};
+
 			m_init = true;
 		}
 	}
@@ -346,11 +398,15 @@ namespace webview_cef {
 		m_handler->onContextMenu = nullptr;
 		m_handler->onFileDialog = nullptr;
 		m_handler->onExternalProtocol = nullptr;
+		m_handler->onBeforePopup = nullptr;
+		m_handler->onPopupCreated = nullptr;
+		m_handler->onBrowserClose = nullptr;
 		m_init = false;
 	}
 
 
     void WebviewPlugin::HandleMethodCall(std::string name, WValue* values, std::function<void(int ,WValue*)> result) {
+		std::lock_guard<std::recursive_mutex> lock(m_mutex);
 		if (name.compare("init") == 0){
 			if(!isCefInitialized){
 				if(values != nullptr){

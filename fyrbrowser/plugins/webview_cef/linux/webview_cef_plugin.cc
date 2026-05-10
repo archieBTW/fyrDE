@@ -45,12 +45,15 @@ public:
 
   virtual void onFrame(const void *buffer, int32_t width, int32_t height) override
   {
-    texture->width = width;
-    texture->height = height;
-    const auto size = width * height * 4;
-    delete texture->buffer;
-    texture->buffer = new uint8_t[size];
+    g_mutex_lock(&texture->mutex);
+    if (texture->width != (uint32_t)width || texture->height != (uint32_t)height) {
+      texture->width = width;
+      texture->height = height;
+      delete[] texture->buffer;
+      texture->buffer = new uint8_t[width * height * 4];
+    }
     webview_cef::SwapBufferFromBgraToRgba((void *)texture->buffer, buffer, width, height);
+    g_mutex_unlock(&texture->mutex);
     fl_texture_registrar_mark_texture_frame_available(register_, FL_TEXTURE(texture));
   }
   FlTextureRegistrar *register_;

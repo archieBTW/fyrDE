@@ -6,6 +6,8 @@
 #include <include/cef_base.h>
 
 #include <functional>
+#include <mutex>
+
 namespace webview_cef {
     class WebviewTexture{
     public:
@@ -34,6 +36,7 @@ namespace webview_cef {
 	    CefRefPtr<WebviewApp> m_app;
     	std::unordered_map<int, std::shared_ptr<WebviewTexture>> m_renderers;
 	    bool m_init = false;
+        std::recursive_mutex m_mutex;
     };
 
     int initCEFProcesses(CefMainArgs args);

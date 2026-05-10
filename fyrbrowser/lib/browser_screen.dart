@@ -55,6 +55,20 @@ class _BrowserScreenState extends State<BrowserScreen> {
     super.initState();
     _loadData();
     _initManager().then((_) {
+      WebviewManager().onPopupCreated = (controller) {
+        if (!mounted) return;
+        final newTab = BrowserTab(url: 'about:blank');
+        newTab.controller = controller;
+        newTab.isReady = true;
+        _setupTabListeners(newTab);
+        setState(() {
+          _tabs.add(newTab);
+          _currentTabIndex = _tabs.length - 1;
+          _urlController.text = newTab.url;
+        });
+        _urlFocusNode.requestFocus();
+        _urlController.selection = TextSelection(baseOffset: 0, extentOffset: _urlController.text.length);
+      };
       _addNewTab(url: widget.initialUrl);
     });
     
@@ -121,6 +135,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
       _currentTabIndex = _tabs.length - 1;
       _urlController.text = newTab.url;
     });
+    _urlFocusNode.requestFocus();
+    _urlController.selection = TextSelection(baseOffset: 0, extentOffset: _urlController.text.length);
 
     _setupTabListeners(newTab);
     newTab.controller.initialize(newTab.url).then((_) {
@@ -133,8 +149,11 @@ class _BrowserScreenState extends State<BrowserScreen> {
       onUrlChanged: (String url) {
         if (!mounted) return;
         setState(() {
-          tab.url = url;
-          if (_tabs.indexOf(tab) == _currentTabIndex) _urlController.text = url;
+          // Strictly ignore about:blank during initialization to preserve the target URL
+          if (url != 'about:blank' || tab.isReady) {
+            tab.url = url;
+          }
+          if (_tabs.indexOf(tab) == _currentTabIndex) _urlController.text = tab.url;
           tab.showPwaInstall = false;
           tab.pwaIconUrl = null;
           _startPwaCheck(tab);
@@ -200,6 +219,25 @@ class _BrowserScreenState extends State<BrowserScreen> {
       onExternalProtocol: (String url) {
         if (!mounted) return;
         _showExternalProtocolPrompt(url);
+      },
+      onBeforePopup: (String targetUrl) {
+        // We now allow CEF to handle the popup natively offscreen.
+        // We handle the UI via WebviewManager().onPopupCreated
+      },
+      onClose: () {
+        if (!mounted) return;
+        setState(() {
+          int index = _tabs.indexOf(tab);
+          if (index != -1) {
+            _tabs.removeAt(index);
+            if (_tabs.isEmpty) {
+              _addNewTab();
+            } else {
+              _currentTabIndex = (_currentTabIndex >= _tabs.length) ? _tabs.length - 1 : _currentTabIndex;
+              _urlController.text = _tabs[_currentTabIndex].url;
+            }
+          }
+        });
       },
     ));
     void setupChannels() {
@@ -817,6 +855,26 @@ Categories=Network;WebBrowser;
     }
   }
 
+  Widget _buildBrowser() {
+    if (_tabs.isEmpty) return Container();
+    return IndexedStack(
+      index: _currentTabIndex,
+      children: _tabs.asMap().entries.map((entry) {
+        int idx = entry.key;
+        var tab = entry.value;
+        return ExcludeFocus(
+          excluding: idx != _currentTabIndex,
+          child: tab.isReady 
+            ? SmoothScrollWrapper(
+                controller: tab.controller,
+                child: WebView(tab.controller),
+              ) 
+            : const Center(child: CircularProgressIndicator()),
+        );
+      }).toList(),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return KeyboardListener(
@@ -835,17 +893,7 @@ Categories=Network;WebBrowser;
                   _buildAppModeHeader()
                 else
                   _buildBrowserHeader(),
-                Expanded(
-                  child: IndexedStack(
-                  index: _currentTabIndex,
-                  children: _tabs.map((tab) => tab.isReady 
-                    ? SmoothScrollWrapper(
-                        controller: tab.controller,
-                        child: WebView(tab.controller),
-                      ) 
-                    : const Center(child: CircularProgressIndicator())).toList(),
-                ),
-                ),
+                Expanded(child: _buildBrowser()),
               ],
             ),
           ),

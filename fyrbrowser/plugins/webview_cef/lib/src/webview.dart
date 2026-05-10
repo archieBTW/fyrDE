@@ -80,6 +80,15 @@ class WebViewController extends ValueNotifier<bool> {
     _listener = listener;
   }
 
+  void setPopupInfo(int browserId, int textureId) {
+    _browserId = browserId;
+    _textureId = textureId;
+    _creatingCompleter = Completer<void>();
+    _webviewWidget = WebView(this);
+    value = true;
+    _creatingCompleter.complete();
+  }
+
   @override
   Future<void> dispose() async {
     await _creatingCompleter.future;

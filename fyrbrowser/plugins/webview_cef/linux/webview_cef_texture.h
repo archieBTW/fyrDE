@@ -9,6 +9,7 @@ struct WebviewCefTexture{
     uint8_t *buffer = nullptr; // your pixel buffer.
     uint32_t width = 0;
     uint32_t height = 0;
+    GMutex mutex;
 };
 
 struct WebviewCefTextureClass{
@@ -39,11 +40,24 @@ static gboolean webview_cef_texture_copy_pixels(FlPixelBufferTexture *texture,
     if(_texture == nullptr){
         return TRUE;
     }
+    g_mutex_lock(&_texture->mutex);
     *out_buffer = _texture->buffer;
     *width = _texture->width;
     *height = _texture->height;
+    g_mutex_unlock(&_texture->mutex);
     return TRUE;
 }
+
+static void webview_cef_texture_finalize(GObject *object) {
+    WebviewCefTexture *self = WEBVIEW_CEF_TEXTURE(object);
+    g_mutex_clear(&self->mutex);
+    if (self->buffer) {
+        delete[] self->buffer;
+        self->buffer = nullptr;
+    }
+    G_OBJECT_CLASS(webview_cef_texture_parent_class)->finalize(object);
+}
+
 static WebviewCefTexture* webview_cef_texture_new(){
     return WEBVIEW_CEF_TEXTURE(g_object_new(webview_cef_texture_get_type(), nullptr));
 }
@@ -51,8 +65,11 @@ static WebviewCefTexture* webview_cef_texture_new(){
 static void webview_cef_texture_class_init(WebviewCefTextureClass *klass)
 {
     FL_PIXEL_BUFFER_TEXTURE_CLASS(klass)->copy_pixels = webview_cef_texture_copy_pixels;
+    G_OBJECT_CLASS(klass)->finalize = webview_cef_texture_finalize;
 }
-static void webview_cef_texture_init(WebviewCefTexture *self) {}
+static void webview_cef_texture_init(WebviewCefTexture *self) {
+    g_mutex_init(&self->mutex);
+}
 
 
 #endif // WEBVIEW_CEF_TEXTURE_H_

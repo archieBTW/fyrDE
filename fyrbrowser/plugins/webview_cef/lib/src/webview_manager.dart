@@ -21,6 +21,8 @@ class WebviewManager extends ValueNotifier<bool> {
   final Map<int, WebViewController> _tempWebViews = <int, WebViewController>{};
   InjectUserScripts? _injectUserScripts = InjectUserScripts();
 
+  void Function(WebViewController)? onPopupCreated;
+
   int nextIndex = 1;
 
   get ready => _creatingCompleter.future;
@@ -186,6 +188,20 @@ class WebviewManager extends ValueNotifier<bool> {
         String url = call.arguments["url"] as String;
         _webViews[browserId]?.listener?.onExternalProtocol?.call(url);
         return;
+      case 'onBeforePopup':
+        int browserId = call.arguments["browserId"] as int;
+        String targetUrl = call.arguments["targetUrl"] as String;
+        _webViews[browserId]?.listener?.onBeforePopup?.call(targetUrl);
+        return;
+      case 'onPopupCreated':
+        int browserId = call.arguments["browserId"] as int;
+        int textureId = call.arguments["textureId"] as int;
+        _onPopupCreated(browserId, textureId);
+        return;
+      case 'onBrowserClose':
+        int browserId = call.arguments["browserId"] as int;
+        _webViews[browserId]?.listener?.onClose?.call();
+        return;
       default:
     }
   }
@@ -198,6 +214,14 @@ class WebviewManager extends ValueNotifier<bool> {
     scripts.forEach((script) async {
       await _webViews[browserId]?.executeJavaScript(script.script);
     },);
+  }
+
+  void _onPopupCreated(int browserId, int textureId) {
+    int browserIndex = nextIndex++;
+    final controller = WebViewController(pluginChannel, browserIndex);
+    controller.setPopupInfo(browserId, textureId);
+    _webViews[browserId] = controller;
+    onPopupCreated?.call(controller);
   }
 
   Future<void> setCookie(String domain, String key, String val) async {

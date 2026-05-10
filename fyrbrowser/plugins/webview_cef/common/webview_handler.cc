@@ -150,14 +150,25 @@ bool WebviewHandler::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
 
 void WebviewHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
     CEF_REQUIRE_UI_THREAD();
-    if (!browser->IsPopup()) {
-        browser_map_.emplace(browser->GetIdentifier(), browser_info());
-        browser_map_[browser->GetIdentifier()].browser = browser;
+    browser_map_.emplace(browser->GetIdentifier(), browser_info());
+    browser_map_[browser->GetIdentifier()].browser = browser;
+    
+    if (browser->IsPopup()) {
+        // Set a default size for popups so they can render before being resized by the UI
+        browser_map_[browser->GetIdentifier()].width = 1280;
+        browser_map_[browser->GetIdentifier()].height = 720;
+        
+        if (onPopupCreated) {
+            onPopupCreated(browser->GetIdentifier());
+        }
     }
 }
 
 bool WebviewHandler::DoClose(CefRefPtr<CefBrowser> browser) {
     CEF_REQUIRE_UI_THREAD();    
+    if (onBrowserClose) {
+        onBrowserClose(browser->GetIdentifier());
+    }
     // Allow the close. For windowed browsers this will result in the OS close
     // event being sent.
     return false;
@@ -165,6 +176,7 @@ bool WebviewHandler::DoClose(CefRefPtr<CefBrowser> browser) {
 
 void WebviewHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
     CEF_REQUIRE_UI_THREAD();
+    browser_map_.erase(browser->GetIdentifier());
 }
 
 bool WebviewHandler::OnBeforePopup(CefRefPtr<CefBrowser> browser,
@@ -179,8 +191,16 @@ bool WebviewHandler::OnBeforePopup(CefRefPtr<CefBrowser> browser,
                                   CefBrowserSettings& settings,
                                   CefRefPtr<CefDictionaryValue>& extra_info,
                                   bool* no_javascript_access) {
-    loadUrl(browser->GetIdentifier(), target_url);
-    return true;
+    if (onBeforePopup) {
+        std::string url = target_url.ToString();
+        if (url.empty()) url = "about:blank";
+        onBeforePopup(browser->GetIdentifier(), url);
+    }
+    
+    // Set as offscreen to allow FyrBrowser to render it
+    windowInfo.SetAsWindowless(0);
+    
+    return false; // Return false to allow CEF to create the popup
 }
 
 void WebviewHandler::OnTakeFocus(CefRefPtr<CefBrowser> browser, bool next)
@@ -655,7 +675,7 @@ void WebviewHandler::executeJavaScript(int browserId, const std::string code, st
 void WebviewHandler::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect &rect) {
     CEF_REQUIRE_UI_THREAD();
     auto it = browser_map_.find(browser->GetIdentifier());
-    if(it == browser_map_.end() || !it->second.browser.get() || browser->IsPopup()) {
+    if(it == browser_map_.end() || !it->second.browser.get()) {
         return;
     }
     rect.x = rect.y = 0;

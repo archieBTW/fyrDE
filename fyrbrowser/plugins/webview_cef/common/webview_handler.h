@@ -8,6 +8,7 @@
 #include "include/cef_client.h"
 
 #include <functional>
+#include <set>
 #include <list>
 #include <unordered_map>
 
@@ -69,6 +70,11 @@ public:
     
     //external protocol event
     std::function<void(int browserId, std::string url)> onExternalProtocol;
+    
+    //popup event
+    std::function<void(int browserId, std::string targetUrl)> onBeforePopup;
+    std::function<void(int browserId)> onPopupCreated;
+    std::function<void(int browserId)> onBrowserClose;
     
     explicit WebviewHandler();
     ~WebviewHandler();
