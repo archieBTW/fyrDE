@@ -431,12 +431,16 @@ EOF
             ;;
         "fyrcode")
             sudo ln -sf /opt/fyrcode/fyrcode /usr/local/bin/fyrcode
+            if [ -f "./fyrcode/assets/icons/code.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrcode/assets/icons/code.png /usr/share/icons/hicolor/512x512/apps/fyrcode.png
+            fi
             sudo tee /usr/share/applications/fyrcode.desktop > /dev/null <<'EOF'
 [Desktop Entry]
 Name=FyrCode
 Comment=Advanced Code Editor for FyrDE
-Exec=/usr/local/bin/fyrcode
-Icon=accessories-text-editor
+Exec=/usr/local/bin/fyrcode %U
+Icon=fyrcode
 Terminal=false
 Type=Application
 Categories=Development;TextEditor;IDE;
