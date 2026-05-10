@@ -14,6 +14,7 @@ import 'package:window_manager/window_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'fyr_theme.dart';
+import 's3_service.dart';
 
 const dragChannel = MethodChannel('fyr_files/drag');
 
@@ -272,6 +273,7 @@ class _FyrFilesState extends State<FyrFiles> {
   final ScrollController _scrollController = ScrollController();
   String? previewImagePath;
   final FocusNode _mainFocusNode = FocusNode();
+  S3Config s3config = S3Config.empty();
 
   void _updateSelection() {
     if (dragStart == null || dragCurrent == null) return;
@@ -565,10 +567,19 @@ class _FyrFilesState extends State<FyrFiles> {
       try {
         await checkAndCreateFile();
         final loadedFileInfo = await readTagsFromFile(tagsFilePath);
+        final loadedS3Config = await S3Service.loadConfig();
         setState(() {
           fileInfoList = loadedFileInfo;
+          s3config = loadedS3Config;
           files = currentDir.listSync();
         });
+        if (s3config.enabled) {
+          try {
+            await S3Service.mount(s3config);
+          } catch (e) {
+            print("Failed to mount S3 on startup: $e");
+          }
+        }
       } catch (err) {
         stderr.writeln(err);
         setState(() {
@@ -817,135 +828,254 @@ class _FyrFilesState extends State<FyrFiles> {
     );
   }
 
-  void _showTagsSettingsModal(BuildContext context) {
+  void _showSettingsModal(BuildContext context) {
     showDialog(
       context: context,
       builder: (BuildContext context) {
-        return StatefulBuilder(
-          builder: (context, setStateModal) {
-            return AlertDialog(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              title: const Text("Manage Tags"),
-              content: SizedBox(
-                width: 300,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    ListView.builder(
-                      shrinkWrap: true,
-                      itemCount: customTags.length,
-                      itemBuilder: (context, index) {
-                        var tag = customTags[index];
-                        return ListTile(
-                          leading: getDotColor(Color(tag['colorValue'])),
-                          title: Text(tag['name']),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.delete),
-                            onPressed: () {
-                              setStateModal(() {
-                                customTags.removeAt(index);
-                              });
-                              setState(() {});
-                              saveCustomTags();
-                            },
-                          ),
-                        );
-                      },
-                    ),
-                    const SizedBox(height: 16),
-                    ElevatedButton(
-                      onPressed: () {
-                        TextEditingController nameController = TextEditingController();
-                        Color selectedColor = Colors.red;
-                        showDialog(
-                          context: context,
-                          builder: (context) {
-                            return StatefulBuilder(
-                              builder: (context, setStateAdd) {
-                                return AlertDialog(
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                                  title: const Text('Add Tag'),
-                                  content: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      TextField(
-                                        controller: nameController,
-                                        decoration: const InputDecoration(labelText: 'Tag Name'),
-                                      ),
-                                      const SizedBox(height: 16),
-                                      Wrap(
-                                        spacing: 8,
-                                        children: [
-                                          Colors.red, Colors.pink, Colors.purple, Colors.deepPurple,
-                                          Colors.indigo, Colors.blue, Colors.lightBlue, Colors.cyan,
-                                          Colors.teal, Colors.green, Colors.lightGreen, Colors.lime,
-                                          Colors.yellow, Colors.amber, Colors.orange, Colors.deepOrange,
-                                          Colors.brown, Colors.grey, Colors.blueGrey,
-                                        ].map((color) => GestureDetector(
-                                          onTap: () {
-                                            setStateAdd(() {
-                                              selectedColor = color;
-                                            });
-                                          },
-                                          child: Container(
-                                            width: 24, height: 24,
-                                            decoration: BoxDecoration(
-                                              color: color,
-                                              shape: BoxShape.circle,
-                                              border: Border.all(
-                                                color: selectedColor == color ? Colors.white : Colors.transparent,
-                                                width: 2,
-                                              ),
-                                            ),
-                                          ),
-                                        )).toList(),
-                                      ),
-                                    ],
-                                  ),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(context),
-                                      child: const Text('Cancel'),
-                                    ),
-                                    ElevatedButton(
-                                      onPressed: () {
-                                        if (nameController.text.isNotEmpty) {
-                                          setStateModal(() {
-                                            customTags.add({
-                                              'id': DateTime.now().millisecondsSinceEpoch.toString(),
-                                              'name': nameController.text,
-                                              'colorValue': selectedColor.value,
-                                            });
-                                          });
-                                          setState(() {});
-                                          saveCustomTags();
-                                          Navigator.pop(context);
-                                        }
-                                      },
-                                      child: const Text('Add'),
-                                    ),
-                                  ],
-                                );
-                              }
-                            );
-                          }
-                        );
-                      },
-                      child: const Text("Add New Tag"),
-                    )
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text("Close"),
-                ),
+        return DefaultTabController(
+          length: 2,
+          child: AlertDialog(
+            backgroundColor: FyrTheme.surfaceColor,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: TabBar(
+              dividerColor: Colors.transparent,
+              tabs: [
+                Tab(text: "Tags"),
+                Tab(text: "S3 Storage"),
               ],
-            );
-          }
+              labelColor: FyrTheme.accentColor,
+              unselectedLabelColor: FyrTheme.textColorMuted,
+              indicatorColor: FyrTheme.accentColor,
+            ),
+            content: SizedBox(
+              width: 500,
+              height: 400,
+              child: TabBarView(
+                children: [
+                  _buildTagsSettingsTab(context),
+                  _buildS3SettingsTab(context),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text("Close"),
+              ),
+            ],
+          ),
         );
       }
+    );
+  }
+
+  Widget _buildTagsSettingsTab(BuildContext context) {
+    return StatefulBuilder(
+      builder: (context, setStateModal) {
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Expanded(
+              child: ListView.builder(
+                itemCount: customTags.length,
+                itemBuilder: (context, index) {
+                  var tag = customTags[index];
+                  return ListTile(
+                    leading: getDotColor(Color(tag['colorValue'])),
+                    title: Text(tag['name'], style: TextStyle(color: FyrTheme.textColor)),
+                    trailing: IconButton(
+                      icon: Icon(Icons.delete, color: Colors.red.shade300),
+                      onPressed: () {
+                        setStateModal(() {
+                          customTags.removeAt(index);
+                        });
+                        setState(() {});
+                        saveCustomTags();
+                      },
+                    ),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: FyrTheme.accentColor, foregroundColor: Colors.white),
+              onPressed: () {
+                TextEditingController nameController = TextEditingController();
+                Color selectedColor = Colors.red;
+                showDialog(
+                  context: context,
+                  builder: (context) {
+                    return StatefulBuilder(
+                      builder: (context, setStateAdd) {
+                        return AlertDialog(
+                          backgroundColor: FyrTheme.surfaceColor,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                          title: const Text('Add Tag'),
+                          content: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              TextField(
+                                controller: nameController,
+                                style: TextStyle(color: FyrTheme.textColor),
+                                decoration: const InputDecoration(labelText: 'Tag Name'),
+                              ),
+                              const SizedBox(height: 16),
+                              Wrap(
+                                spacing: 8,
+                                children: [
+                                  Colors.red, Colors.pink, Colors.purple, Colors.deepPurple,
+                                  Colors.indigo, Colors.blue, Colors.lightBlue, Colors.cyan,
+                                  Colors.teal, Colors.green, Colors.lightGreen, Colors.lime,
+                                  Colors.yellow, Colors.amber, Colors.orange, Colors.deepOrange,
+                                  Colors.brown, Colors.grey, Colors.blueGrey,
+                                ].map((color) => GestureDetector(
+                                  onTap: () {
+                                    setStateAdd(() {
+                                      selectedColor = color;
+                                    });
+                                  },
+                                  child: Container(
+                                    width: 24, height: 24,
+                                    decoration: BoxDecoration(
+                                      color: color,
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                        color: selectedColor == color ? Colors.white : Colors.transparent,
+                                        width: 2,
+                                      ),
+                                    ),
+                                  ),
+                                )).toList(),
+                              ),
+                            ],
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(context),
+                              child: const Text('Cancel'),
+                            ),
+                            ElevatedButton(
+                              onPressed: () {
+                                if (nameController.text.isNotEmpty) {
+                                  setStateModal(() {
+                                    customTags.add({
+                                      'id': DateTime.now().millisecondsSinceEpoch.toString(),
+                                      'name': nameController.text,
+                                      'colorValue': selectedColor.value,
+                                    });
+                                  });
+                                  setState(() {});
+                                  saveCustomTags();
+                                  Navigator.pop(context);
+                                }
+                              },
+                              child: const Text('Add'),
+                            ),
+                          ],
+                        );
+                      }
+                    );
+                  }
+                );
+              },
+              child: const Text("Add New Tag"),
+            )
+          ],
+        );
+      }
+    );
+  }
+
+  Widget _buildS3SettingsTab(BuildContext context) {
+    TextEditingController endpointController = TextEditingController(text: s3config.endpoint);
+    TextEditingController accessKeyController = TextEditingController(text: s3config.accessKey);
+    TextEditingController secretKeyController = TextEditingController(text: s3config.secretKey);
+    TextEditingController regionController = TextEditingController(text: s3config.region);
+    TextEditingController bucketController = TextEditingController(text: s3config.bucket);
+    bool enabled = s3config.enabled;
+
+    return StatefulBuilder(
+      builder: (context, setStateS3) {
+        return SingleChildScrollView(
+          child: Column(
+            children: [
+              SwitchListTile(
+                title: Text("Enable S3 Sync", style: TextStyle(color: FyrTheme.textColor)),
+                value: enabled,
+                onChanged: (val) {
+                  setStateS3(() {
+                    enabled = val;
+                  });
+                },
+                activeColor: FyrTheme.accentColor,
+              ),
+              TextField(
+                controller: endpointController,
+                style: TextStyle(color: FyrTheme.textColor),
+                decoration: const InputDecoration(labelText: 'Endpoint (e.g. s3.amazonaws.com)'),
+              ),
+              TextField(
+                controller: accessKeyController,
+                style: TextStyle(color: FyrTheme.textColor),
+                decoration: const InputDecoration(labelText: 'Access Key ID'),
+              ),
+              TextField(
+                controller: secretKeyController,
+                style: TextStyle(color: FyrTheme.textColor),
+                obscureText: true,
+                decoration: const InputDecoration(labelText: 'Secret Access Key'),
+              ),
+              TextField(
+                controller: regionController,
+                style: TextStyle(color: FyrTheme.textColor),
+                decoration: const InputDecoration(labelText: 'Region'),
+              ),
+              TextField(
+                controller: bucketController,
+                style: TextStyle(color: FyrTheme.textColor),
+                decoration: const InputDecoration(labelText: 'Bucket Name'),
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: FyrTheme.accentColor, foregroundColor: Colors.white),
+                onPressed: () async {
+                  S3Config newConfig = S3Config(
+                    remoteName: 's3',
+                    endpoint: endpointController.text,
+                    accessKey: accessKeyController.text,
+                    secretKey: secretKeyController.text,
+                    region: regionController.text,
+                    bucket: bucketController.text,
+                    enabled: enabled,
+                  );
+                  
+                  try {
+                    await S3Service.saveConfig(newConfig);
+                    if (newConfig.enabled) {
+                      await S3Service.updateRcloneConfig(newConfig);
+                      await S3Service.mount(newConfig);
+                    } else {
+                      await S3Service.unmount();
+                    }
+                    setState(() {
+                      s3config = newConfig;
+                    });
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text("S3 Settings Saved and Applied")),
+                    );
+                  } catch (e) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text("Error: $e")),
+                    );
+                  }
+                },
+                child: const Text("Save and Apply"),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -1290,7 +1420,7 @@ class _FyrFilesState extends State<FyrFiles> {
                         IconButton(
                           icon: const Icon(Icons.settings, size: 20),
                           onPressed: () {
-                            _showTagsSettingsModal(context);
+                            _showSettingsModal(context);
                           },
                           padding: EdgeInsets.zero,
                           constraints: const BoxConstraints(),
@@ -1361,6 +1491,8 @@ class _FyrFilesState extends State<FyrFiles> {
                                   _buildSidebarItem(Icons.file_download, 'Downloads', () => getHomeDirectoryByPlatform().then((d) => openDirectory(Directory(p.join(d.path, 'Downloads'))))),
                                   _buildSidebarItem(Icons.delete, 'Trash', () => getHomeDirectoryByPlatform().then((d) => openDirectory(Directory(p.join(d.path, '.local/share/Trash/files'))))),
                                   _buildSidebarItem(Icons.computer, 'My Computer', () => openDirectory(Directory('/'))),
+                                  if (s3config.enabled)
+                                    _buildSidebarItem(Icons.cloud, 'S3 Storage', () => openDirectory(Directory(S3Service.mountPath))),
                                   const Divider(),
                                   if (!isSidebarCollapsed)
                                     const Padding(
