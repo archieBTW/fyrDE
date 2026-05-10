@@ -311,6 +311,22 @@ namespace webview_cef {
 				}
 			};
 
+			m_handler->onExternalProtocol = [=](int browserId, std::string url)
+			{
+				if (m_invokeFunc)
+				{
+					WValue* bId = webview_value_new_int(browserId);
+					WValue* wUrl = webview_value_new_string(const_cast<char*>(url.c_str()));
+					WValue* retMap = webview_value_new_map();
+					webview_value_set_string(retMap, "browserId", bId);
+					webview_value_set_string(retMap, "url", wUrl);
+					m_invokeFunc("onExternalProtocol", retMap);
+					webview_value_unref(bId);
+					webview_value_unref(wUrl);
+					webview_value_unref(retMap);
+				}
+			};
+
 			m_init = true;
 		}
 	}
@@ -329,6 +345,7 @@ namespace webview_cef {
 		m_handler->onDownloadUpdated = nullptr;
 		m_handler->onContextMenu = nullptr;
 		m_handler->onFileDialog = nullptr;
+		m_handler->onExternalProtocol = nullptr;
 		m_init = false;
 	}
 

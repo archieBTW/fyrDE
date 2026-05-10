@@ -25,6 +25,7 @@ typedef OnFileDialogCb = void Function(int browserId, int callbackId);
 
 typedef OnConsoleMessage = void Function(
     int level, String message, String source, int line);
+typedef ExternalProtocolCb = void Function(String url);
 
 class WebviewEventsListener {
   TitleChangeCb? onTitleChanged;
@@ -36,6 +37,7 @@ class WebviewEventsListener {
   DownloadUpdatedCb? onDownloadUpdated;
   ContextMenuCb? onContextMenu;
   OnFileDialogCb? onFileDialog;
+  ExternalProtocolCb? onExternalProtocol;
 
   WebviewEventsListener({
     this.onTitleChanged,
@@ -47,5 +49,6 @@ class WebviewEventsListener {
     this.onDownloadUpdated,
     this.onContextMenu,
     this.onFileDialog,
+    this.onExternalProtocol,
   });
 }

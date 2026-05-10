@@ -46,7 +46,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
   final FocusNode _urlFocusNode = FocusNode();
   final FocusNode _keyboardFocusNode = FocusNode();
   
-  bool _adBlockEnabled = true;
+  bool _adBlockEnabled = false;
   List<Map<String, String>> _history = [];
   List<Map<String, String>> _bookmarks = [];
   
@@ -196,6 +196,10 @@ class _BrowserScreenState extends State<BrowserScreen> {
           debugPrint('Failed to run fyrfiles picker: $e');
           tab.controller.continueFileDialog(callbackId, []);
         }
+      },
+      onExternalProtocol: (String url) {
+        if (!mounted) return;
+        _showExternalProtocolPrompt(url);
       },
     ));
     void setupChannels() {
@@ -712,6 +716,44 @@ class _BrowserScreenState extends State<BrowserScreen> {
         case 'inspect': tab.controller.openDevTools(); break;
       }
     });
+  }
+
+  void _showExternalProtocolPrompt(String url) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: FyrTheme.bgColor,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: BorderSide(color: FyrTheme.dividerColor)),
+        title: Text('Open External Application?', style: TextStyle(color: FyrTheme.textColor)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('A website wants to open an external application for:', style: TextStyle(color: FyrTheme.textColor.withOpacity(0.7), fontSize: 14)),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(color: Colors.black26, borderRadius: BorderRadius.circular(8)),
+              child: Text(url, style: TextStyle(color: FyrTheme.accentColor, fontSize: 12, fontFamily: 'monospace')),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancel', style: TextStyle(color: FyrTheme.textColor.withOpacity(0.5))),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              Process.run('xdg-open', [url]);
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: FyrTheme.accentColor, foregroundColor: Colors.white),
+            child: const Text('Open'),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildMenuItem(IconData icon, String label) {

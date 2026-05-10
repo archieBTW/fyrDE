@@ -181,6 +181,11 @@ class WebviewManager extends ValueNotifier<bool> {
         int callbackId = call.arguments["callbackId"] as int;
         _webViews[browserId]?.listener?.onFileDialog?.call(browserId, callbackId);
         return;
+      case 'onExternalProtocol':
+        int browserId = call.arguments["browserId"] as int;
+        String url = call.arguments["url"] as String;
+        _webViews[browserId]?.listener?.onExternalProtocol?.call(url);
+        return;
       default:
     }
   }

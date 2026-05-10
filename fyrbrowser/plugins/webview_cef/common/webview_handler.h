@@ -39,7 +39,8 @@ public CefRenderHandler,
 public CefDownloadHandler,
 public CefContextMenuHandler,
 public CefPermissionHandler,
-public CefDialogHandler {
+public CefDialogHandler,
+public CefRequestHandler {
 public:
     //Paint callback
     std::function<void(int browserId, const void* buffer, int32_t width, int32_t height)> onPaintCallback;
@@ -66,6 +67,9 @@ public:
     //dialog event
     std::function<void(int browserId, int callbackId)> onFileDialog;
     
+    //external protocol event
+    std::function<void(int browserId, std::string url)> onExternalProtocol;
+    
     explicit WebviewHandler();
     ~WebviewHandler();
     
@@ -85,6 +89,7 @@ public:
     virtual CefRefPtr<CefContextMenuHandler> GetContextMenuHandler() override { return this; }
     virtual CefRefPtr<CefPermissionHandler> GetPermissionHandler() override { return this; }
     virtual CefRefPtr<CefDialogHandler> GetDialogHandler() override { return this; }
+    virtual CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
 
 	bool OnProcessMessageReceived(
         CefRefPtr<CefBrowser> browser,
@@ -196,6 +201,13 @@ public:
                               const std::vector<CefString>& accept_extensions,
                               const std::vector<CefString>& accept_descriptions,
                               CefRefPtr<CefFileDialogCallback> callback) override;
+
+    // CefRequestHandler methods:
+    virtual bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
+                                CefRefPtr<CefFrame> frame,
+                                CefRefPtr<CefRequest> request,
+                                bool user_gesture,
+                                bool is_redirect) override;
 
     // Request that all existing browser windows close.
     void CloseAllBrowsers(bool force_close);

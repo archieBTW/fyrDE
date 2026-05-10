@@ -19,6 +19,7 @@
 #include "include/views/cef_window.h"
 #include "include/wrapper/cef_closure_task.h"
 #include "include/wrapper/cef_helpers.h"
+#include "include/cef_request.h"
 
 #include <sstream>
 
@@ -815,4 +816,33 @@ void WebviewHandler::continueFileDialog(int callbackId, const std::vector<std::s
     
     file_dialog_callbacks_.erase(it);
   }
+}
+bool WebviewHandler::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
+                                   CefRefPtr<CefFrame> frame,
+                                   CefRefPtr<CefRequest> request,
+                                   bool user_gesture,
+                                   bool is_redirect) {
+  CEF_REQUIRE_UI_THREAD();
+  
+  std::string url = request->GetURL().ToString();
+  size_t colon_pos = url.find(':');
+  if (colon_pos != std::string::npos) {
+    std::string scheme = url.substr(0, colon_pos);
+    // Convert scheme to lowercase
+    for (auto & c: scheme) c = tolower(c);
+    
+    // List of standard web schemes we handle internally
+    if (scheme != "http" && scheme != "https" && scheme != "file" && 
+        scheme != "data" && scheme != "blob" && scheme != "about" && 
+        scheme != "chrome" && scheme != "chrome-extension") {
+      
+      // This is likely an external protocol (magnet, mailto, etc.)
+      if (onExternalProtocol) {
+        onExternalProtocol(browser->GetIdentifier(), url);
+        return true; // Cancel the navigation in CEF
+      }
+    }
+  }
+  
+  return false;
 }
