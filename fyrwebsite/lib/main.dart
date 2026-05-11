@@ -317,11 +317,7 @@ class AppGrid extends StatelessWidget {
           'desc': 'frickin sweet settings',
           'img': 'settings.png',
         },
-        {
-          'name': 'FyrAV',
-          'desc': 'frickin sweet antivirus',
-          'img': 'av.png',
-        },
+        {'name': 'FyrAV', 'desc': 'frickin sweet antivirus', 'img': 'av.png'},
         {
           'name': 'FyrText',
           'desc': 'frickin sweet text editor',
@@ -340,11 +336,7 @@ class AppGrid extends StatelessWidget {
       ];
     } else {
       return [
-        {
-          'name': 'Goose',
-          'desc': 'frickin sweet browser',
-          'img': 'goose.png',
-        },
+        {'name': 'Goose', 'desc': 'frickin sweet browser', 'img': 'goose.png'},
         {
           'name': 'FyrCode',
           'desc': 'frickin sweet code editor',
@@ -355,11 +347,7 @@ class AppGrid extends StatelessWidget {
           'desc': 'frickin sweet music player',
           'img': 'music.png',
         },
-        {
-          'name': 'Sound Booth',
-          'desc': 'frickin sweet DAW',
-          'img': 'daw.png',
-        },
+        {'name': 'Sound Booth', 'desc': 'frickin sweet DAW', 'img': 'daw.png'},
         {
           'name': 'Journal',
           'desc': 'frickin sweet journal',
@@ -380,11 +368,7 @@ class AppGrid extends StatelessWidget {
           'desc': 'frickin sweet video player',
           'img': 'seinfeld.png',
         },
-        {
-          'name': 'Camera',
-          'desc': 'frickin sweet camera',
-          'img': 'camera.png',
-        },
+        {'name': 'Camera', 'desc': 'frickin sweet camera', 'img': 'camera.png'},
         {
           'name': 'fyrVM',
           'desc': 'frickin sweet VM manager',
@@ -624,14 +608,15 @@ class InstallSection extends StatelessWidget {
     String command,
     BuildContext context,
   ) {
+    final isMobile = MediaQuery.of(context).size.width < 600;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
             Container(
-              width: 32,
-              height: 32,
+              width: isMobile ? 28 : 32,
+              height: isMobile ? 28 : 32,
               alignment: Alignment.center,
               decoration: BoxDecoration(
                 color: Colors.purpleAccent,
@@ -639,19 +624,22 @@ class InstallSection extends StatelessWidget {
               ),
               child: Text(
                 number,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.bold,
                   color: Colors.white,
+                  fontSize: isMobile ? 14 : 16,
                 ),
               ),
             ),
             const SizedBox(width: 16),
-            Text(
-              title,
-              style: const TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
+            Expanded(
+              child: Text(
+                title,
+                style: TextStyle(
+                  fontSize: isMobile ? 16 : 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
               ),
             ),
           ],
@@ -659,7 +647,7 @@ class InstallSection extends StatelessWidget {
         const SizedBox(height: 12),
         Container(
           width: double.infinity,
-          padding: const EdgeInsets.all(16),
+          padding: EdgeInsets.all(isMobile ? 12 : 16),
           decoration: BoxDecoration(
             color: Colors.black,
             borderRadius: BorderRadius.circular(12),
@@ -668,21 +656,27 @@ class InstallSection extends StatelessWidget {
           child: Row(
             children: [
               Expanded(
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: SelectableText(
-                    command,
-                    style: GoogleFonts.jetBrainsMono(
-                      color: Colors.purpleAccent,
-                      fontSize: 16,
+                child: SelectionArea(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    child: Text(
+                      command,
+                      style: GoogleFonts.jetBrainsMono(
+                        color: Colors.purpleAccent,
+                        fontSize: isMobile ? 13 : 16,
+                      ),
                     ),
                   ),
                 ),
               ),
+              const SizedBox(width: 8),
               IconButton(
-                icon: const Icon(
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                icon: Icon(
                   Icons.copy_all_rounded,
-                  size: 20,
+                  size: isMobile ? 18 : 20,
                   color: Colors.white54,
                 ),
                 onPressed: () {
