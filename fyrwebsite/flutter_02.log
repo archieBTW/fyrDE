@@ -1,0 +1,83 @@
+Flutter crash report.
+Please report a bug at https://github.com/flutter/flutter/issues.
+
+## command
+
+flutter run
+
+## exception
+
+FormatException: FormatException: Unexpected end of input (at character 1)
+
+^
+
+
+```
+#0      _ChunkedJsonParser.fail (dart:convert-patch/convert_patch.dart:1467:5)
+#1      _ChunkedJsonParser.close (dart:convert-patch/convert_patch.dart:497:7)
+#2      _parseJson (dart:convert-patch/convert_patch.dart:36:10)
+#3      JsonDecoder.convert (dart:convert/json.dart:641:36)
+#4      JsonCodec.decode (dart:convert/json.dart:223:41)
+#5      DartBuild.loadHookResult (package:flutter_tools/src/build_system/targets/native_assets.dart:132:12)
+#6      FlutterHookRunnerNative.runHooks (package:flutter_tools/src/build_system/targets/hook_runner_native.dart:58:61)
+<asynchronous suspension>
+#7      ResidentWebRunner._updateDevFS (package:flutter_tools/src/isolated/resident_web_runner.dart:778:28)
+<asynchronous suspension>
+#8      ResidentWebRunner.run.<anonymous closure> (package:flutter_tools/src/isolated/resident_web_runner.dart:334:41)
+<asynchronous suspension>
+#9      asyncGuard.<anonymous closure> (package:flutter_tools/src/base/async_guard.dart:108:24)
+<asynchronous suspension>
+```
+
+## flutter doctor
+
+```
+[33m[!][39m Flutter (Channel [user-branch], 3.41.9, on Arch Linux 7.0.5-arch1-1, locale en_US.UTF-8) [50ms]
+    [33m![39m Flutter version 3.41.9 on channel [user-branch] at /opt/flutter
+      Currently on an unknown channel. Run `flutter channel` to switch to an official channel.
+      If that doesn't fix the issue, reinstall Flutter by following instructions at https://flutter.dev/setup.
+    [33m![39m Upstream repository unknown source is not a standard remote.
+      Set environment variable "FLUTTER_GIT_URL" to unknown source to dismiss this error.
+    [32m•[39m Framework revision 00b0c91f06 (12 days ago), 2026-04-29 10:03:19 -0700
+    [32m•[39m Engine revision 42d3d75a56
+    [32m•[39m Dart version 3.11.5
+    [32m•[39m DevTools version 2.54.2
+    [32m•[39m Feature flags: enable-web, enable-linux-desktop, enable-macos-desktop, enable-windows-desktop, enable-android, enable-ios, cli-animations, enable-native-assets,
+      omit-legacy-version-file, enable-lldb-debugging, enable-uiscene-migration
+    [32m•[39m If those were intentional, you can disregard the above warnings; however it is recommended to use "git" directly to perform update checks and upgrades.
+
+[31m[✗][39m Android toolchain - develop for Android devices [17ms]
+    [31m✗[39m Unable to locate Android SDK.
+      Install Android Studio from: https://developer.android.com/studio/index.html
+      On first launch it will assist you in installing the Android SDK components.
+      (or visit https://flutter.dev/to/linux-android-setup for detailed instructions).
+      If the Android SDK has been installed to a custom location, please use
+      `flutter config --android-sdk` to update to that location.
+
+
+[32m[✓][39m Chrome - develop for the web [7ms]
+    [32m•[39m CHROME_EXECUTABLE = /usr/bin/google-chrome-stable
+
+[32m[✓][39m Linux toolchain - develop for Linux desktop [391ms]
+    [32m•[39m clang version 22.1.5
+    [32m•[39m cmake version 4.3.2
+    [32m•[39m ninja version 1.13.2
+    [32m•[39m pkg-config version 2.5.1
+    [32m•[39m OpenGL core renderer: AMD Radeon Graphics (radeonsi, renoir, ACO, DRM 3.64, 7.0.5-arch1-1)
+    [32m•[39m OpenGL core version: 4.6 (Core Profile) Mesa 26.0.6-arch1.1
+    [32m•[39m OpenGL core shading language version: 4.60
+    [32m•[39m OpenGL ES renderer: AMD Radeon Graphics (radeonsi, renoir, ACO, DRM 3.64, 7.0.5-arch1-1)
+    [32m•[39m OpenGL ES version: OpenGL ES 3.2 Mesa 26.0.6-arch1.1
+    [32m•[39m OpenGL ES shading language version: OpenGL ES GLSL ES 3.20
+    [32m•[39m GL_EXT_framebuffer_blit: yes
+    [32m•[39m GL_EXT_texture_format_BGRA8888: yes
+
+[32m[✓][39m Connected device (2 available) [16ms]
+    [32m•[39m Linux (desktop) • linux  • linux-x64      • Arch Linux 7.0.5-arch1-1
+    [32m•[39m Chrome (web)    • chrome • web-javascript • Google Chrome 148.0.7778.96
+
+[32m[✓][39m Network resources [239ms]
+    [32m•[39m All expected network resources are available.
+
+[33m![39m Doctor found issues in 2 categories.
+```

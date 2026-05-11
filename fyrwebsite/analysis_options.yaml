@@ -1,0 +1,8 @@
+include: package:flutter_lints/analysis_options.yaml
+
+linter:
+  rules:
+    - prefer_const_constructors
+    - prefer_const_declarations
+    - prefer_const_literals_to_create_immutables
+    - sort_child_properties_last
