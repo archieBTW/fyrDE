@@ -142,4 +142,11 @@ class S3Service {
       await Process.run('fusermount', ['-u', mountPath]);
     }
   }
+
+  static String getRelativePath(String absolutePath) {
+    if (!absolutePath.startsWith(mountPath)) return absolutePath;
+    String relative = absolutePath.substring(mountPath.length);
+    if (relative.startsWith('/')) relative = relative.substring(1);
+    return relative;
+  }
 }

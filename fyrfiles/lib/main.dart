@@ -209,6 +209,24 @@ class FileInfo {
   }
 }
 
+class TransferProgress {
+  final String id;
+  final String label;
+  double progress;
+  bool isCompleted;
+  bool isError;
+  String? errorMessage;
+
+  TransferProgress({
+    required this.id,
+    required this.label,
+    this.progress = 0.0,
+    this.isCompleted = false,
+    this.isError = false,
+    this.errorMessage,
+  });
+}
+
 
 
 class FyrFilesApp extends StatelessWidget {
@@ -253,7 +271,7 @@ class FyrFiles extends StatefulWidget {
   State<FyrFiles> createState() => _FyrFilesState();
 }
 
-class _FyrFilesState extends State<FyrFiles> {
+class _FyrFilesState extends State<FyrFiles> with WindowListener {
   late List<FileSystemEntity> files;
   late Directory currentDir = Directory.current;
   FileSystemEntity? copiedEntity;
@@ -274,6 +292,7 @@ class _FyrFilesState extends State<FyrFiles> {
   String? previewImagePath;
   final FocusNode _mainFocusNode = FocusNode();
   S3Config s3config = S3Config.empty();
+  List<TransferProgress> activeTransfers = [];
 
   void _updateSelection() {
     if (dragStart == null || dragCurrent == null) return;
@@ -534,6 +553,7 @@ class _FyrFilesState extends State<FyrFiles> {
 
   @override
   void dispose() {
+    windowManager.removeListener(this);
     _mainFocusNode.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -542,6 +562,8 @@ class _FyrFilesState extends State<FyrFiles> {
   @override
   void initState() {
     super.initState();
+    windowManager.addListener(this);
+    windowManager.setPreventClose(true);
 
     getHomeDirectoryByPlatform().then((Directory dir) async {
       setState(() {
@@ -726,23 +748,163 @@ class _FyrFilesState extends State<FyrFiles> {
     return segments.where((seg) => seg.isNotEmpty).join(' > ');
   }
 
+  Future<void> _copyFileWithProgress(File source, String targetPath, String transferId) async {
+    final totalSize = await source.length();
+    int copiedSize = 0;
+    
+    final IOSink sink = File(targetPath).openWrite();
+    final Stream<List<int>> stream = source.openRead();
+    
+    await for (final List<int> chunk in stream) {
+      sink.add(chunk);
+      copiedSize += chunk.length;
+      setState(() {
+        final transfer = activeTransfers.firstWhere((t) => t.id == transferId);
+        transfer.progress = copiedSize / totalSize;
+      });
+    }
+    
+    await sink.close();
+  }
+
+  Future<void> _copyToS3WithProgress(String sourcePath, String targetPath, String transferId) async {
+    // If it's a directory, we need the parent path for rclone copy
+    bool isDir = FileSystemEntity.isDirectorySync(sourcePath);
+    String rcloneCommand = isDir ? 'copy' : 'copyto';
+    
+    // For rclone, we need the path relative to the bucket
+    // If targetPath is /home/archie/.fyr/mounts/s3/folder/file.txt
+    // and mountPath is /home/archie/.fyr/mounts/s3
+    // s3Path should be folder/file.txt
+    String s3Path = S3Service.getRelativePath(targetPath);
+
+    final process = await Process.start('rclone', [
+      rcloneCommand,
+      sourcePath,
+      '${s3config.remoteName}:${s3config.bucket}/$s3Path',
+      '--progress',
+      '--stats', '1s',
+      '--stats-one-line',
+    ]);
+
+    String lastStderr = '';
+
+    void parseProgress(String data) {
+      // Handle both \n and \r as line delimiters
+      final lines = data.split(RegExp(r'[\n\r]'));
+      for (final line in lines) {
+        if (line.trim().isEmpty) continue;
+        
+        // Regex to find percentage: looks for a number followed by %
+        // Works for " 50%", "[50%]", "Transferred: 50%" etc.
+        final match = RegExp(r'(\d+)%').firstMatch(line);
+        if (match != null) {
+          final progress = int.parse(match.group(1)!) / 100.0;
+          if (mounted) {
+            setState(() {
+              final transferIndex = activeTransfers.indexWhere((t) => t.id == transferId);
+              if (transferIndex != -1) {
+                // Ensure progress only moves forward or stays at 100%
+                if (progress > activeTransfers[transferIndex].progress) {
+                  activeTransfers[transferIndex].progress = progress;
+                }
+              }
+            });
+          }
+        }
+      }
+    }
+
+    process.stdout.transform(utf8.decoder).listen(parseProgress);
+    process.stderr.transform(utf8.decoder).listen((data) {
+      lastStderr += data;
+      parseProgress(data);
+    });
+
+    final exitCode = await process.exitCode;
+    if (exitCode != 0) {
+      throw Exception('Rclone failed ($exitCode): ${lastStderr.split('\n').last}');
+    }
+  }
+
+  Future<void> _copyDirectoryWithProgress(Directory source, String targetPath, String transferId) async {
+    final entities = source.listSync(recursive: true);
+    final totalEntities = entities.length;
+    int processedEntities = 0;
+
+    await Directory(targetPath).create(recursive: true);
+
+    for (final entity in entities) {
+      final relativePath = p.relative(entity.path, from: source.path);
+      final newPath = p.join(targetPath, relativePath);
+
+      if (entity is File) {
+        await entity.copy(newPath);
+      } else if (entity is Directory) {
+        await Directory(newPath).create(recursive: true);
+      }
+      
+      processedEntities++;
+      setState(() {
+        final transfer = activeTransfers.firstWhere((t) => t.id == transferId);
+        transfer.progress = processedEntities / totalEntities;
+      });
+    }
+  }
+
   Future<void> pasteFile(Directory targetDir) async {
     try {
       ClipboardData data =
           await Clipboard.getData('text/plain') as ClipboardData;
       String text = data.text ?? '';
       List<String> paths = text.split('\n');
+      
       for (String path in paths) {
         path = path.trim();
         if (path.isEmpty) continue;
-        if (FileSystemEntity.isFileSync(path)) {
-          File sourceFile = File(path);
-          String fileName = sourceFile.uri.pathSegments.last;
-          await sourceFile.copy('${targetDir.path}/$fileName');
-        } else if (FileSystemEntity.isDirectorySync(path)) {
-          Directory sourceDir = Directory(path);
-          String dirName = sourceDir.uri.pathSegments.where((s) => s.isNotEmpty).last;
-          await Process.run('cp', ['-r', path, '${targetDir.path}/$dirName']);
+        
+        final transferId = DateTime.now().millisecondsSinceEpoch.toString() + path;
+        final fileName = p.basename(path);
+        
+        setState(() {
+          activeTransfers.add(TransferProgress(
+            id: transferId,
+            label: 'Copying $fileName',
+          ));
+        });
+
+        try {
+          final isS3 = path.startsWith(S3Service.mountPath) || targetDir.path.startsWith(S3Service.mountPath);
+          final targetPath = p.join(targetDir.path, fileName);
+
+          if (isS3) {
+            await _copyToS3WithProgress(path, targetPath, transferId);
+          } else {
+            if (FileSystemEntity.isFileSync(path)) {
+              await _copyFileWithProgress(File(path), targetPath, transferId);
+            } else if (FileSystemEntity.isDirectorySync(path)) {
+              await _copyDirectoryWithProgress(Directory(path), targetPath, transferId);
+            }
+          }
+          
+          setState(() {
+            activeTransfers.firstWhere((t) => t.id == transferId).isCompleted = true;
+          });
+          
+          // Remove from list after a short delay
+          Future.delayed(const Duration(seconds: 3), () {
+            if (mounted) {
+              setState(() {
+                activeTransfers.removeWhere((t) => t.id == transferId);
+              });
+            }
+          });
+        } catch (e) {
+          setState(() {
+            final t = activeTransfers.firstWhere((t) => t.id == transferId);
+            t.isError = true;
+            t.errorMessage = e.toString();
+          });
         }
       }
       setState(() {});
@@ -1202,6 +1364,40 @@ class _FyrFilesState extends State<FyrFiles> {
   }
 
   @override
+  void onWindowClose() async {
+    bool hasActiveTransfers = activeTransfers.any((t) => !t.isCompleted && !t.isError);
+    if (hasActiveTransfers) {
+      bool confirm = await showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          backgroundColor: FyrTheme.surfaceColor,
+          title: Text('Active Transfers', style: TextStyle(color: FyrTheme.textColor)),
+          content: Text(
+            'There are active file transfers in progress. Are you sure you want to exit?',
+            style: TextStyle(color: FyrTheme.textColor),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade400, foregroundColor: Colors.white),
+              child: const Text('Exit'),
+            ),
+          ],
+        ),
+      ) ?? false;
+      if (confirm) {
+        await windowManager.destroy();
+      }
+    } else {
+      await windowManager.destroy();
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     double width = MediaQuery.of(context).size.width;
     Stream<List<FileSystemEntity>> fileStream = watchDirectory();
@@ -1526,10 +1722,45 @@ class _FyrFilesState extends State<FyrFiles> {
           final fileName = p.basename(sourcePath);
           final targetPath = p.join(currentDir.path, fileName);
           
-          if (FileSystemEntity.isFileSync(sourcePath)) {
-            await File(sourcePath).copy(targetPath);
-          } else if (FileSystemEntity.isDirectorySync(sourcePath)) {
-            await Process.run('cp', ['-r', sourcePath, targetPath]);
+          final transferId = DateTime.now().millisecondsSinceEpoch.toString() + sourcePath;
+          
+          setState(() {
+            activeTransfers.add(TransferProgress(
+              id: transferId,
+              label: 'Uploading $fileName',
+            ));
+          });
+
+          try {
+            final isS3 = sourcePath.startsWith(S3Service.mountPath) || targetPath.startsWith(S3Service.mountPath);
+
+            if (isS3) {
+              await _copyToS3WithProgress(sourcePath, targetPath, transferId);
+            } else {
+              if (FileSystemEntity.isFileSync(sourcePath)) {
+                await _copyFileWithProgress(File(sourcePath), targetPath, transferId);
+              } else if (FileSystemEntity.isDirectorySync(sourcePath)) {
+                await _copyDirectoryWithProgress(Directory(sourcePath), targetPath, transferId);
+              }
+            }
+            
+            setState(() {
+              activeTransfers.firstWhere((t) => t.id == transferId).isCompleted = true;
+            });
+            
+            Future.delayed(const Duration(seconds: 3), () {
+              if (mounted) {
+                setState(() {
+                  activeTransfers.removeWhere((t) => t.id == transferId);
+                });
+              }
+            });
+          } catch (e) {
+            setState(() {
+              final t = activeTransfers.firstWhere((t) => t.id == transferId);
+              t.isError = true;
+              t.errorMessage = e.toString();
+            });
           }
         }
         setState(() {});
@@ -1595,6 +1826,59 @@ class _FyrFilesState extends State<FyrFiles> {
                             decoration: BoxDecoration(
                               color: FyrTheme.accentColor.withOpacity(0.3),
                               border: Border.all(color: FyrTheme.accentColor, width: 1),
+                            ),
+                          ),
+                        ),
+                      if (activeTransfers.isNotEmpty)
+                        Positioned(
+                          bottom: 0,
+                          left: 0,
+                          right: 0,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: FyrTheme.surfaceColor.withOpacity(0.9),
+                              border: Border(top: BorderSide(color: FyrTheme.dividerColor)),
+                            ),
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: activeTransfers.take(3).map((t) => Padding(
+                                padding: const EdgeInsets.only(bottom: 4.0),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            t.label,
+                                            style: const TextStyle(fontSize: 11),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                        if (t.isCompleted)
+                                          const Icon(Icons.check_circle, size: 14, color: Colors.green)
+                                        else if (t.isError)
+                                          const Icon(Icons.error, size: 14, color: Colors.red)
+                                        else
+                                          Text(
+                                            '${(t.progress * 100).toStringAsFixed(0)}%',
+                                            style: const TextStyle(fontSize: 11),
+                                          ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 2),
+                                    LinearProgressIndicator(
+                                      value: t.progress,
+                                      minHeight: 2,
+                                      backgroundColor: FyrTheme.dividerColor,
+                                      valueColor: AlwaysStoppedAnimation<Color>(
+                                        t.isError ? Colors.red : (t.isCompleted ? Colors.green : FyrTheme.accentColor)
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              )).toList(),
                             ),
                           ),
                         ),

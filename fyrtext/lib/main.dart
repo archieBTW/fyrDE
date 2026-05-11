@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:path/path.dart' as p;
 import 'package:file_picker/file_picker.dart';
+import 'package:simple_spell_checker/simple_spell_checker.dart';
+import 'package:simple_spell_checker_en_lan/simple_spell_checker_en_lan.dart';
 import 'fyr_theme.dart';
 
 enum ResizeZoneEdge {
@@ -109,10 +111,73 @@ class _ResizeHandle extends StatelessWidget {
   }
 }
 
+class FyrChecker extends SimpleSpellChecker {
+  FyrChecker({required super.language});
+  bool isValid(String word) => isWordValid(word);
+}
+
+class FyrSpellCheckService extends SpellCheckService {
+  final FyrChecker _checker = FyrChecker(language: 'en');
+
+  @override
+  Future<List<SuggestionSpan>> fetchSpellCheckSuggestions(
+      Locale locale, String text) async {
+    final List<SuggestionSpan> suggestionSpans = [];
+    final RegExp wordRegExp = RegExp(r"\b\w+\b");
+    final Iterable<RegExpMatch> matches = wordRegExp.allMatches(text);
+
+    final dictionary = _checker.getDictionary();
+
+    for (final match in matches) {
+      final String word = text.substring(match.start, match.end);
+      if (!_checker.isValid(word)) {
+        List<String> suggestions = [];
+        if (dictionary != null) {
+          // Basic suggestion generation (limit to first 3 matches for performance)
+          for (final key in dictionary.keys) {
+            if (_isNear(word, key)) {
+              suggestions.add(key);
+              if (suggestions.length >= 3) break;
+            }
+          }
+        }
+        
+        suggestionSpans.add(
+          SuggestionSpan(
+            TextRange(start: match.start, end: match.end),
+            suggestions,
+          ),
+        );
+      }
+    }
+
+    return suggestionSpans;
+  }
+
+  bool _isNear(String s1, String s2) {
+    if ((s1.length - s2.length).abs() > 1) return false;
+    int dist = 0;
+    int i = 0, j = 0;
+    while (i < s1.length && j < s2.length) {
+      if (s1[i] != s2[j]) {
+        dist++;
+        if (dist > 1) return false;
+        if (s1.length > s2.length) i++;
+        else if (s2.length > s1.length) j++;
+        else { i++; j++; }
+      } else {
+        i++; j++;
+      }
+    }
+    return dist + (s1.length - i) + (s2.length - j) <= 1;
+  }
+}
+
 void main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   FyrTheme.initialize();
   await windowManager.ensureInitialized();
+  SimpleSpellCheckerEnRegister.registerLan();
   
   String? initialFile;
   if (args.isNotEmpty) {
@@ -179,6 +244,8 @@ class _FyrTextHomeState extends State<FyrTextHome> {
   String? _currentFilePath;
   bool _isDirty = false;
   bool _isSaving = false;
+  bool _spellCheckEnabled = true;
+  final FyrSpellCheckService _spellCheckService = FyrSpellCheckService();
 
   @override
   void initState() {
@@ -398,6 +465,17 @@ class _FyrTextHomeState extends State<FyrTextHome> {
                       }
                     },
                   ),
+                  const VerticalDivider(width: 24, indent: 12, endIndent: 12),
+                  _ToolbarButton(
+                    icon: _spellCheckEnabled ? Icons.spellcheck : Icons.spellcheck_outlined,
+                    label: 'Toggle Spell Check',
+                    color: _spellCheckEnabled ? FyrTheme.accentColor : null,
+                    onPressed: () {
+                      setState(() {
+                        _spellCheckEnabled = !_spellCheckEnabled;
+                      });
+                    },
+                  ),
                 ],
               ),
             ),
@@ -415,6 +493,17 @@ class _FyrTextHomeState extends State<FyrTextHome> {
                     fontFamily: 'monospace',
                     height: 1.5,
                   ),
+                  spellCheckConfiguration: _spellCheckEnabled
+                      ? SpellCheckConfiguration(
+                          spellCheckService: _spellCheckService,
+                          misspelledTextStyle: const TextStyle(
+                            decoration: TextDecoration.underline,
+                            decorationColor: Colors.redAccent,
+                            decorationStyle: TextDecorationStyle.wavy,
+                            decorationThickness: 2.0,
+                          ),
+                        )
+                      : const SpellCheckConfiguration.disabled(),
                   decoration: const InputDecoration(
                     border: InputBorder.none,
                     hintText: 'Start typing...',
@@ -463,11 +552,13 @@ class _ToolbarButton extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onPressed;
-
+  final Color? color;
+  
   const _ToolbarButton({
     required this.icon,
     required this.label,
     required this.onPressed,
+    this.color,
   });
 
   @override
@@ -475,7 +566,7 @@ class _ToolbarButton extends StatelessWidget {
     return Tooltip(
       message: label,
       child: IconButton(
-        icon: Icon(icon, color: FyrTheme.textColor, size: 20),
+        icon: Icon(icon, color: color ?? FyrTheme.textColor, size: 20),
         onPressed: onPressed,
         splashRadius: 20,
       ),

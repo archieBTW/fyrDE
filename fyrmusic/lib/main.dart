@@ -36,7 +36,7 @@ void main(List<String> args) async {
   runApp(FyrMusicApp(initialFile: initialFile));
 }
 
-enum VisualizerMode { classic, psychedelic }
+enum VisualizerMode { classic, psychedelic, alchemy }
 
 class Song {
   final String path;
@@ -1061,7 +1061,9 @@ class _WinampVisualizerState extends State<WinampVisualizer> with SingleTickerPr
           child: CustomPaint(
             painter: widget.mode == VisualizerMode.classic 
               ? _VisualizerPainter(amplitudes: _amplitudes, peaks: _peaks)
-              : _PsychedelicPainter(amplitudes: _amplitudes, hue: _hue),
+              : widget.mode == VisualizerMode.psychedelic
+                ? _PsychedelicPainter(amplitudes: _amplitudes, hue: _hue)
+                : _AlchemyPainter(amplitudes: _amplitudes, hue: _hue),
             child: Container(),
           ),
         ),
@@ -1110,6 +1112,96 @@ class _PsychedelicPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _PsychedelicPainter oldDelegate) => true;
+}
+
+class _AlchemyPainter extends CustomPainter {
+  final List<double> amplitudes;
+  final double hue;
+
+  _AlchemyPainter({required this.amplitudes, required this.hue});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (amplitudes.isEmpty) return;
+
+    final center = Offset(size.width / 2, size.height / 2);
+    final maxRadius = math.min(size.width, size.height) * 0.4;
+    
+    // Divide amplitudes into bands
+    double bass = 0;
+    double mids = 0;
+    double treble = 0;
+    
+    int bandSize = amplitudes.length ~/ 3;
+    for (int i = 0; i < bandSize; i++) bass += amplitudes[i];
+    for (int i = bandSize; i < bandSize * 2; i++) mids += amplitudes[i];
+    for (int i = bandSize * 2; i < amplitudes.length; i++) treble += amplitudes[i];
+    
+    bass /= bandSize;
+    mids /= bandSize;
+    treble /= (amplitudes.length - bandSize * 2);
+
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2);
+
+    final baseHue = (hue + HSVColor.fromColor(FyrTheme.accentColor).hue) % 360;
+
+    // 8-fold symmetry
+    const int symmetry = 8;
+    final angleStep = (2 * math.pi) / symmetry;
+
+    for (int i = 0; i < symmetry; i++) {
+      canvas.save();
+      canvas.translate(center.dx, center.dy);
+      canvas.rotate(i * angleStep + (hue * 0.01));
+
+      // Layer 1: Bass-driven core
+      paint.color = HSVColor.fromAHSV(0.6, baseHue, 0.8, 1.0).toColor();
+      paint.strokeWidth = 1.0 + bass * 10;
+      final bassPath = Path();
+      double r1 = maxRadius * 0.3 + (bass * maxRadius * 0.2);
+      bassPath.moveTo(r1, 0);
+      bassPath.quadraticBezierTo(r1 * 1.5, r1 * 0.5, r1 * 0.8, r1 * 1.2);
+      canvas.drawPath(bassPath, paint);
+
+      // Layer 2: Mid-driven swirling petals
+      paint.color = HSVColor.fromAHSV(0.4, (baseHue + 40) % 360, 0.7, 1.0).toColor();
+      paint.strokeWidth = 1.5;
+      final midPath = Path();
+      double r2 = maxRadius * 0.5 + (mids * maxRadius * 0.3);
+      midPath.moveTo(r2 * 0.5, 0);
+      midPath.cubicTo(r2 * 0.8, r2 * 0.4, r2 * 1.2, -r2 * 0.2, r2, r2 * 0.1);
+      canvas.drawPath(midPath, paint);
+
+      // Layer 3: Treble-driven outer sparks
+      if (treble > 0.2) {
+        paint.style = PaintingStyle.fill;
+        paint.color = HSVColor.fromAHSV(0.8, (baseHue - 40 + 360) % 360, 0.9, 1.0).toColor();
+        double r3 = maxRadius * 0.8 + (treble * maxRadius * 0.2);
+        canvas.drawCircle(Offset(r3, math.sin(hue * 0.05) * 20), 2 + treble * 5, paint);
+        paint.style = PaintingStyle.stroke;
+      }
+
+      // Mirror for symmetry
+      canvas.scale(1, -1);
+      paint.style = PaintingStyle.stroke;
+      canvas.drawPath(bassPath, paint);
+      canvas.drawPath(midPath, paint);
+
+      canvas.restore();
+    }
+
+    // Central glow
+    final glowPaint = Paint()
+      ..color = FyrTheme.accentColor.withOpacity(0.3 + bass * 0.4)
+      ..maskFilter = MaskFilter.blur(BlurStyle.normal, 20 + bass * 30);
+    canvas.drawCircle(center, 10 + bass * 40, glowPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _AlchemyPainter oldDelegate) => true;
 }
 
 class _VisualizerPainter extends CustomPainter {
@@ -1214,12 +1306,16 @@ class _FullscreenVisualizerState extends State<FullscreenVisualizer> {
           ),
           Positioned(
             top: 40, left: 40,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(widget.currentSong?.title ?? 'Unknown Track', style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold)),
-                Text(widget.currentSong?.artist ?? 'Unknown Artist', style: const TextStyle(color: Colors.white70, fontSize: 24)),
-              ],
+            child: GestureDetector(
+              onTap: () => Navigator.pop(context),
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white10,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.arrow_back, color: Colors.white, size: 28),
+              ),
             ),
           ),
           Positioned(
@@ -1229,6 +1325,8 @@ class _FullscreenVisualizerState extends State<FullscreenVisualizer> {
                 _modeButton('Classic', VisualizerMode.classic),
                 const SizedBox(width: 16),
                 _modeButton('Psychedelic', VisualizerMode.psychedelic),
+                const SizedBox(width: 16),
+                _modeButton('Alchemy', VisualizerMode.alchemy),
                 const SizedBox(width: 40),
                 IconButton(
                   icon: const Icon(Icons.close, color: Colors.white, size: 32),
