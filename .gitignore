@@ -20,3 +20,4 @@ build/
 fyrbrowser/plugins/webview_cef/third/cef/
 bin/
 obj/
+fyrwebsite/deploy.sh

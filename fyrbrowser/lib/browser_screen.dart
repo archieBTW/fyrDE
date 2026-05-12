@@ -115,6 +115,14 @@ class _BrowserScreenState extends State<BrowserScreen> {
         final content = await bookmarksFile.readAsString();
         _bookmarks = List<Map<String, String>>.from(json.decode(content).map((i) => Map<String, String>.from(i)));
       }
+      final settingsFile = File(p.join(dir.path, 'settings.json'));
+      if (settingsFile.existsSync()) {
+        final content = await settingsFile.readAsString();
+        final settings = json.decode(content);
+        setState(() {
+          _adBlockEnabled = settings['adBlockEnabled'] ?? false;
+        });
+      }
     } catch (e) {
       debugPrint('Failed to load data: $e');
     }
@@ -127,6 +135,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
       await historyFile.writeAsString(json.encode(_history));
       final bookmarksFile = File(p.join(dir.path, 'bookmarks.json'));
       await bookmarksFile.writeAsString(json.encode(_bookmarks));
+      final settingsFile = File(p.join(dir.path, 'settings.json'));
+      await settingsFile.writeAsString(json.encode({'adBlockEnabled': _adBlockEnabled}));
     } catch (e) {
       debugPrint('Failed to save data: $e');
     }
@@ -187,12 +197,14 @@ class _BrowserScreenState extends State<BrowserScreen> {
       onLoadStart: (WebViewController controller, String url) {
         if (!mounted) return;
         setState(() => tab.isLoading = true);
+        if (_adBlockEnabled) tab.controller.executeJavaScript(AdBlockEngine.injectionScript);
       },
       onLoadEnd: (WebViewController controller, String url) {
         if (!mounted) return;
         setState(() {
           tab.isLoading = false;
           _startPwaCheck(tab);
+          if (_adBlockEnabled) tab.controller.executeJavaScript(AdBlockEngine.injectionScript);
         });
       },
       onDownloadStart: (String suggestedName, String url) {
@@ -1088,6 +1100,7 @@ Categories=Network;WebBrowser;
               icon: Icon(_adBlockEnabled ? Icons.security : Icons.security_outlined, size: 18),
               onPressed: () {
                 setState(() => _adBlockEnabled = !_adBlockEnabled);
+                _saveData();
                 for (var tab in _tabs) if (tab.isReady) tab.controller.reload();
               },
               color: _adBlockEnabled ? FyrTheme.accentColor : textColor.withOpacity(0.5),
