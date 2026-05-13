@@ -302,10 +302,7 @@ class _EditorScreenState extends State<EditorScreen> {
                             style: TextStyle(color: Colors.white),
                           ),
                           IconButton(
-                            icon: Icon(
-                              Icons.add,
-                              color: FyrTheme.accentColor,
-                            ),
+                            icon: Icon(Icons.add, color: FyrTheme.accentColor),
                             onPressed: () {
                               if (_fontSize < 36) {
                                 final newSize = _fontSize + 1;
@@ -343,10 +340,18 @@ class _EditorScreenState extends State<EditorScreen> {
       backgroundColor: FyrTheme.bgColor,
       body: CallbackShortcuts(
         bindings: <ShortcutActivator, VoidCallback>{
-          const SingleActivator(LogicalKeyboardKey.keyF, control: true, shift: true): () {
+          const SingleActivator(
+            LogicalKeyboardKey.keyF,
+            control: true,
+            shift: true,
+          ): () {
             setState(() => _showGlobalSearch = true);
           },
-          const SingleActivator(LogicalKeyboardKey.keyF, meta: true, shift: true): () {
+          const SingleActivator(
+            LogicalKeyboardKey.keyF,
+            meta: true,
+            shift: true,
+          ): () {
             setState(() => _showGlobalSearch = true);
           },
         },
@@ -374,13 +379,16 @@ class _EditorScreenState extends State<EditorScreen> {
                             () async => await windowManager.minimize(),
                           ),
                           const SizedBox(width: 8),
-                          _buildTrafficLightButton(Colors.green.shade300, () async {
-                            if (await windowManager.isMaximized()) {
-                              await windowManager.unmaximize();
-                            } else {
-                              await windowManager.maximize();
-                            }
-                          }),
+                          _buildTrafficLightButton(
+                            Colors.green.shade300,
+                            () async {
+                              if (await windowManager.isMaximized()) {
+                                await windowManager.unmaximize();
+                              } else {
+                                await windowManager.maximize();
+                              }
+                            },
+                          ),
                           const SizedBox(width: 20),
                           Text(
                             'FyrCode',
@@ -526,26 +534,30 @@ class _EditorScreenState extends State<EditorScreen> {
                                             children: [
                                               Text(
                                                 filename,
-                                                style: GoogleFonts.jetBrainsMono(
-                                                  color: isActive
-                                                      ? FyrTheme.textColor
-                                                      : FyrTheme.textColorMuted,
-                                                  fontSize: 13,
-                                                ),
+                                                style:
+                                                    GoogleFonts.jetBrainsMono(
+                                                      color: isActive
+                                                          ? FyrTheme.textColor
+                                                          : FyrTheme
+                                                                .textColorMuted,
+                                                      fontSize: 13,
+                                                    ),
                                               ),
                                               const SizedBox(width: 8),
                                               GestureDetector(
                                                 onTap: () => _closeTab(path),
                                                 child: Padding(
-                                                  padding: const EdgeInsets.only(
-                                                    left: 4.0,
-                                                  ),
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                        left: 4.0,
+                                                      ),
                                                   child: Icon(
                                                     Icons.close,
                                                     size: 14,
                                                     color: isActive
                                                         ? FyrTheme.textColor
-                                                        : FyrTheme.textColorMuted,
+                                                        : FyrTheme
+                                                              .textColorMuted,
                                                   ),
                                                 ),
                                               ),
@@ -563,7 +575,9 @@ class _EditorScreenState extends State<EditorScreen> {
                                     ? Center(
                                         child: Text(
                                           'Select a file to edit',
-                                          style: TextStyle(color: FyrTheme.textColorMuted),
+                                          style: TextStyle(
+                                            color: FyrTheme.textColorMuted,
+                                          ),
                                         ),
                                       )
                                     : CodeEditorPane(
@@ -603,5 +617,5 @@ class _EditorScreenState extends State<EditorScreen> {
         ),
       ),
     );
-}
+  }
 }

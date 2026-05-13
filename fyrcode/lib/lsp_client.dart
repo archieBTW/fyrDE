@@ -15,11 +15,8 @@ class LspClient {
 
   LspClient({this.onDiagnostics});
 
-  Future<void> start(String projectRoot) async {
-    _process = await Process.start('dart', [
-      'language-server',
-      '--protocol=lsp',
-    ], workingDirectory: projectRoot);
+  Future<void> start(String projectRoot, {String command = 'dart', List<String> args = const ['language-server', '--protocol=lsp']}) async {
+    _process = await Process.start(command, args, workingDirectory: projectRoot);
     print('test');
     _peer = json_rpc.Peer(
       StreamChannel(
@@ -107,6 +104,7 @@ class LspClient {
             'willSaveWaitUntil': true,
             'didSave': true,
           },
+          'formatting': {'dynamicRegistration': true},
         },
       },
       'trace': 'off',
@@ -217,6 +215,22 @@ class LspClient {
     }
   }
 
+  Future<List<dynamic>?> format(String filePath) async {
+    if (!_isInitialized || _peer == null || _peer!.isClosed) return null;
+    try {
+      final result = await _peer!.sendRequest('textDocument/formatting', {
+        'textDocument': {'uri': Uri.file(filePath).toString()},
+        'options': {
+          'tabSize': 2,
+          'insertSpaces': true,
+        },
+      });
+      return result as List<dynamic>?;
+    } catch (e) {
+      return null;
+    }
+  }
+
   Future<dynamic> resolveCompletionItem(dynamic item) async {
     if (!_isInitialized || _peer == null || _peer!.isClosed) return item;
     try {
@@ -226,13 +240,13 @@ class LspClient {
     }
   }
 
-  void notifyFileOpened(String filePath, String content) {
+  void notifyFileOpened(String filePath, String content, {String languageId = 'dart'}) {
     if (!_isInitialized || _peer == null || _peer!.isClosed) return;
     try {
       _peer!.sendNotification('textDocument/didOpen', {
         'textDocument': {
           'uri': Uri.file(filePath).toString(),
-          'languageId': 'dart',
+          'languageId': languageId,
           'version': 1,
           'text': content,
         },

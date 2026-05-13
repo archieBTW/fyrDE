@@ -5,6 +5,7 @@ import 'package:flutter/gestures.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:re_editor/re_editor.dart';
 import 'package:re_highlight/languages/dart.dart';
+import 'package:re_highlight/languages/go.dart';
 import 'package:fyrcode/lsp_client.dart';
 import 'dart:io';
 import 'dart:async';
@@ -519,7 +520,10 @@ class CodeEditorPaneState extends State<CodeEditorPane> {
   }
 
   Future<void> _initLsp() async {
-    if (widget.filePath.endsWith('.dart')) {
+    final isDart = widget.filePath.endsWith('.dart');
+    final isGo = widget.filePath.endsWith('.go');
+
+    if (isDart || isGo) {
       _lspClient = LspClient(
         onDiagnostics: (uri, diagnostics) {
           if (mounted && uri == Uri.file(widget.filePath).toString()) {
@@ -529,9 +533,18 @@ class CodeEditorPaneState extends State<CodeEditorPane> {
           }
         },
       );
-      await _lspClient!.start(widget.projectRoot);
+
+      final languageId = isDart ? 'dart' : 'go';
+      if (isDart) {
+        await _lspClient!.start(widget.projectRoot);
+      } else {
+        // Use absolute path for gopls to be safe
+        const goplsPath = '/home/archie/go/bin/gopls';
+        await _lspClient!.start(widget.projectRoot, command: goplsPath, args: ['serve']);
+      }
+
       if (mounted) {
-        _lspClient?.notifyFileOpened(widget.filePath, _fileContent);
+        _lspClient?.notifyFileOpened(widget.filePath, _fileContent, languageId: languageId);
         _lspTrackedFiles.add(widget.filePath);
       }
     }
@@ -622,9 +635,10 @@ class CodeEditorPaneState extends State<CodeEditorPane> {
 
     if (!mounted || loadVersion != _currentLoadVersion) return;
 
-    if (widget.filePath.endsWith('.dart') &&
-        !_lspTrackedFiles.contains(widget.filePath)) {
-      _lspClient?.notifyFileOpened(widget.filePath, _fileContent);
+    final isLspSupported = widget.filePath.endsWith('.dart') || widget.filePath.endsWith('.go');
+    if (isLspSupported && !_lspTrackedFiles.contains(widget.filePath)) {
+      final languageId = widget.filePath.endsWith('.dart') ? 'dart' : 'go';
+      _lspClient?.notifyFileOpened(widget.filePath, _fileContent, languageId: languageId);
       _lspTrackedFiles.add(widget.filePath);
     }
 
@@ -669,7 +683,8 @@ class CodeEditorPaneState extends State<CodeEditorPane> {
     _fileContent = currentText;
     _documentVersion++;
 
-    if (widget.filePath.endsWith('.dart')) {
+    final isLspSupported = widget.filePath.endsWith('.dart') || widget.filePath.endsWith('.go');
+    if (isLspSupported) {
       _lspSyncTimer?.cancel();
       _lspSyncTimer = Timer(const Duration(milliseconds: 250), () {
         if (mounted)
@@ -725,7 +740,8 @@ class CodeEditorPaneState extends State<CodeEditorPane> {
   }
 
   void _syncLsp() {
-    if (_controller == null || !widget.filePath.endsWith('.dart')) return;
+    final isLspSupported = widget.filePath.endsWith('.dart') || widget.filePath.endsWith('.go');
+    if (_controller == null || !isLspSupported) return;
     _lspSyncTimer?.cancel();
     _lspClient?.notifyDidChange(
       widget.filePath,
@@ -825,19 +841,33 @@ class CodeEditorPaneState extends State<CodeEditorPane> {
   Future<void> _saveFile() async {
     if (_controller == null) return;
     try {
+      final isDart = widget.filePath.endsWith('.dart');
+      final isGo = widget.filePath.endsWith('.go');
+
+      if (isDart || isGo) {
+        // Try LSP formatting first
+        final edits = await _lspClient?.format(widget.filePath);
+        if (edits != null && edits.isNotEmpty) {
+          _applyLspEdits(edits);
+        } else if (isDart) {
+          // Fallback to CLI format for Dart if LSP fails
+          await Process.run('dart', ['format', widget.filePath]);
+        }
+      }
+
       final file = File(widget.filePath);
       await file.writeAsString(_controller!.text);
 
-      if (widget.filePath.endsWith('.dart')) {
-        await Process.run('dart', ['format', widget.filePath]);
-        final newContent = (await file.readAsString()).replaceAll('\r\n', '\n');
-
-        if (newContent != _controller!.text) {
-          final currentSelection = _controller!.selection;
-          _controller!.value = _controller!.value.copyWith(
-            codeLines: CodeLines.fromText(newContent),
-            selection: currentSelection,
-          );
+      if (isDart || isGo) {
+        if (isDart) {
+          final newContent = (await file.readAsString()).replaceAll('\r\n', '\n');
+          if (newContent != _controller!.text) {
+            final currentSelection = _controller!.selection;
+            _controller!.value = _controller!.value.copyWith(
+              codeLines: CodeLines.fromText(newContent),
+              selection: currentSelection,
+            );
+          }
         }
         _lspClient?.notifyDidSave(widget.filePath);
       }
@@ -988,9 +1018,10 @@ class CodeEditorPaneState extends State<CodeEditorPane> {
     int offset, {
     String? triggerCharacter,
   }) async {
+    final isLspSupported = widget.filePath.endsWith('.dart') || widget.filePath.endsWith('.go');
     if (_lspClient == null ||
         _controller == null ||
-        !widget.filePath.endsWith('.dart'))
+        !isLspSupported)
       return;
 
     final int startVersion = _documentVersion;
@@ -1229,6 +1260,7 @@ class CodeEditorPaneState extends State<CodeEditorPane> {
                             codeTheme: CodeHighlightTheme(
                               languages: {
                                 'dart': CodeHighlightThemeMode(mode: langDart),
+                                'go': CodeHighlightThemeMode(mode: langGo),
                               },
                               theme: catppuccinTheme,
                             ),

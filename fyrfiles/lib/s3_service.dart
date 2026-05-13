@@ -110,18 +110,29 @@ class S3Service {
       await dir.create(recursive: true);
     }
 
-    // Check if already mounted
+    // Check if already mounted and healthy
     final checkMount = await Process.run('mountpoint', ['-q', mountPath]);
     if (checkMount.exitCode == 0) {
-      return; // Already mounted
+      try {
+        // Quick check to see if the mount is healthy (not stale/IO error)
+        final checkResult = await Process.run('ls', [mountPath]).timeout(const Duration(seconds: 2));
+        if (checkResult.exitCode == 0) {
+          return; // Already mounted and healthy
+        }
+      } catch (e) {
+        // Stale or timed out, proceed to unmount and remount
+      }
+      await unmount();
     }
 
     // rclone mount remote:bucket /path/to/mount --vfs-cache-mode full --daemon
+    // We exclude "//" because S3 keys named "/" cause IO errors on FUSE mounts
     final result = await Process.run('rclone', [
       'mount', 
       '${config.remoteName}:${config.bucket}', 
       mountPath,
       '--vfs-cache-mode', 'full',
+      '--exclude', '//',
       '--daemon',
     ]);
 
