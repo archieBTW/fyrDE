@@ -22,7 +22,7 @@ WIDTH=$(echo $RES | cut -d'x' -f1)
 HEIGHT=$(echo $RES | cut -d'x' -f2)
 echo "Detected resolution: ${WIDTH}x${HEIGHT}"
 
-flutter_apps=("fyrdock" "fyroverview" "fyrwindowoverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrstore" "fyrvirt" "fyrtext" "fyrdaw" "fyrav" "fyrphone" "fyrcalculator" "fyrcode" "fyrvideo" "fyrmusic" "fyrphotos" "fyrcamera" "fyrbrowser" "fyrjournal" "fyrcalender" "fyrclock" "fyrtorrent")
+flutter_apps=("fyrdock" "fyroverview" "fyrwindowoverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrstore" "fyrvirt" "fyrtext" "fyrdaw" "fyrav" "fyrphone" "fyrcalculator" "fyrcode" "fyrvideo" "fyrmusic" "fyrphotos" "fyrcamera" "fyrbrowser" "fyrjournal" "fyrcalender" "fyrclock" "fyrtorrent" "fyrapi")
 
 # --- Progress Tracking & Terminal Management ---
 CURRENT_STEP=0
@@ -572,22 +572,31 @@ EOF
             ;;
         "fyrtorrent")
             sudo ln -sf /opt/fyrtorrent/fyrtorrent /usr/local/bin/fyrtorrent
-            if [ -f "./fyrtorrent/assets/icons/torrent.png" ]; then
-                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
-                sudo cp ./fyrtorrent/assets/icons/torrent.png /usr/share/icons/hicolor/512x512/apps/fyrtorrent.png
-            fi
             sudo tee /usr/share/applications/fyrtorrent.desktop > /dev/null <<'EOF'
 [Desktop Entry]
 Name=fyrTorrent
 Comment=A premium torrent client for FyrDE
 Exec=/usr/local/bin/fyrtorrent %U
-Icon=fyrtorrent
+Icon=transmission
 Terminal=false
 Type=Application
 Categories=Network;FileTransfer;P2P;
 MimeType=application/x-bittorrent;x-scheme-handler/magnet;
 EOF
             xdg-mime default fyrtorrent.desktop application/x-bittorrent x-scheme-handler/magnet || true
+            ;;
+        "fyrapi")
+            sudo ln -sf /opt/fyrapi/fyrapi /usr/local/bin/fyrapi
+            sudo tee /usr/share/applications/fyrapi.desktop > /dev/null <<'EOF'
+[Desktop Entry]
+Name=FyrApi
+Comment=A professional API testing client for FyrDE
+Exec=/usr/local/bin/fyrapi
+Icon=applications-development
+Terminal=false
+Type=Application
+Categories=Development;Network;
+EOF
             ;;
     esac
     
