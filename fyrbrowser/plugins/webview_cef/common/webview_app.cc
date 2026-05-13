@@ -289,7 +289,7 @@ void WebviewApp::OnWebKitInitialized()
         m_render_js_bridge.reset(new CefJSBridge);
     handler->AttachJSBridge(m_render_js_bridge);
 
-    // CefRegisterExtension("v8/extern", extensionCode, handler);
+    CefRegisterExtension("v8/extern", extensionCode, handler);
 }
 
 void WebviewApp::OnBrowserCreated(CefRefPtr<CefBrowser> browser, CefRefPtr<CefDictionaryValue> extra_info)

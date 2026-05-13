@@ -173,7 +173,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
         if (!mounted) return;
         setState(() {
           // Strictly ignore about:blank during initialization to preserve the target URL
-          if (url != 'about:blank' || tab.isReady) {
+          // Special handling for popups which start as about:blank but have a target URL coming
+          if (url != 'about:blank' || (tab.isReady && tab.url != 'about:blank')) {
             tab.url = url;
           }
           logger.d('URL changed in tab ${tab.title}: $url');

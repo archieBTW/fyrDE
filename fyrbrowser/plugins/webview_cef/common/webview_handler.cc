@@ -608,10 +608,9 @@ void WebviewHandler::setJavaScriptChannels(int browserId, const std::vector<std:
     std::string extensionCode = "try{";
     for(auto& channel : channels)
     {
+        extensionCode += "window." + channel + " = { postMessage: (e,r) => {external.JavaScriptChannel('";
         extensionCode += channel;
-        extensionCode += " = (e,r) => {external.JavaScriptChannel('";
-        extensionCode += channel;
-        extensionCode += "',e,r)};";
+        extensionCode += "',e,r)} };";
     }
     extensionCode += "}catch(e){console.log(e);}";
     executeJavaScript(browserId, extensionCode);
@@ -707,7 +706,7 @@ bool WebviewHandler::GetScreenInfo(CefRefPtr<CefBrowser> browser, CefScreenInfo&
 
 void WebviewHandler::OnPaint(CefRefPtr<CefBrowser> browser, CefRenderHandler::PaintElementType type,
                             const CefRenderHandler::RectList &dirtyRects, const void *buffer, int w, int h) {
-    if (!browser->IsPopup() && onPaintCallback != nullptr) {
+    if (onPaintCallback != nullptr) {
         onPaintCallback(browser->GetIdentifier(), buffer, w, h);
     }
 }

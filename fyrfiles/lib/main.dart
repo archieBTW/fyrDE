@@ -284,6 +284,8 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
   Set<String> selectedPaths = {};
   Offset? dragStart;
   Offset? dragCurrent;
+  PointerDeviceKind? _lastPointerDeviceKind;
+  int _lastPointerButtons = 0;
   bool isListView = false;
   String sortBy = 'name'; // 'name', 'date', 'size'
   bool sortAscending = true;
@@ -1765,23 +1767,33 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
         }
         setState(() {});
       },
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-                  onTap: () {
-                    setState(() {
-                      selectedPaths.clear();
-                      _lastSelectedIndex = null;
-                    });
-                  },
-                  onLongPressStart: (LongPressStartDetails details) async {
-                    await openBodyContextMenu(context, details);
-                  },
-                  onSecondaryTapDown: (TapDownDetails details) async {
-                    if (!isFileContextMenuShown) {
-                      await openBodyContextMenuRightClickTap(context, details.globalPosition);
-                    }
-                  },
-                  onPanStart: (details) {
+      child: Listener(
+        onPointerDown: (event) {
+          _lastPointerDeviceKind = event.kind;
+          _lastPointerButtons = event.buttons;
+        },
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () {
+            setState(() {
+              selectedPaths.clear();
+              _lastSelectedIndex = null;
+            });
+          },
+          onLongPressStart: (LongPressStartDetails details) async {
+            await openBodyContextMenu(context, details);
+          },
+          onSecondaryTapDown: (TapDownDetails details) async {
+            if (!isFileContextMenuShown) {
+              await openBodyContextMenuRightClickTap(context, details.globalPosition);
+            }
+          },
+          onPanStart: (details) {
+                    if (_lastPointerButtons != kPrimaryButton) return;
+                    if (HardwareKeyboard.instance.isControlPressed || HardwareKeyboard.instance.isShiftPressed) return;
+                    
+                    // We only want to start a selection box with a mouse primary button
+                    // to avoid conflicting with 2-finger trackpad scrolling
                     setState(() {
                       dragStart = details.localPosition;
                       dragCurrent = details.localPosition;
@@ -1803,19 +1815,33 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
                   },
                   child: Stack(
                     children: [
-                      isListView 
-                      ? ListView.builder(
-                          controller: _scrollController,
-                          itemCount: files.length,
-                          itemBuilder: (context, index) => _buildFileItem(files[index], index, true),
-                        )
-                      : GridView.builder(
-                          controller: _scrollController,
-                          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: ((width - sidebarWidth) / 120).floor().clamp(1, 100)),
-                          itemCount: files.length,
-                          itemBuilder: (context, index) => _buildFileItem(files[index], index, false),
+                      Scrollbar(
+                        controller: _scrollController,
+                        thumbVisibility: true,
+                        trackVisibility: true,
+                        child: ScrollConfiguration(
+                          behavior: ScrollConfiguration.of(context).copyWith(
+                            dragDevices: {
+                              PointerDeviceKind.touch,
+                              PointerDeviceKind.trackpad,
+                              PointerDeviceKind.mouse,
+                            },
+                          ),
+                          child: isListView 
+                          ? ListView.builder(
+                              controller: _scrollController,
+                              itemCount: files.length,
+                              itemBuilder: (context, index) => _buildFileItem(files[index], index, true),
+                            )
+                          : GridView.builder(
+                              controller: _scrollController,
+                              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                                  crossAxisCount: ((width - sidebarWidth) / 120).floor().clamp(1, 100)),
+                              itemCount: files.length,
+                              itemBuilder: (context, index) => _buildFileItem(files[index], index, false),
+                            ),
                         ),
+                      ),
                       if (dragStart != null && dragCurrent != null)
                         Positioned(
                           left: min(dragStart!.dx, dragCurrent!.dx),
@@ -1885,6 +1911,7 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
                     ],
                   ),
                 ),
+              ),
     );
             }
             return const CircularProgressIndicator();
