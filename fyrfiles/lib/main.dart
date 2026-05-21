@@ -229,6 +229,15 @@ class TransferProgress {
 
 
 
+class MousePanGestureRecognizer extends PanGestureRecognizer {
+  MousePanGestureRecognizer({super.allowedButtonsFilter});
+
+  @override
+  void addAllowedPointerPanZoom(PointerPanZoomStartEvent event) {
+    // Do nothing to prevent intercepting trackpad scrolling
+  }
+}
+
 class FyrFilesApp extends StatelessWidget {
   const FyrFilesApp({super.key});
 
@@ -1303,54 +1312,77 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
       );
     }
 
-    return GestureDetector(
-      onDoubleTap: () async {
-        if (isDir) {
-          openDirectory(file as Directory);
-        } else {
-          var filePath = file.path;
-          if (isPicker) {
-            stdout.write(filePath);
-            await stdout.flush();
-            exit(0);
-          }
-          var result = await Process.run('xdg-open', [filePath]);
-          if (result.exitCode != 0) {
-            stderr.writeln('Could not open $filePath: ${result.stderr}');
-          }
-        }
-      },
-      onLongPressStart: (LongPressStartDetails event) {
-        isFileContextMenuShown = true;
-        openIconContextMenu(context, event, file).then((value) => isFileContextMenuShown = false);
-      },
-      onPanStart: (details) {
-        List<String> paths = isSelected ? selectedPaths.toList() : [file.path];
-        dragChannel.invokeMethod('startDrag', paths);
-      },
-      onTap: () {
-        bool isControlPressed = HardwareKeyboard.instance.isControlPressed;
-        bool isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
-        setState(() {
-          if (isControlPressed) {
-            if (selectedPaths.contains(file.path)) {
-              selectedPaths.remove(file.path);
-            } else {
-              selectedPaths.add(file.path);
-              _lastSelectedIndex = index;
-            }
-          } else if (isShiftPressed && _lastSelectedIndex != null) {
-            int start = min(_lastSelectedIndex!, index);
-            int end = max(_lastSelectedIndex!, index);
-            for (int i = start; i <= end; i++) {
-              selectedPaths.add(files[i].path);
-            }
-          } else {
-            selectedPaths.clear();
-            selectedPaths.add(file.path);
-            _lastSelectedIndex = index;
-          }
-        });
+    return RawGestureDetector(
+      behavior: HitTestBehavior.opaque,
+      gestures: {
+        MousePanGestureRecognizer: GestureRecognizerFactoryWithHandlers<MousePanGestureRecognizer>(
+          () => MousePanGestureRecognizer(allowedButtonsFilter: (int buttons) => buttons == kPrimaryButton),
+          (MousePanGestureRecognizer instance) {
+            instance.onStart = (details) {
+              List<String> paths = isSelected ? selectedPaths.toList() : [file.path];
+              dragChannel.invokeMethod('startDrag', paths);
+            };
+          },
+        ),
+        TapGestureRecognizer: GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
+          () => TapGestureRecognizer(),
+          (TapGestureRecognizer instance) {
+            instance.onTap = () {
+              bool isControlPressed = HardwareKeyboard.instance.isControlPressed;
+              bool isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
+              setState(() {
+                if (isControlPressed) {
+                  if (selectedPaths.contains(file.path)) {
+                    selectedPaths.remove(file.path);
+                  } else {
+                    selectedPaths.add(file.path);
+                    _lastSelectedIndex = index;
+                  }
+                } else if (isShiftPressed && _lastSelectedIndex != null) {
+                  int start = min(_lastSelectedIndex!, index);
+                  int end = max(_lastSelectedIndex!, index);
+                  for (int i = start; i <= end; i++) {
+                    selectedPaths.add(files[i].path);
+                  }
+                } else {
+                  selectedPaths.clear();
+                  selectedPaths.add(file.path);
+                  _lastSelectedIndex = index;
+                }
+              });
+            };
+          },
+        ),
+        DoubleTapGestureRecognizer: GestureRecognizerFactoryWithHandlers<DoubleTapGestureRecognizer>(
+          () => DoubleTapGestureRecognizer(),
+          (DoubleTapGestureRecognizer instance) {
+            instance.onDoubleTap = () async {
+              if (isDir) {
+                openDirectory(file as Directory);
+              } else {
+                var filePath = file.path;
+                if (isPicker) {
+                  stdout.write(filePath);
+                  await stdout.flush();
+                  exit(0);
+                }
+                var result = await Process.run('xdg-open', [filePath]);
+                if (result.exitCode != 0) {
+                  stderr.writeln('Could not open $filePath: ${result.stderr}');
+                }
+              }
+            };
+          },
+        ),
+        LongPressGestureRecognizer: GestureRecognizerFactoryWithHandlers<LongPressGestureRecognizer>(
+          () => LongPressGestureRecognizer(),
+          (LongPressGestureRecognizer instance) {
+            instance.onLongPressStart = (details) {
+              isFileContextMenuShown = true;
+              openIconContextMenu(context, details, file).then((value) => isFileContextMenuShown = false);
+            };
+          },
+        ),
       },
       child: Listener(
         behavior: HitTestBehavior.translucent,
@@ -1772,62 +1804,76 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
           _lastPointerDeviceKind = event.kind;
           _lastPointerButtons = event.buttons;
         },
-        child: GestureDetector(
+        child: RawGestureDetector(
           behavior: HitTestBehavior.opaque,
-          onTap: () {
-            setState(() {
-              selectedPaths.clear();
-              _lastSelectedIndex = null;
-            });
-          },
-          onLongPressStart: (LongPressStartDetails details) async {
-            await openBodyContextMenu(context, details);
-          },
-          onSecondaryTapDown: (TapDownDetails details) async {
-            if (!isFileContextMenuShown) {
-              await openBodyContextMenuRightClickTap(context, details.globalPosition);
-            }
-          },
-          onPanStart: (details) {
-                    if (_lastPointerButtons != kPrimaryButton) return;
+          gestures: {
+            MousePanGestureRecognizer: GestureRecognizerFactoryWithHandlers<MousePanGestureRecognizer>(
+              () => MousePanGestureRecognizer(allowedButtonsFilter: (int buttons) => buttons == kPrimaryButton),
+              (MousePanGestureRecognizer instance) {
+                instance
+                  ..onStart = (details) {
                     if (HardwareKeyboard.instance.isControlPressed || HardwareKeyboard.instance.isShiftPressed) return;
-                    
-                    // We only want to start a selection box with a mouse primary button
-                    // to avoid conflicting with 2-finger trackpad scrolling
                     setState(() {
                       dragStart = details.localPosition;
                       dragCurrent = details.localPosition;
                       selectedPaths.clear();
                       _lastSelectedIndex = null;
                     });
-                  },
-                  onPanUpdate: (details) {
+                  }
+                  ..onUpdate = (details) {
                     setState(() {
                       dragCurrent = details.localPosition;
                     });
                     _updateSelection();
-                  },
-                  onPanEnd: (details) {
+                  }
+                  ..onEnd = (details) {
                     setState(() {
                       dragStart = null;
                       dragCurrent = null;
                     });
-                  },
-                  child: Stack(
-                    children: [
-                      Scrollbar(
-                        controller: _scrollController,
-                        thumbVisibility: true,
-                        trackVisibility: true,
-                        child: ScrollConfiguration(
-                          behavior: ScrollConfiguration.of(context).copyWith(
-                            dragDevices: {
-                              PointerDeviceKind.touch,
-                              PointerDeviceKind.trackpad,
-                              PointerDeviceKind.mouse,
-                            },
-                          ),
-                          child: isListView 
+                  };
+              },
+            ),
+            TapGestureRecognizer: GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
+              () => TapGestureRecognizer(),
+              (TapGestureRecognizer instance) {
+                instance
+                  ..onTap = () {
+                    setState(() {
+                      selectedPaths.clear();
+                      _lastSelectedIndex = null;
+                    });
+                  }
+                  ..onSecondaryTapDown = (details) async {
+                    if (!isFileContextMenuShown) {
+                      await openBodyContextMenuRightClickTap(context, details.globalPosition);
+                    }
+                  };
+              },
+            ),
+            LongPressGestureRecognizer: GestureRecognizerFactoryWithHandlers<LongPressGestureRecognizer>(
+              () => LongPressGestureRecognizer(),
+              (LongPressGestureRecognizer instance) {
+                instance.onLongPressStart = (details) async {
+                  await openBodyContextMenu(context, details);
+                };
+              },
+            ),
+          },
+          child: Stack(
+            children: [
+              Scrollbar(
+                controller: _scrollController,
+                thumbVisibility: true,
+                trackVisibility: true,
+                child: ScrollConfiguration(
+                  behavior: ScrollConfiguration.of(context).copyWith(
+                    dragDevices: {
+                      PointerDeviceKind.touch,
+                      PointerDeviceKind.trackpad,
+                    },
+                  ),
+                  child: isListView 
                           ? ListView.builder(
                               controller: _scrollController,
                               itemCount: files.length,
