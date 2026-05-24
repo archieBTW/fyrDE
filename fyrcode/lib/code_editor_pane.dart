@@ -122,6 +122,7 @@ class CodeEditorPane extends StatefulWidget {
   final double fontSize;
   final void Function(String filePath, int line, int col)?
   onNavigateToDefinition;
+  final void Function(String filePath, int errorCount)? onDiagnosticsChanged;
 
   const CodeEditorPane({
     super.key,
@@ -132,6 +133,7 @@ class CodeEditorPane extends StatefulWidget {
     this.tabWidth = 2,
     this.fontSize = 14.0,
     this.onNavigateToDefinition,
+    this.onDiagnosticsChanged,
   });
 
   @override
@@ -295,6 +297,14 @@ class CodeEditorPaneState extends State<CodeEditorPane> {
     // Ctrl + / (Toggle Comment)
     if (isModifierPressed && event.logicalKey == LogicalKeyboardKey.slash) {
       _toggleComment();
+      return KeyEventResult.handled;
+    }
+
+    // Ctrl+Shift+E (Next Error)
+    if (isModifierPressed &&
+        isShiftPressed &&
+        event.logicalKey == LogicalKeyboardKey.keyE) {
+      _goToNextError();
       return KeyEventResult.handled;
     }
 
@@ -524,6 +534,46 @@ class CodeEditorPaneState extends State<CodeEditorPane> {
     });
   }
 
+  void _goToNextError() {
+    if (_controller == null || _diagnostics.isEmpty) return;
+
+    final selection = _controller!.selection;
+    final currentLine = selection.baseIndex;
+    final currentCol = selection.baseOffset;
+
+    final errors = _diagnostics
+        .where((d) => d['range'] != null && (d['severity'] ?? 1) == 1)
+        .toList()
+      ..sort((a, b) {
+        final aLine = a['range']['start']['line'] as int;
+        final bLine = b['range']['start']['line'] as int;
+        if (aLine != bLine) return aLine.compareTo(bLine);
+        return (a['range']['start']['character'] as int)
+            .compareTo(b['range']['start']['character'] as int);
+      });
+
+    if (errors.isEmpty) return;
+
+    // Find next error after cursor (same line + after column, or later line)
+    dynamic nextError;
+    for (final err in errors) {
+      final startLine = err['range']['start']['line'] as int;
+      final startCol = err['range']['start']['character'] as int;
+      if (startLine > currentLine ||
+          (startLine == currentLine && startCol > currentCol)) {
+        nextError = err;
+        break;
+      }
+    }
+
+    // Wrap to first error
+    nextError ??= errors.first;
+
+    final line = nextError['range']['start']['line'] as int;
+    final col = nextError['range']['start']['character'] as int;
+    jumpToLine(line, col);
+  }
+
   Future<void> _initLsp() async {
     final isDart = widget.filePath.endsWith('.dart');
     final isGo = widget.filePath.endsWith('.go');
@@ -532,9 +582,13 @@ class CodeEditorPaneState extends State<CodeEditorPane> {
       _lspClient = LspClient(
         onDiagnostics: (uri, diagnostics) {
           if (mounted && uri == Uri.file(widget.filePath).toString()) {
+            final errorCount = diagnostics
+                .where((d) => (d['severity'] ?? 1) == 1)
+                .length;
             setState(() {
               _diagnostics = diagnostics;
             });
+            widget.onDiagnosticsChanged?.call(widget.filePath, errorCount);
           }
         },
       );

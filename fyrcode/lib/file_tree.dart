@@ -8,11 +8,13 @@ import 'fyr_theme.dart';
 class FileTree extends StatefulWidget {
   final String rootDirectory;
   final void Function(String path) onFileSelected;
+  final Map<String, int> fileErrorCounts;
 
   const FileTree({
     super.key,
     required this.rootDirectory,
     required this.onFileSelected,
+    this.fileErrorCounts = const {},
   });
 
   @override
@@ -85,6 +87,10 @@ class _FileTreeState extends State<FileTree> {
     if (name.startsWith('.'))
       return const SizedBox.shrink(); // hide hidden files
 
+    final errorCount = isDirectory ? 0 : (widget.fileErrorCounts[entity.path] ?? 0);
+    final hasErrors = errorCount > 0;
+    const errorRed = Color(0xFFED8796);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -131,20 +137,40 @@ class _FileTreeState extends State<FileTree> {
                     size: 14,
                     color: isDirectory
                         ? FyrTheme.accentColor
-                        : FyrTheme.textColor,
+                        : (hasErrors ? errorRed : FyrTheme.textColor),
                   ),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
                       name,
                       style: GoogleFonts.jetBrainsMono(
-                        color: FyrTheme.textColor,
+                        color: hasErrors ? errorRed : FyrTheme.textColor,
                         fontSize: 12,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
+                  if (hasErrors)
+                    Container(
+                      margin: const EdgeInsets.only(left: 6),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 5,
+                        vertical: 1,
+                      ),
+                      decoration: BoxDecoration(
+                        color: errorRed,
+                        borderRadius: BorderRadius.circular(9),
+                      ),
+                      child: Text(
+                        errorCount.toString(),
+                        style: GoogleFonts.jetBrainsMono(
+                          color: FyrTheme.bgColor,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),

@@ -32,6 +32,8 @@ class _EditorScreenState extends State<EditorScreen> {
   int _tabWidth = 2;
   double _fontSize = 14.0;
 
+  final Map<String, int> _fileErrorCounts = {};
+
   final GlobalKey<CodeEditorPaneState> _editorKey =
       GlobalKey<CodeEditorPaneState>();
 
@@ -102,6 +104,16 @@ class _EditorScreenState extends State<EditorScreen> {
         _openFiles.add(targetPath);
       }
       _activeFile = targetPath;
+    });
+  }
+
+  void _onDiagnosticsChanged(String filePath, int errorCount) {
+    setState(() {
+      if (errorCount > 0) {
+        _fileErrorCounts[filePath] = errorCount;
+      } else {
+        _fileErrorCounts.remove(filePath);
+      }
     });
   }
 
@@ -479,6 +491,7 @@ class _EditorScreenState extends State<EditorScreen> {
                             child: FileTree(
                               rootDirectory: _currentDirectory,
                               onFileSelected: _onFileSelected,
+                              fileErrorCounts: _fileErrorCounts,
                             ),
                           ),
                         ),
@@ -590,6 +603,8 @@ class _EditorScreenState extends State<EditorScreen> {
                                         fontSize: _fontSize,
                                         onNavigateToDefinition:
                                             _handleNavigateToDefinition,
+                                        onDiagnosticsChanged:
+                                            _onDiagnosticsChanged,
                                       ),
                               ),
                             ],
