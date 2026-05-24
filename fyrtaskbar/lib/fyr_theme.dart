@@ -141,9 +141,10 @@ class FyrTheme {
 
     for (final entry in themeColors.entries) {
       final tc = entry.value;
-      final dist = (r - tc.red) * (r - tc.red) +
-                   (g - tc.green) * (g - tc.green) +
-                   (b - tc.blue) * (b - tc.blue);
+      final dist =
+          (r - tc.red) * (r - tc.red) +
+          (g - tc.green) * (g - tc.green) +
+          (b - tc.blue) * (b - tc.blue);
       if (dist < minDistance) {
         minDistance = dist.toDouble();
         bestTheme = entry.key;

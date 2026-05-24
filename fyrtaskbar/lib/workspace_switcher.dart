@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:fyrtaskbar/state/system_state.dart';
 import 'main.dart';
 import 'fyr_theme.dart';
 
@@ -14,7 +15,10 @@ class _WorkspaceSwitcherState extends State<WorkspaceSwitcher> {
   int _maxWorkspace = 3;
 
   void _switchWorkspace(String name) {
-    Process.start('swaymsg', ['workspace', name], mode: ProcessStartMode.detached);
+    Process.start('swaymsg', [
+      'workspace',
+      name,
+    ], mode: ProcessStartMode.detached);
   }
 
   @override
@@ -55,7 +59,9 @@ class _WorkspaceSwitcherState extends State<WorkspaceSwitcher> {
           }
         }
 
-        allWorkspaces.sort((a, b) => (a['num'] as int).compareTo(b['num'] as int));
+        allWorkspaces.sort(
+          (a, b) => (a['num'] as int).compareTo(b['num'] as int),
+        );
 
         return Row(
           mainAxisSize: MainAxisSize.min,
@@ -69,7 +75,10 @@ class _WorkspaceSwitcherState extends State<WorkspaceSwitcher> {
                 onTap: () => _switchWorkspace(name),
                 behavior: HitTestBehavior.opaque,
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 8,
+                  ),
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 200),
                     curve: Curves.easeOutCubic,
@@ -80,13 +89,15 @@ class _WorkspaceSwitcherState extends State<WorkspaceSwitcher> {
                           ? FyrTheme.textColor
                           : FyrTheme.textColor.withOpacity(isEmpty ? 0.2 : 0.6),
                       borderRadius: BorderRadius.circular(5),
-                      boxShadow: isFocused ? [
-                        BoxShadow(
-                          color: FyrTheme.textColor.withOpacity(0.4),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        )
-                      ] : null,
+                      boxShadow: isFocused
+                          ? [
+                              BoxShadow(
+                                color: FyrTheme.textColor.withOpacity(0.4),
+                                blurRadius: 8,
+                                offset: const Offset(0, 2),
+                              ),
+                            ]
+                          : null,
                     ),
                   ),
                 ),

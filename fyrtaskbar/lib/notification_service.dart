@@ -1,17 +1,21 @@
 import 'package:dbus/dbus.dart';
+import 'package:fyrtaskbar/state/system_state.dart';
 import 'main.dart';
 
 class NotificationService extends DBusObject {
   static DBusClient? _client;
 
-  NotificationService() : super(DBusObjectPath('/org/freedesktop/Notifications'));
+  NotificationService()
+    : super(DBusObjectPath('/org/freedesktop/Notifications'));
 
   static Future<void> init() async {
     _client = DBusClient.session();
     _instance = NotificationService();
     await _client!.registerObject(_instance!);
-    await _client!.requestName('org.freedesktop.Notifications',
-        flags: {DBusRequestNameFlag.doNotQueue});
+    await _client!.requestName(
+      'org.freedesktop.Notifications',
+      flags: {DBusRequestNameFlag.doNotQueue},
+    );
   }
 
   static NotificationService? _instance;
@@ -24,10 +28,11 @@ class NotificationService extends DBusObject {
   }
 
   static void sendNotificationClosed(int id, int reason) {
-    _instance?.emitSignal('org.freedesktop.Notifications', 'NotificationClosed', [
-      DBusUint32(id),
-      DBusUint32(reason),
-    ]);
+    _instance?.emitSignal(
+      'org.freedesktop.Notifications',
+      'NotificationClosed',
+      [DBusUint32(id), DBusUint32(reason)],
+    );
   }
 
   @override
@@ -39,36 +44,96 @@ class NotificationService extends DBusObject {
           DBusIntrospectMethod(
             'Notify',
             args: [
-              DBusIntrospectArgument(DBusSignature('s'), DBusArgumentDirection.in_, name: 'app_name'),
-              DBusIntrospectArgument(DBusSignature('u'), DBusArgumentDirection.in_, name: 'replaces_id'),
-              DBusIntrospectArgument(DBusSignature('s'), DBusArgumentDirection.in_, name: 'app_icon'),
-              DBusIntrospectArgument(DBusSignature('s'), DBusArgumentDirection.in_, name: 'summary'),
-              DBusIntrospectArgument(DBusSignature('s'), DBusArgumentDirection.in_, name: 'body'),
-              DBusIntrospectArgument(DBusSignature('as'), DBusArgumentDirection.in_, name: 'actions'),
-              DBusIntrospectArgument(DBusSignature('a{sv}'), DBusArgumentDirection.in_, name: 'hints'),
-              DBusIntrospectArgument(DBusSignature('i'), DBusArgumentDirection.in_, name: 'expire_timeout'),
-              DBusIntrospectArgument(DBusSignature('u'), DBusArgumentDirection.out, name: 'id'),
+              DBusIntrospectArgument(
+                DBusSignature('s'),
+                DBusArgumentDirection.in_,
+                name: 'app_name',
+              ),
+              DBusIntrospectArgument(
+                DBusSignature('u'),
+                DBusArgumentDirection.in_,
+                name: 'replaces_id',
+              ),
+              DBusIntrospectArgument(
+                DBusSignature('s'),
+                DBusArgumentDirection.in_,
+                name: 'app_icon',
+              ),
+              DBusIntrospectArgument(
+                DBusSignature('s'),
+                DBusArgumentDirection.in_,
+                name: 'summary',
+              ),
+              DBusIntrospectArgument(
+                DBusSignature('s'),
+                DBusArgumentDirection.in_,
+                name: 'body',
+              ),
+              DBusIntrospectArgument(
+                DBusSignature('as'),
+                DBusArgumentDirection.in_,
+                name: 'actions',
+              ),
+              DBusIntrospectArgument(
+                DBusSignature('a{sv}'),
+                DBusArgumentDirection.in_,
+                name: 'hints',
+              ),
+              DBusIntrospectArgument(
+                DBusSignature('i'),
+                DBusArgumentDirection.in_,
+                name: 'expire_timeout',
+              ),
+              DBusIntrospectArgument(
+                DBusSignature('u'),
+                DBusArgumentDirection.out,
+                name: 'id',
+              ),
             ],
           ),
           DBusIntrospectMethod(
             'CloseNotification',
             args: [
-              DBusIntrospectArgument(DBusSignature('u'), DBusArgumentDirection.in_, name: 'id'),
+              DBusIntrospectArgument(
+                DBusSignature('u'),
+                DBusArgumentDirection.in_,
+                name: 'id',
+              ),
             ],
           ),
           DBusIntrospectMethod(
             'GetCapabilities',
             args: [
-              DBusIntrospectArgument(DBusSignature('as'), DBusArgumentDirection.out, name: 'capabilities'),
+              DBusIntrospectArgument(
+                DBusSignature('as'),
+                DBusArgumentDirection.out,
+                name: 'capabilities',
+              ),
             ],
           ),
           DBusIntrospectMethod(
             'GetServerInformation',
             args: [
-              DBusIntrospectArgument(DBusSignature('s'), DBusArgumentDirection.out, name: 'name'),
-              DBusIntrospectArgument(DBusSignature('s'), DBusArgumentDirection.out, name: 'vendor'),
-              DBusIntrospectArgument(DBusSignature('s'), DBusArgumentDirection.out, name: 'version'),
-              DBusIntrospectArgument(DBusSignature('s'), DBusArgumentDirection.out, name: 'spec_version'),
+              DBusIntrospectArgument(
+                DBusSignature('s'),
+                DBusArgumentDirection.out,
+                name: 'name',
+              ),
+              DBusIntrospectArgument(
+                DBusSignature('s'),
+                DBusArgumentDirection.out,
+                name: 'vendor',
+              ),
+              DBusIntrospectArgument(
+                DBusSignature('s'),
+                DBusArgumentDirection.out,
+                name: 'version',
+              ),
+              DBusIntrospectArgument(
+                DBusSignature('s'),
+                DBusArgumentDirection.out,
+                name: 'spec_version',
+              ),
             ],
           ),
         ],
@@ -76,15 +141,31 @@ class NotificationService extends DBusObject {
           DBusIntrospectSignal(
             'NotificationClosed',
             args: [
-              DBusIntrospectArgument(DBusSignature('u'), DBusArgumentDirection.out, name: 'id'),
-              DBusIntrospectArgument(DBusSignature('u'), DBusArgumentDirection.out, name: 'reason'),
+              DBusIntrospectArgument(
+                DBusSignature('u'),
+                DBusArgumentDirection.out,
+                name: 'id',
+              ),
+              DBusIntrospectArgument(
+                DBusSignature('u'),
+                DBusArgumentDirection.out,
+                name: 'reason',
+              ),
             ],
           ),
           DBusIntrospectSignal(
             'ActionInvoked',
             args: [
-              DBusIntrospectArgument(DBusSignature('u'), DBusArgumentDirection.out, name: 'id'),
-              DBusIntrospectArgument(DBusSignature('s'), DBusArgumentDirection.out, name: 'action_key'),
+              DBusIntrospectArgument(
+                DBusSignature('u'),
+                DBusArgumentDirection.out,
+                name: 'id',
+              ),
+              DBusIntrospectArgument(
+                DBusSignature('s'),
+                DBusArgumentDirection.out,
+                name: 'action_key',
+              ),
             ],
           ),
         ],
@@ -113,8 +194,7 @@ class NotificationService extends DBusObject {
     final appIcon = (methodCall.values[2] as DBusString).value;
     final summary = (methodCall.values[3] as DBusString).value;
     final body = (methodCall.values[4] as DBusString).value;
-    final actions = (methodCall.values[5] as DBusArray)
-        .children
+    final actions = (methodCall.values[5] as DBusArray).children
         .map((v) => (v as DBusString).value)
         .toList();
     final expireTimeout = (methodCall.values[7] as DBusInt32).value;
@@ -131,19 +211,25 @@ class NotificationService extends DBusObject {
     return DBusMethodSuccessResponse([DBusUint32(1)]);
   }
 
-  Future<DBusMethodResponse> _handleCloseNotification(DBusMethodCall methodCall) async {
+  Future<DBusMethodResponse> _handleCloseNotification(
+    DBusMethodCall methodCall,
+  ) async {
     final id = (methodCall.values[0] as DBusUint32).value;
     SystemState.dismissNotification(id.toInt());
     return DBusMethodSuccessResponse([]);
   }
 
-  Future<DBusMethodResponse> _handleGetCapabilities(DBusMethodCall methodCall) async {
+  Future<DBusMethodResponse> _handleGetCapabilities(
+    DBusMethodCall methodCall,
+  ) async {
     return DBusMethodSuccessResponse([
-      DBusArray.string(['body', 'actions', 'icon-static'])
+      DBusArray.string(['body', 'actions', 'icon-static']),
     ]);
   }
 
-  Future<DBusMethodResponse> _handleGetServerInformation(DBusMethodCall methodCall) async {
+  Future<DBusMethodResponse> _handleGetServerInformation(
+    DBusMethodCall methodCall,
+  ) async {
     return DBusMethodSuccessResponse([
       DBusString('FyrDE Notification Server'),
       DBusString('archieBTW'),

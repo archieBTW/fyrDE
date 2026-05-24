@@ -1,6 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:fyrtaskbar/models/notification.dart';
+import 'package:fyrtaskbar/state/system_state.dart';
+import 'package:fyrtaskbar/ui/notification_card.dart';
 import 'package:intl/intl.dart';
 import 'fyr_theme.dart';
 import 'main.dart';
@@ -22,12 +25,12 @@ class CalendarEvent {
   });
 
   factory CalendarEvent.fromJson(Map<String, dynamic> json) => CalendarEvent(
-        id: json['id'],
-        title: json['title'],
-        startTime: DateTime.parse(json['startTime']),
-        endTime: DateTime.parse(json['endTime']),
-        source: json['source'] ?? 'local',
-      );
+    id: json['id'],
+    title: json['title'],
+    startTime: DateTime.parse(json['startTime']),
+    endTime: DateTime.parse(json['endTime']),
+    source: json['source'] ?? 'local',
+  );
 }
 
 class CalendarMenuPopup extends StatefulWidget {
@@ -61,14 +64,16 @@ class _CalendarMenuPopupState extends State<CalendarMenuPopup>
           ),
         );
     _animationController.forward();
-    
+
     _locationController.text = SystemState.weatherLocation.value;
     _loadEvents();
   }
 
   Future<void> _loadEvents() async {
     try {
-      final file = File('${Platform.environment['HOME']}/.config/fyr/calendar_events.json');
+      final file = File(
+        '${Platform.environment['HOME']}/.config/fyr/calendar_events.json',
+      );
       if (await file.exists()) {
         final content = await file.readAsString();
         final List<dynamic> data = jsonDecode(content);
@@ -92,28 +97,41 @@ class _CalendarMenuPopupState extends State<CalendarMenuPopup>
       builder: (context) {
         return AlertDialog(
           backgroundColor: FyrTheme.bgColor,
-          title: Text('Set Location', style: TextStyle(color: FyrTheme.textColor)),
+          title: Text(
+            'Set Location',
+            style: TextStyle(color: FyrTheme.textColor),
+          ),
           content: TextField(
             controller: _locationController,
             style: TextStyle(color: FyrTheme.textColor),
             decoration: InputDecoration(
               hintText: 'City Name',
               hintStyle: TextStyle(color: FyrTheme.textColorMuted),
-              enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: FyrTheme.cardColor)),
-              focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: FyrTheme.accentColor)),
+              enabledBorder: UnderlineInputBorder(
+                borderSide: BorderSide(color: FyrTheme.cardColor),
+              ),
+              focusedBorder: UnderlineInputBorder(
+                borderSide: BorderSide(color: FyrTheme.accentColor),
+              ),
             ),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: Text('Cancel', style: TextStyle(color: FyrTheme.textColorMuted)),
+              child: Text(
+                'Cancel',
+                style: TextStyle(color: FyrTheme.textColorMuted),
+              ),
             ),
             TextButton(
               onPressed: () {
                 Navigator.pop(context);
                 SystemState.saveWeatherLocation(_locationController.text);
               },
-              child: Text('Save', style: TextStyle(color: FyrTheme.accentColor)),
+              child: Text(
+                'Save',
+                style: TextStyle(color: FyrTheme.accentColor),
+              ),
             ),
           ],
         );
@@ -157,7 +175,9 @@ class _CalendarMenuPopupState extends State<CalendarMenuPopup>
                 ),
                 child: CalendarDatePicker(
                   initialDate: _selectedDate,
-                  firstDate: DateTime.now().subtract(const Duration(days: 3650)),
+                  firstDate: DateTime.now().subtract(
+                    const Duration(days: 3650),
+                  ),
                   lastDate: DateTime.now().add(const Duration(days: 3650)),
                   onDateChanged: (date) {
                     setState(() {
@@ -168,13 +188,18 @@ class _CalendarMenuPopupState extends State<CalendarMenuPopup>
               ),
             ),
             // Events Section
-            if (_events.any((e) =>
-                e.startTime.year == _selectedDate.year &&
-                e.startTime.month == _selectedDate.month &&
-                e.startTime.day == _selectedDate.day)) ...[
+            if (_events.any(
+              (e) =>
+                  e.startTime.year == _selectedDate.year &&
+                  e.startTime.month == _selectedDate.month &&
+                  e.startTime.day == _selectedDate.day,
+            )) ...[
               Divider(height: 1, color: FyrTheme.cardColor),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -189,44 +214,48 @@ class _CalendarMenuPopupState extends State<CalendarMenuPopup>
                     ),
                     const SizedBox(height: 8),
                     ..._events
-                        .where((e) =>
-                            e.startTime.year == _selectedDate.year &&
-                            e.startTime.month == _selectedDate.month &&
-                            e.startTime.day == _selectedDate.day)
-                        .map((e) => Padding(
-                              padding: const EdgeInsets.only(bottom: 6),
-                              child: Row(
-                                children: [
-                                  Container(
-                                    width: 4,
-                                    height: 16,
-                                    decoration: BoxDecoration(
-                                      color: FyrTheme.accentColor,
-                                      borderRadius: BorderRadius.circular(2),
-                                    ),
+                        .where(
+                          (e) =>
+                              e.startTime.year == _selectedDate.year &&
+                              e.startTime.month == _selectedDate.month &&
+                              e.startTime.day == _selectedDate.day,
+                        )
+                        .map(
+                          (e) => Padding(
+                            padding: const EdgeInsets.only(bottom: 6),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 4,
+                                  height: 16,
+                                  decoration: BoxDecoration(
+                                    color: FyrTheme.accentColor,
+                                    borderRadius: BorderRadius.circular(2),
                                   ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      e.title,
-                                      style: TextStyle(
-                                        color: FyrTheme.textColor,
-                                        fontSize: 13,
-                                      ),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                  Text(
-                                    DateFormat('HH:mm').format(e.startTime),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    e.title,
                                     style: TextStyle(
-                                      color: FyrTheme.textColorMuted,
-                                      fontSize: 11,
+                                      color: FyrTheme.textColor,
+                                      fontSize: 13,
                                     ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
-                                ],
-                              ),
-                            )),
+                                ),
+                                Text(
+                                  DateFormat('HH:mm').format(e.startTime),
+                                  style: TextStyle(
+                                    color: FyrTheme.textColorMuted,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
                   ],
                 ),
               ),
@@ -238,7 +267,10 @@ class _CalendarMenuPopupState extends State<CalendarMenuPopup>
                   Process.run('fyrcalender', []);
                   widget.onClose();
                 },
-                child: Text('Open Calendar', style: TextStyle(color: FyrTheme.accentColor, fontSize: 12)),
+                child: Text(
+                  'Open Calendar',
+                  style: TextStyle(color: FyrTheme.accentColor, fontSize: 12),
+                ),
               ),
             ),
             Divider(height: 1, color: FyrTheme.cardColor),
@@ -267,7 +299,8 @@ class _CalendarMenuPopupState extends State<CalendarMenuPopup>
                                   SizedBox(width: 16),
                                   Expanded(
                                     child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
                                         Row(
                                           children: [
@@ -296,7 +329,8 @@ class _CalendarMenuPopupState extends State<CalendarMenuPopup>
                                             '${temp}°F • ${desc ?? "Unknown"}',
                                             style: TextStyle(
                                               fontSize: 14,
-                                              color: FyrTheme.textColor.withOpacity(0.8),
+                                              color: FyrTheme.textColor
+                                                  .withOpacity(0.8),
                                             ),
                                           )
                                         else
@@ -326,7 +360,8 @@ class _CalendarMenuPopupState extends State<CalendarMenuPopup>
             ValueListenableBuilder<PhoneInfo?>(
               valueListenable: SystemState.primaryPhone,
               builder: (context, phone, _) {
-                if (phone == null || !phone.isPaired) return const SizedBox.shrink();
+                if (phone == null || !phone.isPaired)
+                  return const SizedBox.shrink();
                 return Column(
                   children: [
                     Padding(
@@ -334,9 +369,13 @@ class _CalendarMenuPopupState extends State<CalendarMenuPopup>
                       child: Row(
                         children: [
                           Icon(
-                            phone.isConnected ? Icons.smartphone : Icons.phonelink_erase,
+                            phone.isConnected
+                                ? Icons.smartphone
+                                : Icons.phonelink_erase,
                             size: 24,
-                            color: phone.isConnected ? FyrTheme.accentColor : FyrTheme.textColorMuted,
+                            color: phone.isConnected
+                                ? FyrTheme.accentColor
+                                : FyrTheme.textColorMuted,
                           ),
                           SizedBox(width: 16),
                           Expanded(
@@ -352,9 +391,9 @@ class _CalendarMenuPopupState extends State<CalendarMenuPopup>
                                   ),
                                 ),
                                 Text(
-                                  phone.isConnected 
-                                    ? 'Connected • ${phone.batteryLevel}% Battery'
-                                    : 'Disconnected',
+                                  phone.isConnected
+                                      ? 'Connected • ${phone.batteryLevel}% Battery'
+                                      : 'Disconnected',
                                   style: TextStyle(
                                     fontSize: 12,
                                     color: FyrTheme.textColorMuted,
@@ -366,7 +405,10 @@ class _CalendarMenuPopupState extends State<CalendarMenuPopup>
                           if (phone.isConnected)
                             IconButton(
                               onPressed: () => PhoneService.ring(phone.id),
-                              icon: Icon(Icons.notifications_active_outlined, size: 20),
+                              icon: Icon(
+                                Icons.notifications_active_outlined,
+                                size: 20,
+                              ),
                               color: FyrTheme.accentColor,
                               tooltip: 'Find my phone',
                             ),
