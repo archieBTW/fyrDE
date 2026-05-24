@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'dart:io';
@@ -21,11 +22,14 @@ class FileTree extends StatefulWidget {
 class _FileTreeState extends State<FileTree> {
   List<FileSystemEntity> _entities = [];
   final Set<String> _expandedDirs = {};
+  StreamSubscription? _dirWatchSub;
+  Timer? _debounceTimer;
 
   @override
   void initState() {
     super.initState();
     _loadDirectory();
+    _startWatching();
   }
 
   @override
@@ -34,7 +38,22 @@ class _FileTreeState extends State<FileTree> {
     if (oldWidget.rootDirectory != widget.rootDirectory) {
       _expandedDirs.clear();
       _loadDirectory();
+      _startWatching();
     }
+  }
+
+  void _startWatching() {
+    _dirWatchSub?.cancel();
+    final dir = Directory(widget.rootDirectory);
+    if (!dir.existsSync()) return;
+    try {
+      _dirWatchSub = dir.watch(recursive: true).listen((event) {
+        _debounceTimer?.cancel();
+        _debounceTimer = Timer(const Duration(milliseconds: 300), () {
+          if (mounted) _loadDirectory();
+        });
+      });
+    } catch (_) {}
   }
 
   void _loadDirectory() {
@@ -49,6 +68,13 @@ class _FileTreeState extends State<FileTree> {
           });
       });
     }
+  }
+
+  @override
+  void dispose() {
+    _dirWatchSub?.cancel();
+    _debounceTimer?.cancel();
+    super.dispose();
   }
 
   Widget _buildNode(FileSystemEntity entity, int depth) {

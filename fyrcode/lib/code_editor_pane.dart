@@ -162,7 +162,11 @@ class CodeEditorPaneState extends State<CodeEditorPane> {
   Timer? _lspSyncTimer;
   Timer? _autoSaveTimer;
   Timer? _debounceCompletionTimer;
+  Timer? _fileWatchTimer;
   final GlobalKey _gutterKey = GlobalKey();
+
+  DateTime? _lastDiskModified;
+  String _lastDiskContent = '';
 
   // Hover feature variables
   Timer? _hoverTimer;
@@ -256,6 +260,7 @@ class CodeEditorPaneState extends State<CodeEditorPane> {
 
     _initLsp();
     _loadFile();
+    _startFileWatcher();
   }
 
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
@@ -550,6 +555,50 @@ class CodeEditorPaneState extends State<CodeEditorPane> {
     }
   }
 
+  void _startFileWatcher() {
+    _fileWatchTimer?.cancel();
+    _fileWatchTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      _checkFileChanged();
+    });
+  }
+
+  Future<void> _checkFileChanged() async {
+    if (!mounted || _controller == null) return;
+    final file = File(widget.filePath);
+    if (!await file.exists()) return;
+
+    final stat = await file.stat();
+    final diskModified = stat.modified;
+    if (_lastDiskModified != null && diskModified == _lastDiskModified) return;
+    _lastDiskModified = diskModified;
+
+    final diskContent = await file.readAsString();
+    if (diskContent == _lastDiskContent) return;
+
+    final editorContent = _controller!.text;
+    if (editorContent == _lastDiskContent) {
+      // User hasn't modified the file — auto-reload from disk
+      _lastDiskContent = diskContent;
+      _reloadFromDisk(diskContent);
+    } else {
+      // User has local changes — silently track that disk changed,
+      // but preserve the user's edits.
+      _lastDiskContent = diskContent;
+    }
+  }
+
+  void _reloadFromDisk(String content) {
+    if (_controller == null || !mounted) return;
+    final selection = _controller!.selection;
+    _controller!.removeListener(_onTextChanged);
+    _controller!.value = _controller!.value.copyWith(
+      codeLines: CodeLines.fromText(content),
+      selection: selection,
+    );
+    _fileContent = content;
+    _controller!.addListener(_onTextChanged);
+  }
+
   @override
   void didUpdateWidget(covariant CodeEditorPane oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -587,6 +636,8 @@ class CodeEditorPaneState extends State<CodeEditorPane> {
         final file = File(widget.filePath);
         if (await file.exists()) {
           content = await file.readAsString();
+          _lastDiskContent = content;
+          _lastDiskModified = (await file.stat()).modified;
         } else {
           content = '// File not found';
         }
@@ -652,6 +703,13 @@ class CodeEditorPaneState extends State<CodeEditorPane> {
           _focusNode.requestFocus();
         }
       });
+    }
+
+    // Snapshot current disk state for external-change detection
+    final diskFile = File(widget.filePath);
+    if (await diskFile.exists()) {
+      _lastDiskModified = (await diskFile.stat()).modified;
+      _lastDiskContent = await diskFile.readAsString();
     }
   }
 
@@ -1074,6 +1132,7 @@ class CodeEditorPaneState extends State<CodeEditorPane> {
     _lspSyncTimer?.cancel();
     _autoSaveTimer?.cancel();
     _debounceCompletionTimer?.cancel();
+    _fileWatchTimer?.cancel();
     _hoverTimer?.cancel();
     _hoverOverlay?.remove();
     _hoverOverlay = null;

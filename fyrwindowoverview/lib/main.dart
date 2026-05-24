@@ -101,14 +101,14 @@ class _WindowOverviewScreenState extends State<WindowOverviewScreen>
     _focusedWinCaptureTimer?.cancel();
     
     // 1. Workspace-wide capture (fallback)
-    _captureTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+    _captureTimer = Timer.periodic(const Duration(seconds: 8), (_) {
       if (!_focusNode.hasFocus) {
         _captureActiveWorkspace();
       }
     });
 
     // 2. Focused window capture (for "clean" previews)
-    _focusedWinCaptureTimer = Timer.periodic(const Duration(milliseconds: 1500), (_) {
+    _focusedWinCaptureTimer = Timer.periodic(const Duration(milliseconds: 2500), (_) {
       if (!_focusNode.hasFocus) {
         _captureFocusedWindow();
       }
@@ -118,7 +118,7 @@ class _WindowOverviewScreenState extends State<WindowOverviewScreen>
   Future<void> _captureActiveWorkspace() async {
     try {
       await Process.run('grim', [
-        '-t', 'jpeg', '-q', '40', '/tmp/fyrwindowoverview_ws.jpg'
+        '-t', 'jpeg', '-q', '40', '-s', '0.5', '/tmp/fyrwindowoverview_ws.jpg'
       ]);
     } catch (e) {
       debugPrint('Failed to capture workspace: $e');

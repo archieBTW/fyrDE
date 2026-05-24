@@ -121,7 +121,7 @@ class _OverviewScreenState extends State<OverviewScreen>
   }
 
   void _startCaptureTimer() {
-    _captureTimer = Timer.periodic(const Duration(milliseconds: 500), (
+    _captureTimer = Timer.periodic(const Duration(milliseconds: 2000), (
       timer,
     ) async {
       if (!_focusNode.hasFocus) {
@@ -148,6 +148,8 @@ class _OverviewScreenState extends State<OverviewScreen>
             'jpeg',
             '-q',
             '30',
+            '-s',
+            '0.5',
             '/tmp/fyroverview_ws_$activeWs.jpg',
           ]);
         }
