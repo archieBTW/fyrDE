@@ -121,10 +121,22 @@ class _ResizeHandle extends StatelessWidget {
 }
 
 bool isPicker = false;
+String? initialDirectoryPath;
 
 void main(List<String> args) async {
   if (args.contains('--picker')) {
     isPicker = true;
+  }
+  for (final arg in args) {
+    if (!arg.startsWith('-')) {
+      if (Directory(arg).existsSync()) {
+        initialDirectoryPath = arg;
+        break;
+      } else if (File(arg).existsSync()) {
+        initialDirectoryPath = File(arg).parent.path;
+        break;
+      }
+    }
   }
   WidgetsFlutterBinding.ensureInitialized();
   FyrTheme.initialize();
@@ -577,8 +589,11 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
     windowManager.setPreventClose(true);
 
     getHomeDirectoryByPlatform().then((Directory dir) async {
+      final targetDir = (initialDirectoryPath != null && Directory(initialDirectoryPath!).existsSync())
+          ? Directory(initialDirectoryPath!)
+          : dir;
       setState(() {
-        currentDir = dir;
+        currentDir = targetDir;
         tagsFilePath = p.join(currentDir.path, '.fyr/files/tags.json');
       });
 
@@ -610,7 +625,7 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
           try {
             await S3Service.mount(s3config);
           } catch (e) {
-            print("Failed to mount S3 on startup: $e");
+            stderr.writeln("Failed to mount S3 on startup: $e");
           }
         }
       } catch (err) {
@@ -1362,7 +1377,7 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
               } else {
                 var filePath = file.path;
                 if (isPicker) {
-                  stdout.write(filePath);
+                  stdout.writeln(filePath);
                   await stdout.flush();
                   exit(0);
                 }

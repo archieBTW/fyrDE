@@ -22,7 +22,7 @@ WIDTH=$(echo $RES | cut -d'x' -f1)
 HEIGHT=$(echo $RES | cut -d'x' -f2)
 echo "Detected resolution: ${WIDTH}x${HEIGHT}"
 
-flutter_apps=("fyrdock" "fyroverview" "fyrwindowoverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrstore" "fyrvirt" "fyrtext" "fyrdaw" "fyrav" "fyrphone" "fyrcalculator" "fyrcode" "fyrvideo" "fyrmusic" "fyrphotos" "fyrcamera" "fyrbrowser" "fyrjournal" "fyrcalender" "fyrclock" "fyrtorrent" "fyrapi")
+flutter_apps=("fyrdock" "fyroverview" "fyrwindowoverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrstore" "fyrvirt" "fyrtext" "fyrdaw" "fyrphone" "fyrcalculator" "fyrcode" "fyrvideo" "fyrmusic" "fyrphotos" "fyrcamera" "fyrbrowser" "fyrjournal" "fyrcalender" "fyrclock" "fyrtorrent" "fyrapi")
 
 # --- Progress Tracking & Terminal Management ---
 CURRENT_STEP=0
@@ -262,7 +262,12 @@ EOF
             sudo update-alternatives --install /usr/bin/x-terminal-emulator x-terminal-emulator /usr/local/bin/fyrterm 50 || true
             ;;
         "fyrfiles")
-            sudo ln -sf /opt/fyrfiles/fyrfiles /usr/local/bin/fyrfiles
+            if [ -f "/opt/fyrfiles/fyrfiles" ]; then
+                sudo ln -sf /opt/fyrfiles/fyrfiles /usr/local/bin/fyrfiles
+            elif [ -f "/opt/fyrfiles/fyr_files" ]; then
+                sudo ln -sf /opt/fyrfiles/fyr_files /usr/local/bin/fyrfiles
+            fi
+            sudo ln -sf /usr/local/bin/fyrfiles /usr/local/bin/fyr_files 2>/dev/null || true
             if [ -f "./fyrfiles/assets/icons/folderfile.png" ]; then
                 sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
                 sudo cp ./fyrfiles/assets/icons/folderfile.png /usr/share/icons/hicolor/512x512/apps/fyrfiles.png
@@ -279,8 +284,12 @@ Categories=Utility;System;FileTools;
 EOF
             sudo tee /usr/local/bin/fyr_files_picker > /dev/null <<'EOF'
 #!/bin/bash
+multiple="$1"
+directory="$2"
+save="$3"
+path="$4"
 out="$5"
-/usr/local/bin/fyrfiles --picker > "$out"
+/usr/local/bin/fyrfiles --picker "$path" > "$out"
 if [ ! -s "$out" ]; then exit 1; fi
 exit 0
 EOF

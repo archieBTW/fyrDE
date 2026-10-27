@@ -14,14 +14,24 @@ sudo rm -rf /opt/fyrfiles
 sudo cp -r build/linux/x64/release/bundle /opt/fyrfiles
 
 # Create a symlink to /usr/local/bin
-sudo ln -sf /opt/fyrfiles/fyr_files /usr/local/bin/fyrfiles
+if [ -f "/opt/fyrfiles/fyrfiles" ]; then
+    sudo ln -sf /opt/fyrfiles/fyrfiles /usr/local/bin/fyrfiles
+elif [ -f "/opt/fyrfiles/fyr_files" ]; then
+    sudo ln -sf /opt/fyrfiles/fyr_files /usr/local/bin/fyrfiles
+fi
+sudo ln -sf /usr/local/bin/fyrfiles /usr/local/bin/fyr_files 2>/dev/null || true
 
 # Create a desktop entry
+if [ -f "./assets/icons/folderfile.png" ]; then
+    sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+    sudo cp ./assets/icons/folderfile.png /usr/share/icons/hicolor/512x512/apps/fyrfiles.png
+fi
+
 echo "[Desktop Entry]
-Name=fyrfiles
+Name=fyrFiles
 Comment=A modern, custom file manager
 Exec=/usr/local/bin/fyrfiles
-Icon=system-file-manager
+Icon=fyrfiles
 Terminal=false
 Type=Application
 Categories=Utility;System;FileTools;" | sudo tee /usr/share/applications/fyrfiles.desktop > /dev/null
@@ -33,8 +43,12 @@ echo "Setting up fyrfiles as default file picker for Sway..."
 
 sudo bash -c "cat > /usr/local/bin/fyr_files_picker <<EOF
 #!/bin/bash
+multiple=\"\\\$1\"
+directory=\"\\\$2\"
+save=\"\\\$3\"
+path=\"\\\$4\"
 out=\"\\\$5\"
-/usr/local/bin/fyrfiles --picker > \"\\\$out\"
+/usr/local/bin/fyrfiles --picker \"\\\$path\" > \"\\\$out\"
 if [ ! -s \"\\\$out\" ]; then
     exit 1
 fi
