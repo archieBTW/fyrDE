@@ -73,27 +73,11 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
 
   final Map<MidiNote, int> _dragInitialPitches = {};
   double _dragTotalDy = 0.0;
+  final Map<int, SoundHandle> _previewKeyHandles = {};
 
   int get _numRows => widget.track?.type == TrackType.sampler ? 16 : 128;
 
-  String _getInstrumentName(int index) {
-    switch (index) {
-      case 0:
-        return 'Square Lead';
-      case 1:
-        return 'Sawtooth Bass';
-      case 2:
-        return 'Sine Sub';
-      case 3:
-        return 'Piano';
-      case 4:
-        return 'Cello';
-      case 5:
-        return 'Violin';
-      default:
-        return 'Square Lead';
-    }
-  }
+  String _getInstrumentName(int index) => getInstrumentName(index);
 
   int _getMidiPitchFromRow(int row) {
     if (widget.track?.type == TrackType.sampler) {
@@ -146,9 +130,51 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
 
   @override
   void dispose() {
+    if (widget.track != null) {
+      final releaseMs = getInstrumentPreset(
+        widget.track!.instrumentIndex,
+      ).releaseMs;
+      for (final h in _previewKeyHandles.values) {
+        releaseInstrumentNote(h, releaseMs: releaseMs);
+      }
+    }
+    _previewKeyHandles.clear();
     _verticalController1.dispose();
     _verticalController2.dispose();
     super.dispose();
+  }
+
+  void _startPreviewKey(int midiPitch) {
+    if (widget.track == null || !SoLoud.instance.isInitialized) return;
+    _stopPreviewKey(midiPitch);
+    if (widget.track!.type == TrackType.sampler) {
+      var pad = widget.track!.samplerPads.values
+          .where((p) => p.midiNote == midiPitch)
+          .firstOrNull;
+      if (pad != null) {
+        pad.play(
+          _velocity.toDouble(),
+          widget.track!.bus,
+          widget.track!.volume,
+          widget.track!.pan,
+        );
+      }
+    } else {
+      final h = triggerInstrumentNote(widget.track!, midiPitch, _velocity);
+      if (h != null) {
+        _previewKeyHandles[midiPitch] = h;
+      }
+    }
+  }
+
+  void _stopPreviewKey(int midiPitch) {
+    final h = _previewKeyHandles.remove(midiPitch);
+    if (h != null && widget.track != null) {
+      final releaseMs = getInstrumentPreset(
+        widget.track!.instrumentIndex,
+      ).releaseMs;
+      releaseInstrumentNote(h, releaseMs: releaseMs);
+    }
   }
 
   void _addNoteAt(Offset localPosition) {
@@ -178,41 +204,27 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
         var pad = widget.track!.samplerPads.values
             .where((p) => p.midiNote == midiPitch)
             .firstOrNull;
-        if (pad != null) pad.play(_velocity.toDouble());
-      } else {
-        AudioSource src = widget.track!.synthSource ?? globalSynthSound!;
-        if (widget.track!.synthSource == null) {
-          if (widget.track!.instrumentIndex == 1) {
-            src = globalSawSound!;
-          } else if (widget.track!.instrumentIndex == 2)
-            src = globalSineSound!;
-          else if (widget.track!.instrumentIndex == 3)
-            src = globalPianoSound!;
-          else if (widget.track!.instrumentIndex == 4)
-            src = globalCelloSound!;
-          else if (widget.track!.instrumentIndex == 5)
-            src = globalViolinSound!;
+        if (pad != null) {
+          pad.play(
+            _velocity.toDouble(),
+            widget.track!.bus,
+            widget.track!.volume,
+            widget.track!.pan,
+          );
         }
-        final handle = widget.track!.bus!.play(src, volume: _velocity / 127.0);
-        int basePitch = 69;
-        if (widget.track!.instrumentIndex == 3) {
-          basePitch = 60;
-        } else if (widget.track!.instrumentIndex == 4)
-          basePitch = 48;
-        else if (widget.track!.instrumentIndex == 5)
-          basePitch = 60;
-        double speed = pow(2.0, (midiPitch - basePitch) / 12.0) as double;
-        SoLoud.instance.setRelativePlaySpeed(handle, speed);
-        int dur = max(400, 50);
-        Timer(Duration(milliseconds: dur), () {
-          if (SoLoud.instance.isInitialized) {
-            SoLoud.instance.fadeVolume(handle, 0.0, Duration(milliseconds: 20));
-            Timer(
-              Duration(milliseconds: 20),
-              () => SoLoud.instance.stop(handle),
-            );
-          }
-        });
+      } else {
+        final handle = triggerInstrumentNote(
+          widget.track!,
+          midiPitch,
+          _velocity,
+        );
+        if (handle != null) {
+          final preset = getInstrumentPreset(widget.track!.instrumentIndex);
+          final int dur = max((60000 / widget.bpm).round(), 350);
+          Timer(Duration(milliseconds: dur), () {
+            releaseInstrumentNote(handle, releaseMs: preset.releaseMs);
+          });
+        }
       }
     }
   }
@@ -449,30 +461,49 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                       }
                       int pitchClass = midiPitch % 12;
                       bool isBlack = [1, 3, 6, 8, 10].contains(pitchClass);
-                      return Container(
-                        height: _pitchHeight,
-                        decoration: BoxDecoration(
-                          color: isBlack ? Colors.black : Colors.white,
-                          border: Border(
-                            bottom: BorderSide(color: Colors.grey, width: 1),
+                      bool isPressed = _previewKeyHandles.containsKey(midiPitch);
+                      return GestureDetector(
+                        onTapDown: (_) {
+                          _startPreviewKey(midiPitch);
+                          setState(() {});
+                        },
+                        onTapUp: (_) {
+                          _stopPreviewKey(midiPitch);
+                          setState(() {});
+                        },
+                        onTapCancel: () {
+                          _stopPreviewKey(midiPitch);
+                          setState(() {});
+                        },
+                        child: Container(
+                          height: _pitchHeight,
+                          decoration: BoxDecoration(
+                            color: isPressed
+                                ? lavenderAccent
+                                : (isBlack ? Colors.black : Colors.white),
+                            border: Border(
+                              bottom: BorderSide(color: Colors.grey, width: 1),
+                            ),
                           ),
-                        ),
-                        child: pitchClass == 0
-                            ? Align(
-                                alignment: Alignment.centerRight,
-                                child: Padding(
-                                  padding: EdgeInsets.only(right: 4.0),
-                                  child: Text(
-                                    'C${(midiPitch ~/ 12) - 1}',
-                                    style: TextStyle(
-                                      color: Colors.red,
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold,
+                          child: pitchClass == 0
+                              ? Align(
+                                  alignment: Alignment.centerRight,
+                                  child: Padding(
+                                    padding: EdgeInsets.only(right: 4.0),
+                                    child: Text(
+                                      'C${(midiPitch ~/ 12) - 1}',
+                                      style: TextStyle(
+                                        color: isPressed
+                                            ? Colors.white
+                                            : Colors.red,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold,
+                                      ),
                                     ),
                                   ),
-                                ),
-                              )
-                            : null,
+                                )
+                              : null,
+                        ),
                       );
                     }),
                   ),
@@ -686,126 +717,41 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                                                               newPitch,
                                                         )
                                                         .firstOrNull;
-                                                    if (pad != null) pad.play();
-                                                  } else {
-                                                    AudioSource src =
-                                                        widget
-                                                            .track!
-                                                            .synthSource ??
-                                                        globalSynthSound!;
-                                                    if (widget
-                                                            .track!
-                                                            .synthSource ==
-                                                        null) {
-                                                      if (widget
-                                                              .track!
-                                                              .instrumentIndex ==
-                                                          1) {
-                                                        src = globalSawSound!;
-                                                      } else if (widget
-                                                              .track!
-                                                              .instrumentIndex ==
-                                                          2)
-                                                        src = globalSineSound!;
-                                                      else if (widget
-                                                              .track!
-                                                              .instrumentIndex ==
-                                                          3)
-                                                        src = globalPianoSound!;
-                                                      else if (widget
-                                                              .track!
-                                                              .instrumentIndex ==
-                                                          4)
-                                                        src = globalCelloSound!;
-                                                      else if (widget
-                                                              .track!
-                                                              .instrumentIndex ==
-                                                          5)
-                                                        src =
-                                                            globalViolinSound!;
+                                                    if (pad != null) {
+                                                      pad.play(
+                                                        100.0,
+                                                        widget.track!.bus,
+                                                        widget.track!.volume,
+                                                        widget.track!.pan,
+                                                      );
                                                     }
-                                                    double volMultiplier = 1.0;
-                                                    if (widget
-                                                            .track!
-                                                            .instrumentIndex ==
-                                                        3) {
-                                                      volMultiplier = 3.0;
-                                                    } else if (widget
-                                                            .track!
-                                                            .instrumentIndex ==
-                                                        4)
-                                                      volMultiplier = 2.0;
-                                                    else if (widget
-                                                            .track!
-                                                            .instrumentIndex ==
-                                                        5)
-                                                      volMultiplier = 1.5;
-                                                    final handle = widget
-                                                        .track!
-                                                        .bus!
-                                                        .play(
-                                                          src,
-                                                          volume:
-                                                              0.5 *
-                                                              volMultiplier,
+                                                  } else {
+                                                    final handle =
+                                                        triggerInstrumentNote(
+                                                          widget.track!,
+                                                          newPitch,
+                                                          85,
                                                         );
-                                                    int basePitch = 69;
-                                                    if (widget
-                                                            .track!
-                                                            .instrumentIndex ==
-                                                        3) {
-                                                      basePitch = 60;
-                                                    } else if (widget
-                                                            .track!
-                                                            .instrumentIndex ==
-                                                        4)
-                                                      basePitch = 48;
-                                                    else if (widget
-                                                            .track!
-                                                            .instrumentIndex ==
-                                                        5)
-                                                      basePitch = 60;
-                                                    double speed =
-                                                        pow(
-                                                              2.0,
-                                                              (newPitch -
-                                                                      basePitch) /
-                                                                  12.0,
-                                                            )
-                                                            as double;
-                                                    SoLoud.instance
-                                                        .setRelativePlaySpeed(
-                                                          handle,
-                                                          speed,
-                                                        );
-                                                    Timer(
-                                                      Duration(
-                                                        milliseconds: 100,
-                                                      ),
-                                                      () {
-                                                        if (SoLoud
-                                                            .instance
-                                                            .isInitialized) {
-                                                          SoLoud.instance
-                                                              .fadeVolume(
-                                                                handle,
-                                                                0.0,
-                                                                Duration(
-                                                                  milliseconds:
-                                                                      20,
-                                                                ),
-                                                              );
-                                                          Timer(
-                                                            Duration(
-                                                              milliseconds: 20,
-                                                            ),
-                                                            () => SoLoud
-                                                                .instance
-                                                                .stop(handle),
+                                                    if (handle != null) {
+                                                      final preset =
+                                                          getInstrumentPreset(
+                                                            widget
+                                                                .track!
+                                                                .instrumentIndex,
                                                           );
-                                                        }
-                                                      },
-                                                    );
+                                                      Timer(
+                                                        const Duration(
+                                                          milliseconds: 140,
+                                                        ),
+                                                        () {
+                                                          releaseInstrumentNote(
+                                                            handle,
+                                                            releaseMs: preset
+                                                                .releaseMs,
+                                                          );
+                                                        },
+                                                      );
+                                                    }
                                                   }
                                                 }
                                               }

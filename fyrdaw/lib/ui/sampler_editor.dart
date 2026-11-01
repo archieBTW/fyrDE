@@ -100,7 +100,12 @@ class _SamplerEditorWidgetState extends State<SamplerEditorWidget> {
                   setState(() => _selectedPadIndex = index);
                   var p = widget.track.samplerPads[index];
                   if (p != null) {
-                    p.play();
+                    p.play(
+                      127.0,
+                      widget.track.bus,
+                      widget.track.volume,
+                      widget.track.pan,
+                    );
                   }
                 },
                 child: Container(

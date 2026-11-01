@@ -29,7 +29,12 @@ class SamplerPad {
     }
   }
 
-  void play([double velocity = 127.0]) {
+  void play([
+    double velocity = 127.0,
+    Bus? bus,
+    double trackVolume = 1.0,
+    double trackPan = 0.0,
+  ]) {
     if (source == null) return;
     try {
       if (currentHandle != null &&
@@ -44,13 +49,20 @@ class SamplerPad {
 
       if (playLength <= Duration.zero) return;
 
-      final handle = SoLoud.instance.play(source!, volume: 0.0, paused: true);
+      final handle = bus != null
+          ? bus.play(source!, volume: 0.0, pan: trackPan, paused: true)
+          : SoLoud.instance.play(
+              source!,
+              volume: 0.0,
+              pan: trackPan,
+              paused: true,
+            );
       currentHandle = handle;
       SoLoud.instance.seek(handle, startPos);
       source!.filters.pitchShiftFilter.shift(soundHandle: handle).value = pitch;
       SoLoud.instance.setPause(handle, false);
 
-      double targetVol = volume * (velocity / 127.0);
+      double targetVol = volume * (velocity / 127.0) * trackVolume;
       if (fadeIn > 0.0) {
         SoLoud.instance.fadeVolume(
           handle,

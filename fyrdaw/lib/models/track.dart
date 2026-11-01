@@ -26,12 +26,20 @@ class Track {
   Map<int, SamplerPad> samplerPads = {};
 
   Bus? bus;
+  AudioSource? monitorSource;
+  SoundHandle? monitorHandle;
 
   Track({required this.id, required this.name, required this.type}) {
     if (type == TrackType.sampler) {
       for (int i = 0; i < 16; i++) {
         samplerPads[i] = SamplerPad()..midiNote = 36 + i;
       }
+    }
+    if (SoLoud.instance.isInitialized) {
+      try {
+        bus = Bus();
+        bus!.playOnEngine();
+      } catch (_) {}
     }
   }
 

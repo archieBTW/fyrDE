@@ -1,4 +1,5 @@
 import 'dart:ui';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:math';
@@ -35,6 +36,62 @@ AudioSource? globalSineSound;
 AudioSource? globalPianoSound;
 AudioSource? globalCelloSound;
 AudioSource? globalViolinSound;
+final Map<int, AudioSource> globalInstrumentSounds = {};
+
+AudioSource? getInstrumentAudioSource(Track track) {
+  return globalInstrumentSounds[track.instrumentIndex] ??
+      track.synthSource ??
+      globalSynthSound;
+}
+
+SoundHandle? triggerInstrumentNote(
+  Track track,
+  int midiPitch,
+  int velocity, {
+  double volumeScale = 1.0,
+}) {
+  if (!SoLoud.instance.isInitialized) return null;
+  final preset = getInstrumentPreset(track.instrumentIndex);
+  final src = getInstrumentAudioSource(track);
+  if (src == null) return null;
+
+  track.bus ??= Bus()..playOnEngine();
+  final double targetVol =
+      ((velocity.clamp(1, 127) / 127.0) *
+              track.volume *
+              preset.volumeMultiplier *
+              volumeScale)
+          .clamp(0.0, 2.5);
+  final double speed = pow(2.0, (midiPitch - preset.basePitch) / 12.0)
+      .toDouble()
+      .clamp(0.05, 16.0);
+
+  final handle = track.bus!.play(
+    src,
+    volume: targetVol,
+    pan: track.pan.clamp(-1.0, 1.0),
+    paused: true,
+  );
+  SoLoud.instance.setLooping(handle, true);
+  SoLoud.instance.setLoopPoint(
+    handle,
+    Duration(milliseconds: preset.loopPointMs),
+  );
+  SoLoud.instance.setRelativePlaySpeed(handle, speed);
+  SoLoud.instance.setPause(handle, false);
+  return handle;
+}
+
+void releaseInstrumentNote(SoundHandle handle, {int releaseMs = 140}) {
+  if (!SoLoud.instance.isInitialized) return;
+  try {
+    if (SoLoud.instance.getIsValidVoiceHandle(handle)) {
+      final dur = Duration(milliseconds: max(20, releaseMs));
+      SoLoud.instance.fadeVolume(handle, 0.0, dur);
+      SoLoud.instance.scheduleStop(handle, dur);
+    }
+  } catch (_) {}
+}
 
 Future<Directory> getProjectMediaDirectory() async {
   final docsDir = await getApplicationDocumentsDirectory();
@@ -61,157 +118,52 @@ void main() async {
   });
 
   try {
-    await SoLoud.instance.init();
-    SoLoud.instance.setGlobalVolume(1.0);
-    final dir = await getProjectMediaDirectory();
-    final fileSq = File('${dir.path}/synth_v2.wav');
-    final fileSaw = File('${dir.path}/saw_v2.wav');
-    final fileSine = File('${dir.path}/sine_v2.wav');
-    final filePiano = File('${dir.path}/piano_v2.wav');
-    final fileCello = File('${dir.path}/cello_v2.wav');
-    final fileViolin = File('${dir.path}/violin_v2.wav');
-    if (!fileSq.existsSync() || !filePiano.existsSync()) {
-      List<int> pcmSq = [];
-      List<int> pcmSaw = [];
-      List<int> pcmSine = [];
-      List<int> pcmPiano = [];
-      List<int> pcmCello = [];
-      List<int> pcmViolin = [];
-      for (int i = 0; i < 44100 * 4; i++) {
-        double t = i / 44100;
-        double f = 440.0;
-        double valSq = (sin(2 * pi * f * t) > 0) ? 0.25 : -0.25;
-        double valSaw = 2.0 * (t * f - (t * f + 0.5).floor()) * 0.25;
-        double valSine = sin(2 * pi * f * t) * 0.25;
-
-        double pianoEnv = exp(-t * 3);
-        double valPiano =
-            (sin(2 * pi * f * t) +
-                0.3 * sin(2 * pi * f * 2 * t) +
-                0.1 * sin(2 * pi * f * 3 * t)) *
-            pianoEnv *
-            0.25;
-
-        double celloVib = sin(2 * pi * 5 * t) * 0.01;
-        double celloEnv = (1 - exp(-t * 10)) * exp(-t * 1);
-        double tCello = t + celloVib;
-        double valCello =
-            2.0 * (tCello * f - (tCello * f + 0.5).floor()) * celloEnv * 0.25;
-
-        double violinVib = sin(2 * pi * 6 * t) * 0.015;
-        double violinEnv = (1 - exp(-t * 15)) * exp(-t * 0.5);
-        double tViolin = t + violinVib;
-        double valViolin =
-            2.0 *
-            (tViolin * f - (tViolin * f + 0.5).floor()) *
-            violinEnv *
-            0.25;
-
-        int sSq = (valSq * 32767).toInt();
-        pcmSq.add(sSq & 0xff);
-        pcmSq.add((sSq >> 8) & 0xff);
-        pcmSq.add(sSq & 0xff);
-        pcmSq.add((sSq >> 8) & 0xff);
-        int sSaw = (valSaw * 32767).toInt();
-        pcmSaw.add(sSaw & 0xff);
-        pcmSaw.add((sSaw >> 8) & 0xff);
-        pcmSaw.add(sSaw & 0xff);
-        pcmSaw.add((sSaw >> 8) & 0xff);
-        int sSine = (valSine * 32767).toInt();
-        pcmSine.add(sSine & 0xff);
-        pcmSine.add((sSine >> 8) & 0xff);
-        pcmSine.add(sSine & 0xff);
-        pcmSine.add((sSine >> 8) & 0xff);
-
-        int sPiano = (valPiano * 32767).toInt();
-        pcmPiano.add(sPiano & 0xff);
-        pcmPiano.add((sPiano >> 8) & 0xff);
-        pcmPiano.add(sPiano & 0xff);
-        pcmPiano.add((sPiano >> 8) & 0xff);
-        int sCello = (valCello * 32767).toInt();
-        pcmCello.add(sCello & 0xff);
-        pcmCello.add((sCello >> 8) & 0xff);
-        pcmCello.add(sCello & 0xff);
-        pcmCello.add((sCello >> 8) & 0xff);
-        int sViolin = (valViolin * 32767).toInt();
-        pcmViolin.add(sViolin & 0xff);
-        pcmViolin.add((sViolin >> 8) & 0xff);
-        pcmViolin.add(sViolin & 0xff);
-        pcmViolin.add((sViolin >> 8) & 0xff);
-      }
-      void writeWav(File f, List<int> pcm) {
-        int byteRate = 44100 * 4;
-        var dataSize = pcm.length;
-        var fileSize = dataSize + 36;
-        List<int> wav = [
-          82,
-          73,
-          70,
-          70,
-          fileSize & 0xff,
-          (fileSize >> 8) & 0xff,
-          (fileSize >> 16) & 0xff,
-          (fileSize >> 24) & 0xff,
-          87,
-          65,
-          86,
-          69,
-          102,
-          109,
-          116,
-          32,
-          16,
-          0,
-          0,
-          0,
-          1,
-          0,
-          2,
-          0,
-          68,
-          172,
-          0,
-          0,
-          16,
-          177,
-          2,
-          0,
-          4,
-          0,
-          16,
-          0,
-          100,
-          97,
-          116,
-          97,
-          dataSize & 0xff,
-          (dataSize >> 8) & 0xff,
-          (dataSize >> 16) & 0xff,
-          (dataSize >> 24) & 0xff,
-        ];
-        wav.addAll(pcm);
-        f.writeAsBytesSync(wav);
-      }
-
-      writeWav(fileSq, pcmSq);
-      writeWav(fileSaw, pcmSaw);
-      writeWav(fileSine, pcmSine);
-      writeWav(filePiano, pcmPiano);
-      writeWav(fileCello, pcmCello);
-      writeWav(fileViolin, pcmViolin);
+    try {
+      await SoLoud.instance.init(
+        sampleRate: 44100,
+        bufferSize: 256,
+        channels: Channels.stereo,
+      );
+    } catch (_) {
+      await SoLoud.instance.init();
     }
-    globalSynthSound = await SoLoud.instance.loadFile(fileSq.path);
-    globalSawSound = await SoLoud.instance.loadFile(fileSaw.path);
-    globalSineSound = await SoLoud.instance.loadFile(fileSine.path);
-    globalPianoSound = await SoLoud.instance.loadAsset(
-      'assets/samples/piano_c4.wav',
-    );
-    globalCelloSound = await SoLoud.instance.loadAsset(
-      'assets/samples/cello_c3.wav',
-    );
-    globalViolinSound = await SoLoud.instance.loadAsset(
-      'assets/samples/violin_c4.wav',
-    );
+    SoLoud.instance.setGlobalVolume(1.0);
+    try {
+      SoLoud.instance.setMaxActiveVoiceCount(64);
+    } catch (_) {}
+
+    for (final preset in kInstrumentPresets) {
+      try {
+        final src = await SoLoud.instance.loadAsset(preset.assetPath);
+        globalInstrumentSounds[preset.index] = src;
+      } catch (e) {
+        debugPrint('Failed to load instrument ${preset.name}: $e');
+      }
+    }
+
+    globalSynthSound = globalInstrumentSounds[0];
+    globalSawSound = globalInstrumentSounds[1];
+    globalSineSound = globalInstrumentSounds[2];
+    globalPianoSound = globalInstrumentSounds[3];
+    globalCelloSound = globalInstrumentSounds[4];
+    globalViolinSound = globalInstrumentSounds[5];
+
+    // Also keep legacy media directory files updated with the realistic samples
+    final dir = await getProjectMediaDirectory();
+    final legacyMap = {
+      '${dir.path}/synth_v2.wav': 'assets/samples/synth_c4.wav',
+      '${dir.path}/saw_v2.wav': 'assets/samples/saw_c3.wav',
+      '${dir.path}/sine_v2.wav': 'assets/samples/sine_c3.wav',
+      '${dir.path}/piano_v2.wav': 'assets/samples/piano_c4.wav',
+      '${dir.path}/cello_v2.wav': 'assets/samples/cello_c3.wav',
+      '${dir.path}/violin_v2.wav': 'assets/samples/violin_c4.wav',
+    };
+    for (final entry in legacyMap.entries) {
+      try {
+        final data = await rootBundle.load(entry.value);
+        await File(entry.key).writeAsBytes(data.buffer.asUint8List());
+      } catch (_) {}
+    }
   } catch (e) {
     debugPrint("SoLoud Init failed: $e");
   }

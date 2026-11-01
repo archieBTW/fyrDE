@@ -55,9 +55,12 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
 
   late final AudioRecorder _audioRecorder;
   String? _currentRecordPath;
-  StreamSubscription<Uint8List>? _micStreamSub;
-  AudioSource? _micSource;
+  StreamSubscription<List<int>>? _micStreamSub;
+  Process? _parecordProcess;
+  Uint8List _micRemainderBytes = Uint8List(0);
   WavWriter? _wavWriter;
+  final Stopwatch _playStopwatch = Stopwatch();
+  int _lastStopwatchMicros = 0;
   final FocusNode _focusNode = FocusNode();
   final FocusNode _bpmFocus = FocusNode();
   final List<DateTime> _tapTimestamps = [];
@@ -180,8 +183,24 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       _saveState(skipAutoSave: true);
       setState(() {
         for (var t in tracks) {
+          if (t.monitorHandle != null) {
+            try {
+              if (SoLoud.instance.getIsValidVoiceHandle(t.monitorHandle!)) {
+                SoLoud.instance.stop(t.monitorHandle!);
+              }
+            } catch (_) {}
+            t.monitorHandle = null;
+          }
+          if (t.monitorSource != null) {
+            try {
+              SoLoud.instance.disposeSource(t.monitorSource!);
+            } catch (_) {}
+            t.monitorSource = null;
+          }
           if (t.bus != null) {
-            try { t.bus!.dispose(); } catch (_) {}
+            try {
+              t.bus!.dispose();
+            } catch (_) {}
           }
         }
         for (var clipList in trackClips.values) {
@@ -237,8 +256,24 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     
     // Cleanup active Soloud handles before replacing tracks
     for (var t in tracks) {
+      if (t.monitorHandle != null) {
+        try {
+          if (SoLoud.instance.getIsValidVoiceHandle(t.monitorHandle!)) {
+            SoLoud.instance.stop(t.monitorHandle!);
+          }
+        } catch (_) {}
+        t.monitorHandle = null;
+      }
+      if (t.monitorSource != null) {
+        try {
+          SoLoud.instance.disposeSource(t.monitorSource!);
+        } catch (_) {}
+        t.monitorSource = null;
+      }
       if (t.bus != null) {
-        try { t.bus!.dispose(); } catch (_) {}
+        try {
+          t.bus!.dispose();
+        } catch (_) {}
       }
     }
     for (var clipList in trackClips.values) {
@@ -293,20 +328,12 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     });
 
     for (var track in tracks) {
-      if (track.type == TrackType.midi && track.synthSourcePath != null) {
-        if (SoLoud.instance.isInitialized) {
-          try {
-            if (track.synthSourcePath!.startsWith('assets/')) {
-              track.synthSource = null;
-            } else {
-              track.synthSource = await SoLoud.instance.loadFile(
-                track.synthSourcePath!,
-              );
-            }
-            _updateTrackFilters(track);
-          } catch (_) {}
-        }
+      if (track.type == TrackType.midi) {
+        final preset = getInstrumentPreset(track.instrumentIndex);
+        track.synthSourcePath = preset.assetPath;
+        track.synthSource = globalInstrumentSounds[track.instrumentIndex];
       }
+      _updateTrackFilters(track);
       for (var c in trackClips[track.id] ?? []) {
         if (c is AudioClip && SoLoud.instance.isInitialized) {
           try {
@@ -326,6 +353,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         }
       }
     }
+    await _updateMicState();
   }
 
   void _updateMidiDevices() async {
@@ -344,104 +372,28 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     setState(() {});
   }
 
-  final Map<int, List<SoundHandle>> _activeMidiNotes = {};
+  final Map<int, List<({SoundHandle handle, int releaseMs})>> _activeMidiNotes =
+      {};
   final Map<int, _RecordingNote> _recordingMidiNotes = {};
 
   void _changeInstrument(Track track, int v) async {
-    final dir = await getProjectMediaDirectory();
-    String path;
-    switch (v) {
-      case 1:
-        path = '${dir.path}/saw_v2.wav';
-        break;
-      case 2:
-        path = '${dir.path}/sine_v2.wav';
-        break;
-      case 3:
-        path = 'assets/samples/piano_c4.wav';
-        break;
-      case 4:
-        path = 'assets/samples/cello_c3.wav';
-        break;
-      case 5:
-        path = 'assets/samples/violin_c4.wav';
-        break;
-      default:
-        path = '${dir.path}/synth_v2.wav';
-        break;
-    }
-    track.synthSourcePath = path;
-    if (SoLoud.instance.isInitialized) {
-      if (track.synthSource != null) {
-        try {
-          SoLoud.instance.disposeSource(track.synthSource!);
-        } catch (_) {}
-      }
-      if (v >= 3 && v <= 5) {
-        track.synthSource = null;
-      } else {
-        track.synthSource = await SoLoud.instance.loadFile(path);
-      }
-      try {
-        track.bus!.filters.echoFilter.deactivate();
-      } catch (_) {}
-      try {
-        track.bus!.filters.robotizeFilter.deactivate();
-      } catch (_) {}
-      try {
-        track.bus!.filters.compressorFilter.deactivate();
-      } catch (_) {}
-      try {
-        track.bus!.filters.biquadFilter.deactivate();
-      } catch (_) {}
-      try {
-        track.bus!.filters.parametricEqFilter.deactivate();
-      } catch (_) {}
-      try {
-        track.bus!.filters.waveShaperFilter.deactivate();
-      } catch (_) {}
-      try {
-        track.bus!.filters.flangerFilter.deactivate();
-      } catch (_) {}
-      try {
-        track.bus!.filters.freeverbFilter.deactivate();
-      } catch (_) {}
-      try {
-        track.bus!.filters.lofiFilter.deactivate();
-      } catch (_) {}
-      try {
-        track.bus!.filters.bassBoostFilter.deactivate();
-      } catch (_) {}
-
-      for (var fx in track.effectsChain) {
-        try {
-          if (fx.name == 'Reverb') track.bus!.filters.echoFilter.activate();
-          if (fx.name == 'Distortion') {
-            track.bus!.filters.robotizeFilter.activate();
-          }
-          if (fx.name == 'Compressor') {
-            track.bus!.filters.compressorFilter.activate();
-          }
-          if (fx.name == 'EQ') track.bus!.filters.biquadFilter.activate();
-          if (fx.name == '3-Band EQ') {
-            track.bus!.filters.parametricEqFilter.activate();
-          }
-          if (fx.name == 'Echo') track.bus!.filters.echoFilter.activate();
-          if (fx.name == 'Flanger') track.bus!.filters.flangerFilter.activate();
-          if (fx.name == 'Chorus') track.bus!.filters.freeverbFilter.activate();
-          if (fx.name == 'Lofi') track.bus!.filters.lofiFilter.activate();
-          if (fx.name == 'Robotize') {
-            track.bus!.filters.robotizeFilter.activate();
-          }
-          if (fx.name == 'Bass Boost') {
-            track.bus!.filters.bassBoostFilter.activate();
-          }
-        } catch (_) {}
-      }
-    }
+    final preset = getInstrumentPreset(v);
+    track.synthSourcePath = preset.assetPath;
+    track.synthSource = globalInstrumentSounds[v];
     setState(() {
       track.instrumentIndex = v;
     });
+    _updateTrackFilters(track);
+
+    // Audition a short preview chord/note of the newly selected instrument
+    if (SoLoud.instance.isInitialized) {
+      final h = triggerInstrumentNote(track, preset.basePitch, 100);
+      if (h != null) {
+        Timer(const Duration(milliseconds: 550), () {
+          releaseInstrumentNote(h, releaseMs: preset.releaseMs);
+        });
+      }
+    }
   }
 
   void _showMidiInputDialog(Track track) {
@@ -534,45 +486,6 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   }
 
   void _showInstrumentDialog(Track track) {
-    final instruments = [
-      {
-        'index': 0,
-        'name': 'Square Lead',
-        'desc': 'Retro arcade square wave.',
-        'icon': Icons.gamepad,
-      },
-      {
-        'index': 1,
-        'name': 'Sawtooth Bass',
-        'desc': 'Gritty electronic bass.',
-        'icon': Icons.waves,
-      },
-      {
-        'index': 2,
-        'name': 'Sine Sub',
-        'desc': 'Deep, pure sub-bass.',
-        'icon': Icons.blur_on,
-      },
-      {
-        'index': 3,
-        'name': 'Piano',
-        'desc': 'Synthesized acoustic piano.',
-        'icon': Icons.piano,
-      },
-      {
-        'index': 4,
-        'name': 'Cello',
-        'desc': 'Rich bowed strings.',
-        'icon': Icons.music_note,
-      },
-      {
-        'index': 5,
-        'name': 'Violin',
-        'desc': 'Bright orchestral violin.',
-        'icon': Icons.music_note,
-      },
-    ];
-
     showDialog(
       context: context,
       builder: (context) {
@@ -582,7 +495,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
             borderRadius: BorderRadius.circular(16),
           ),
           child: Container(
-            width: 400,
+            width: 480,
             padding: EdgeInsets.all(24),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -596,53 +509,83 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                     color: Colors.white,
                   ),
                 ),
+                SizedBox(height: 4),
+                Text(
+                  'All instruments feature realistic stereo voicing and unlimited sustain.',
+                  style: TextStyle(color: textMuted, fontSize: 12),
+                ),
                 SizedBox(height: 16),
                 SizedBox(
-                  height: 400,
+                  height: 440,
                   child: ListView.builder(
-                    itemCount: instruments.length,
+                    itemCount: kInstrumentPresets.length,
                     itemBuilder: (context, index) {
-                      final inst = instruments[index];
+                      final inst = kInstrumentPresets[index];
+                      final isSelected = track.instrumentIndex == inst.index;
                       return InkWell(
                         onTap: () {
                           Navigator.of(context).pop();
-                          _changeInstrument(track, inst['index'] as int);
+                          _changeInstrument(track, inst.index);
                         },
                         child: Container(
-                          margin: EdgeInsets.only(bottom: 12),
+                          margin: EdgeInsets.only(bottom: 10),
                           padding: EdgeInsets.all(12),
                           decoration: BoxDecoration(
                             color: panelLight,
                             borderRadius: BorderRadius.circular(8),
                             border: Border.all(
-                              color: track.instrumentIndex == inst['index']
-                                  ? lavenderAccent
-                                  : textFaint,
+                              color: isSelected ? lavenderAccent : textFaint,
+                              width: isSelected ? 2 : 1,
                             ),
                           ),
                           child: Row(
                             children: [
                               Icon(
-                                inst['icon'] as IconData,
+                                inst.icon,
                                 color: lavenderAccent,
-                                size: 32,
+                                size: 30,
                               ),
-                              SizedBox(width: 16),
+                              SizedBox(width: 14),
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Text(
-                                      inst['name'] as String,
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 16,
-                                      ),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            inst.name,
+                                            style: TextStyle(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 15,
+                                            ),
+                                          ),
+                                        ),
+                                        Container(
+                                          padding: EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 2,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: bgDark,
+                                            borderRadius: BorderRadius.circular(
+                                              4,
+                                            ),
+                                          ),
+                                          child: Text(
+                                            inst.category,
+                                            style: TextStyle(
+                                              color: lavenderLight,
+                                              fontSize: 10,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                     SizedBox(height: 4),
                                     Text(
-                                      inst['desc'] as String,
+                                      inst.description,
                                       style: TextStyle(
                                         color: textMuted,
                                         fontSize: 12,
@@ -713,57 +656,29 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     for (var track in tracksToPlay) {
       if (track.midiInputId != null && track.midiInputId != deviceId) continue;
       if (track.type == TrackType.midi) {
-        AudioSource src = track.synthSource ?? globalSynthSound!;
-        if (track.synthSource == null) {
-          if (track.instrumentIndex == 1) {
-            src = globalSawSound!;
-          } else if (track.instrumentIndex == 2)
-            src = globalSineSound!;
-          else if (track.instrumentIndex == 3)
-            src = globalPianoSound!;
-          else if (track.instrumentIndex == 4)
-            src = globalCelloSound!;
-          else if (track.instrumentIndex == 5)
-            src = globalViolinSound!;
-        }
-        double volMultiplier = 1.0;
-        if (track.instrumentIndex == 3) {
-          volMultiplier = 3.0;
-        } else if (track.instrumentIndex == 4)
-          volMultiplier = 2.0;
-        else if (track.instrumentIndex == 5)
-          volMultiplier = 1.5;
-        final handle = track.bus!.play(
-          src,
-          volume: (velocity / 127.0) * volMultiplier * track.volume,
-        );
-        SoLoud.instance.setLooping(handle, true);
-        if (track.instrumentIndex >= 3) {
-          SoLoud.instance.setLoopPoint(
-            handle,
-            const Duration(milliseconds: 500),
+        final preset = getInstrumentPreset(track.instrumentIndex);
+        final handle = triggerInstrumentNote(track, note, velocity);
+        if (handle != null) {
+          _activeMidiNotes.putIfAbsent(note, () => []).add((
+            handle: handle,
+            releaseMs: preset.releaseMs,
+          ));
+          track.activeMidiHandles.removeWhere(
+            (h) => !SoLoud.instance.getIsValidVoiceHandle(h),
           );
+          track.activeMidiHandles.add(handle);
         }
-        int basePitch = 69;
-        if (track.instrumentIndex == 3) {
-          basePitch = 60;
-        } else if (track.instrumentIndex == 4)
-          basePitch = 48;
-        else if (track.instrumentIndex == 5)
-          basePitch = 60;
-        double rate = pow(2.0, (note - basePitch) / 12.0).toDouble();
-        SoLoud.instance.setRelativePlaySpeed(handle, rate);
-        _activeMidiNotes.putIfAbsent(note, () => []).add(handle);
-        track.activeMidiHandles.removeWhere(
-          (h) => !SoLoud.instance.getIsValidVoiceHandle(h),
-        );
-        track.activeMidiHandles.add(handle);
       } else if (track.type == TrackType.sampler) {
         var pad = track.samplerPads.values
             .where((p) => p.midiNote == note)
             .firstOrNull;
         if (pad != null) {
-          pad.play(velocity.toDouble());
+          pad.play(
+            velocity.toDouble(),
+            track.bus,
+            track.volume,
+            track.pan,
+          );
         }
       }
     }
@@ -779,10 +694,8 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     }
 
     if (_activeMidiNotes.containsKey(note)) {
-      for (var h in _activeMidiNotes[note]!) {
-        try {
-          SoLoud.instance.stop(h);
-        } catch (_) {}
+      for (var entry in _activeMidiNotes[note]!) {
+        releaseInstrumentNote(entry.handle, releaseMs: entry.releaseMs);
       }
       _activeMidiNotes.remove(note);
     }
@@ -1067,32 +980,12 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
               }
               var track = Track.fromJson(t);
               if (track.type == TrackType.midi) {
-                getProjectMediaDirectory().then((dir) async {
-                  String spath = track.instrumentIndex == 1
-                      ? '${dir.path}/saw_v2.wav'
-                      : (track.instrumentIndex == 2
-                            ? '${dir.path}/sine_v2.wav'
-                            : '${dir.path}/synth_v2.wav');
-                  if (track.instrumentIndex == 3)
-                    spath = 'assets/samples/piano_c4.wav';
-                  if (track.instrumentIndex == 4)
-                    spath = 'assets/samples/cello_c3.wav';
-                  if (track.instrumentIndex == 5)
-                    spath = 'assets/samples/violin_c4.wav';
-
-                  track.synthSourcePath = spath;
-                  if (SoLoud.instance.isInitialized) {
-                    if (track.instrumentIndex >= 3 &&
-                        track.instrumentIndex <= 5) {
-                      track.synthSource = null;
-                    } else {
-                      track.synthSource = await SoLoud.instance.loadFile(
-                        track.synthSourcePath!,
-                      );
-                    }
-                  }
-                });
+                final preset = getInstrumentPreset(track.instrumentIndex);
+                track.synthSourcePath = preset.assetPath;
+                track.synthSource =
+                    globalInstrumentSounds[track.instrumentIndex];
               }
+              _updateTrackFilters(track);
               tracks.add(track);
             }
           }
@@ -1459,6 +1352,9 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   void dispose() {
     windowManager.removeListener(this);
     playTimer?.cancel();
+    _playStopwatch.stop();
+    _micStreamSub?.cancel();
+    _parecordProcess?.kill();
     _audioRecorder.dispose();
     _focusNode.dispose();
     _bpmFocus.dispose();
@@ -1476,111 +1372,539 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     });
   }
 
-  void _updateTrackFilters(Track track) {
-    if (track.bus == null) return;
-    try {
-      track.bus!.filters.echoFilter.deactivate();
-    } catch (_) {}
-    try {
-      track.bus!.filters.robotizeFilter.deactivate();
-    } catch (_) {}
-    try {
-      track.bus!.filters.compressorFilter.deactivate();
-    } catch (_) {}
-    try {
-      track.bus!.filters.biquadFilter.deactivate();
-    } catch (_) {}
-    try {
-      track.bus!.filters.parametricEqFilter.deactivate();
-    } catch (_) {}
-    try {
-      track.bus!.filters.waveShaperFilter.deactivate();
-    } catch (_) {}
-    try {
-      track.bus!.filters.flangerFilter.deactivate();
-    } catch (_) {}
-    try {
-      track.bus!.filters.freeverbFilter.deactivate();
-    } catch (_) {}
-    try {
-      track.bus!.filters.lofiFilter.deactivate();
-    } catch (_) {}
-    try {
-      track.bus!.filters.bassBoostFilter.deactivate();
-    } catch (_) {}
+  double _getEffectiveEffectParam(
+    Track track,
+    DawEffect fx,
+    String paramName,
+    double fallback,
+    double? atPlayhead,
+  ) {
+    final baseVal = fx.parameters[paramName] ?? fallback;
+    if (atPlayhead == null) return baseVal.clamp(0.0, 1.0);
+    final autoVal = track.getInterpolatedAutomation(
+      '${fx.name}_$paramName',
+      atPlayhead,
+    );
+    return (autoVal >= 0.0 ? autoVal : baseVal).clamp(0.0, 1.0);
+  }
 
+  void _updateTrackFilters(Track track, {double? atPlayhead}) {
+    if (!SoLoud.instance.isInitialized) return;
+    track.bus ??= Bus()..playOnEngine();
+    final filters = track.bus!.filters;
+
+    final hasReverb = track.effectsChain.any((f) => f.name == 'Reverb');
+    final hasCompressor = track.effectsChain.any(
+      (f) => f.name == 'Compressor' || f.name == 'GuitarAmp',
+    );
+    final hasEq = track.effectsChain.any(
+      (f) =>
+          f.name == 'EQ' ||
+          f.name == 'TubeScreamer' ||
+          f.name == 'GuitarAmp',
+    );
+    final hasWaveShaper = track.effectsChain.any(
+      (f) => f.name == 'TubeScreamer' || f.name == 'GuitarAmp',
+    );
+    final hasBiquad = track.effectsChain.any(
+      (f) => f.name == 'TubeScreamer' || f.name == 'GuitarAmp',
+    );
+    final hasLimiter = track.effectsChain.any(
+      (f) => f.name == 'TubeScreamer' || f.name == 'GuitarAmp',
+    );
+    final hasEcho = track.effectsChain.any((f) => f.name == 'Echo');
+    final hasFlanger = track.effectsChain.any(
+      (f) => f.name == 'Flanger' || f.name == 'Chorus',
+    );
+    final hasLofi = track.effectsChain.any((f) => f.name == 'Lofi');
+    final hasRobotize = track.effectsChain.any((f) => f.name == 'Robotize');
+    final hasBassBoost = track.effectsChain.any((f) => f.name == 'BassBoost');
+
+    void setFilterActive(dynamic filter, bool active) {
+      try {
+        if (active && !filter.isActive) {
+          filter.activate();
+        } else if (!active && filter.isActive) {
+          filter.deactivate();
+        }
+      } catch (_) {}
+    }
+
+    setFilterActive(filters.freeverbFilter, hasReverb);
+    setFilterActive(filters.compressorFilter, hasCompressor);
+    setFilterActive(filters.parametricEqFilter, hasEq);
+    setFilterActive(filters.waveShaperFilter, hasWaveShaper);
+    setFilterActive(filters.biquadFilter, hasBiquad);
+    setFilterActive(filters.limiterFilter, hasLimiter);
+    setFilterActive(filters.echoFilter, hasEcho);
+    setFilterActive(filters.flangerFilter, hasFlanger);
+    setFilterActive(filters.lofiFilter, hasLofi);
+    setFilterActive(filters.robotizeFilter, hasRobotize);
+    setFilterActive(filters.bassBoostFilter, hasBassBoost);
+
+    DawEffect? tsFx;
+    DawEffect? ampFx;
+    DawEffect? eqFx;
+    for (final fx in track.effectsChain) {
+      if (fx.name == 'TubeScreamer') tsFx = fx;
+      if (fx.name == 'GuitarAmp') ampFx = fx;
+      if (fx.name == 'EQ') eqFx = fx;
+    }
+
+    // 1. Realistic TubeScreamer (TS808/TS9) & GuitarAmp (Tube Preamp + Power Amp Sag + 4x12 Cab)
+    if (tsFx != null || ampFx != null) {
+      try {
+        final double tsDrive = tsFx != null
+            ? _getEffectiveEffectParam(track, tsFx, 'Drive', 0.5, atPlayhead)
+            : 0.0;
+        final double tsTone = tsFx != null
+            ? _getEffectiveEffectParam(track, tsFx, 'Tone', 0.5, atPlayhead)
+            : 0.5;
+        final double tsLevel = tsFx != null
+            ? _getEffectiveEffectParam(track, tsFx, 'Level', 0.5, atPlayhead)
+            : 0.5;
+
+        final double ampDrive = ampFx != null
+            ? _getEffectiveEffectParam(track, ampFx, 'Drive', 0.7, atPlayhead)
+            : 0.0;
+        final double ampTone = ampFx != null
+            ? _getEffectiveEffectParam(track, ampFx, 'Tone', 0.6, atPlayhead)
+            : 0.6;
+        final double ampLevel = ampFx != null
+            ? _getEffectiveEffectParam(track, ampFx, 'Level', 0.5, atPlayhead)
+            : 0.5;
+
+        double wsAmount;
+        double wsWet;
+        double lpfCutoff;
+        double lpfResonance;
+
+        if (tsFx != null && ampFx != null) {
+          // Stacked TubeScreamer into GuitarAmp
+          final double combinedDrive =
+              (1.0 - (1.0 - tsDrive * 0.85) * (1.0 - ampDrive * 0.92)).clamp(
+                0.0,
+                1.0,
+              );
+          wsAmount =
+              (0.58 + 0.412 * (1.0 - pow(1.0 - combinedDrive, 2.5))).clamp(
+                0.0,
+                0.992,
+              );
+          wsWet = (0.93 + 0.07 * combinedDrive).clamp(0.0, 1.0);
+          final double blendedTone = (0.55 * tsTone + 0.45 * ampTone).clamp(
+            0.0,
+            1.0,
+          );
+          lpfCutoff = (1400.0 + blendedTone * 2800.0).clamp(1100.0, 4400.0);
+          lpfResonance = (1.20 + 0.55 * tsDrive).clamp(0.7, 2.2);
+        } else if (tsFx != null) {
+          // Standalone TubeScreamer (TS808 / TS9)
+          wsAmount = (0.35 + 0.635 * (1.0 - pow(1.0 - tsDrive, 2.2))).clamp(
+            0.0,
+            0.99,
+          );
+          wsWet = (0.85 + 0.15 * tsDrive).clamp(0.0, 1.0);
+          lpfCutoff = (900.0 * pow(4.8, tsTone)).clamp(800.0, 4800.0);
+          lpfResonance = (0.90 + 0.55 * tsDrive + 0.30 * tsTone).clamp(
+            0.5,
+            2.2,
+          );
+        } else {
+          // Standalone GuitarAmp
+          wsAmount = (0.52 + 0.468 * (1.0 - pow(1.0 - ampDrive, 2.4))).clamp(
+            0.0,
+            0.992,
+          );
+          wsWet = (0.92 + 0.08 * ampDrive).clamp(0.0, 1.0);
+          lpfCutoff = (1650.0 + ampTone * 2550.0).clamp(1200.0, 4500.0);
+          lpfResonance = 1.30;
+        }
+
+        filters.waveShaperFilter.amount().value = wsAmount;
+        filters.waveShaperFilter.wet().value = wsWet;
+
+        filters.biquadFilter.type().value = 0; // Lowpass
+        filters.biquadFilter.frequency().value = lpfCutoff;
+        filters.biquadFilter.resonance().value = lpfResonance;
+        filters.biquadFilter.wet().value = 1.0;
+
+        // Output peak limiter so high drive never digitally clips
+        filters.limiterFilter.threshold().value = -1.5;
+        filters.limiterFilter.outputCeiling().value = -0.5;
+        filters.limiterFilter.releaseTime().value = 40.0;
+        filters.limiterFilter.wet().value = 1.0;
+
+        // If no dedicated EQ pedal is overriding parametricEqFilter, use 5-band EQ
+        // to model the TS808 720 Hz mid-hump + bass tightener and/or 4x12 cabinet voicings
+        if (eqFx == null) {
+          filters.parametricEqFilter.numBands().value = 5;
+          filters.parametricEqFilter.wet().value = 1.0;
+          if (tsFx != null && ampFx != null) {
+            final double gain =
+                (0.45 + 1.15 * tsLevel) * (0.55 + 1.05 * ampLevel);
+            filters.parametricEqFilter.bandGain(0).value = (0.35 * gain).clamp(
+              0.05,
+              4.0,
+            ); // 30 Hz sub cut
+            filters.parametricEqFilter.bandGain(1).value = (1.15 * gain).clamp(
+              0.05,
+              4.0,
+            ); // 144 Hz cab punch
+            filters.parametricEqFilter.bandGain(2).value =
+                ((1.55 + 0.85 * tsDrive) * gain).clamp(
+                  0.05,
+                  4.0,
+                ); // 693 Hz TS mid-hump
+            filters.parametricEqFilter.bandGain(3).value =
+                ((0.95 + 0.65 * (0.5 * tsTone + 0.5 * ampTone)) * gain).clamp(
+                  0.05,
+                  4.0,
+                ); // 3330 Hz bite
+            filters.parametricEqFilter.bandGain(4).value = (0.18 * gain).clamp(
+              0.05,
+              4.0,
+            ); // 16 kHz cab roll-off
+          } else if (tsFx != null) {
+            final double gain = 0.35 + 1.45 * tsLevel;
+            filters.parametricEqFilter.bandGain(0).value = (0.35 * gain).clamp(
+              0.05,
+              4.0,
+            ); // 30 Hz tight bass cut
+            filters.parametricEqFilter.bandGain(1).value = (0.85 * gain).clamp(
+              0.05,
+              4.0,
+            ); // 144 Hz low-mid
+            filters.parametricEqFilter.bandGain(2).value =
+                ((1.35 + 0.85 * tsDrive) * gain).clamp(
+                  0.05,
+                  4.0,
+                ); // 693 Hz signature mid hump
+            filters.parametricEqFilter.bandGain(3).value =
+                ((0.75 + 0.75 * tsTone) * gain).clamp(
+                  0.05,
+                  4.0,
+                ); // 3330 Hz active tone
+            filters.parametricEqFilter.bandGain(4).value =
+                ((0.22 + 0.30 * tsTone) * gain).clamp(
+                  0.05,
+                  4.0,
+                ); // 16 kHz fizz rolloff
+          } else if (ampFx != null) {
+            final double gain = 0.40 + 1.40 * ampLevel;
+            filters.parametricEqFilter.bandGain(0).value = (0.45 * gain).clamp(
+              0.05,
+              4.0,
+            );
+            filters.parametricEqFilter.bandGain(1).value = (1.35 * gain).clamp(
+              0.05,
+              4.0,
+            ); // 4x12 low resonance
+            filters.parametricEqFilter.bandGain(2).value =
+                ((0.95 + 0.45 * ampTone) * gain).clamp(0.05, 4.0);
+            filters.parametricEqFilter.bandGain(3).value =
+                ((1.10 + 0.65 * ampTone) * gain).clamp(0.05, 4.0);
+            filters.parametricEqFilter.bandGain(4).value = (0.18 * gain).clamp(
+              0.05,
+              4.0,
+            );
+          }
+        }
+
+        // GuitarAmp power-tube sag & compression (unless overridden by standalone Compressor)
+        if (ampFx != null &&
+            !track.effectsChain.any((f) => f.name == 'Compressor')) {
+          filters.compressorFilter.wet().value = 1.0;
+          filters.compressorFilter.threshold().value =
+              (-14.0 - ampDrive * 18.0).clamp(-45.0, -5.0);
+          filters.compressorFilter.ratio().value = (3.0 + ampDrive * 4.5).clamp(
+            1.0,
+            10.0,
+          );
+          filters.compressorFilter.makeupGain().value =
+              ((ampLevel - 0.5) * 16.0 + ampDrive * 3.5).clamp(-20.0, 24.0);
+          filters.compressorFilter.kneeWidth().value = 8.0;
+          filters.compressorFilter.attackTime().value = 8.0;
+          filters.compressorFilter.releaseTime().value = 110.0;
+        }
+      } catch (_) {}
+    }
+
+    // 2. Remaining effects in chain
     for (var fx in track.effectsChain) {
       try {
         if (fx.name == 'Reverb') {
-          track.bus!.filters.freeverbFilter.activate();
-          track.bus!.filters.freeverbFilter.wet().value = fx.parameters['Mix']!;
-          track.bus!.filters.freeverbFilter.roomSize().value =
-              fx.parameters['Size']!;
-          track.bus!.filters.freeverbFilter.damp().value =
-              fx.parameters['Decay']!;
+          final mix = _getEffectiveEffectParam(
+            track,
+            fx,
+            'Mix',
+            0.5,
+            atPlayhead,
+          );
+          final size = _getEffectiveEffectParam(
+            track,
+            fx,
+            'Size',
+            0.5,
+            atPlayhead,
+          );
+          final decay = _getEffectiveEffectParam(
+            track,
+            fx,
+            'Decay',
+            0.5,
+            atPlayhead,
+          );
+          filters.freeverbFilter.wet().value = mix.clamp(0.0, 1.0);
+          filters.freeverbFilter.roomSize().value =
+              (0.25 + size * 0.50 + decay * 0.23).clamp(0.1, 0.98);
+          // In Freeverb, lower damp = less high-frequency absorption = longer reverb decay
+          filters.freeverbFilter.damp().value = (0.85 - decay * 0.75).clamp(
+            0.05,
+            0.95,
+          );
+          filters.freeverbFilter.width().value = 1.0;
         } else if (fx.name == 'Compressor') {
-          track.bus!.filters.compressorFilter.activate();
-          track.bus!.filters.compressorFilter.wet().value =
-              fx.parameters['Mix']!;
-          track.bus!.filters.compressorFilter.threshold().value =
-              fx.parameters['Thresh']! * -60;
-          track.bus!.filters.compressorFilter.ratio().value =
-              1 + (fx.parameters['Ratio']! * 20);
+          final mix = _getEffectiveEffectParam(
+            track,
+            fx,
+            'Mix',
+            1.0,
+            atPlayhead,
+          );
+          final thresh = _getEffectiveEffectParam(
+            track,
+            fx,
+            'Thresh',
+            0.5,
+            atPlayhead,
+          );
+          final ratio = _getEffectiveEffectParam(
+            track,
+            fx,
+            'Ratio',
+            0.5,
+            atPlayhead,
+          );
+          final gain = _getEffectiveEffectParam(
+            track,
+            fx,
+            'Gain',
+            0.5,
+            atPlayhead,
+          );
+          filters.compressorFilter.wet().value = mix.clamp(0.0, 1.0);
+          filters.compressorFilter.threshold().value =
+              (-4.0 - thresh * 46.0).clamp(-60.0, 0.0);
+          filters.compressorFilter.ratio().value = (1.0 + ratio * 9.0).clamp(
+            1.0,
+            10.0,
+          );
+          filters.compressorFilter.makeupGain().value =
+              ((gain - 0.5) * 24.0).clamp(-24.0, 24.0);
+          filters.compressorFilter.kneeWidth().value = 6.0;
+          filters.compressorFilter.attackTime().value = 10.0;
+          filters.compressorFilter.releaseTime().value = 100.0;
         } else if (fx.name == 'EQ') {
-          track.bus!.filters.parametricEqFilter.activate();
-          track.bus!.filters.parametricEqFilter.numBands().value = 3;
-          track.bus!.filters.parametricEqFilter.bandGain(0).value =
-              fx.parameters['Low']! * 4;
-          track.bus!.filters.parametricEqFilter.bandGain(1).value =
-              fx.parameters['Mid']! * 4;
-          track.bus!.filters.parametricEqFilter.bandGain(2).value =
-              fx.parameters['High']! * 4;
-        } else if (fx.name == 'TubeScreamer' || fx.name == 'GuitarAmp') {
-          track.bus!.filters.waveShaperFilter.activate();
-          track.bus!.filters.waveShaperFilter.wet().value =
-              fx.parameters['Mix'] ?? fx.parameters['Level'] ?? 0.5;
-          track.bus!.filters.waveShaperFilter.amount().value =
-              (fx.parameters['Drive'] ?? 0.5) * 10;
+          final low = _getEffectiveEffectParam(
+            track,
+            fx,
+            'Low',
+            0.5,
+            atPlayhead,
+          );
+          final mid = _getEffectiveEffectParam(
+            track,
+            fx,
+            'Mid',
+            0.5,
+            atPlayhead,
+          );
+          final high = _getEffectiveEffectParam(
+            track,
+            fx,
+            'High',
+            0.5,
+            atPlayhead,
+          );
+          double mapEqGain(double v) => v <= 0.5
+              ? (0.12 + (v / 0.5) * 0.88)
+              : (1.0 + ((v - 0.5) / 0.5) * 2.5);
+          filters.parametricEqFilter.wet().value = 1.0;
+          filters.parametricEqFilter.numBands().value = 3;
+          filters.parametricEqFilter.bandGain(0).value = mapEqGain(
+            low,
+          ).clamp(0.05, 4.0);
+          filters.parametricEqFilter.bandGain(1).value = mapEqGain(
+            mid,
+          ).clamp(0.05, 4.0);
+          filters.parametricEqFilter.bandGain(2).value = mapEqGain(
+            high,
+          ).clamp(0.05, 4.0);
         } else if (fx.name == 'Echo') {
-          track.bus!.filters.echoFilter.activate();
-          track.bus!.filters.echoFilter.wet().value = fx.parameters['Mix']!;
-          track.bus!.filters.echoFilter.delay().value = fx.parameters['Delay']!;
-          track.bus!.filters.echoFilter.decay().value = fx.parameters['Decay']!;
+          final mix = _getEffectiveEffectParam(
+            track,
+            fx,
+            'Mix',
+            0.5,
+            atPlayhead,
+          );
+          final delay = _getEffectiveEffectParam(
+            track,
+            fx,
+            'Delay',
+            0.3,
+            atPlayhead,
+          );
+          final decay = _getEffectiveEffectParam(
+            track,
+            fx,
+            'Decay',
+            0.5,
+            atPlayhead,
+          );
+          filters.echoFilter.wet().value = mix.clamp(0.0, 1.0);
+          filters.echoFilter.delay().value = (0.04 + delay * 0.96).clamp(
+            0.01,
+            2.0,
+          );
+          filters.echoFilter.decay().value = (0.10 + decay * 0.80).clamp(
+            0.01,
+            0.95,
+          );
+          filters.echoFilter.filter().value = 0.35;
         } else if (fx.name == 'Flanger') {
-          track.bus!.filters.flangerFilter.activate();
-          track.bus!.filters.flangerFilter.wet().value = fx.parameters['Mix']!;
-          track.bus!.filters.flangerFilter.delay().value =
-              fx.parameters['Delay']!;
-          track.bus!.filters.flangerFilter.freq().value =
-              fx.parameters['Rate']! * 10;
+          final mix = _getEffectiveEffectParam(
+            track,
+            fx,
+            'Mix',
+            0.5,
+            atPlayhead,
+          );
+          final delay = _getEffectiveEffectParam(
+            track,
+            fx,
+            'Delay',
+            0.5,
+            atPlayhead,
+          );
+          final rate = _getEffectiveEffectParam(
+            track,
+            fx,
+            'Rate',
+            0.2,
+            atPlayhead,
+          );
+          filters.flangerFilter.wet().value = mix.clamp(0.0, 1.0);
+          filters.flangerFilter.delay().value = (0.001 + delay * 0.009).clamp(
+            0.001,
+            0.02,
+          );
+          filters.flangerFilter.freq().value = (0.08 + rate * 3.5).clamp(
+            0.05,
+            10.0,
+          );
         } else if (fx.name == 'Chorus') {
-          track.bus!.filters.flangerFilter.activate();
-          track.bus!.filters.flangerFilter.wet().value = fx.parameters['Mix']!;
-          track.bus!.filters.flangerFilter.delay().value =
-              0.02 + (fx.parameters['Depth']! * 0.03);
-          track.bus!.filters.flangerFilter.freq().value =
-              fx.parameters['Rate']! * 5;
+          final mix = _getEffectiveEffectParam(
+            track,
+            fx,
+            'Mix',
+            0.5,
+            atPlayhead,
+          );
+          final depth = _getEffectiveEffectParam(
+            track,
+            fx,
+            'Depth',
+            0.6,
+            atPlayhead,
+          );
+          final rate = _getEffectiveEffectParam(
+            track,
+            fx,
+            'Rate',
+            0.4,
+            atPlayhead,
+          );
+          filters.flangerFilter.wet().value = mix.clamp(0.0, 1.0);
+          filters.flangerFilter.delay().value = (0.015 + depth * 0.020).clamp(
+            0.005,
+            0.05,
+          );
+          filters.flangerFilter.freq().value = (0.15 + rate * 2.2).clamp(
+            0.05,
+            10.0,
+          );
         } else if (fx.name == 'Lofi') {
-          track.bus!.filters.lofiFilter.activate();
-          track.bus!.filters.lofiFilter.wet().value = fx.parameters['Mix']!;
-          track.bus!.filters.lofiFilter.samplerate().value =
-              1000 + (fx.parameters['Rate']! * 8000);
-          track.bus!.filters.lofiFilter.bitdepth().value =
-              1 + (fx.parameters['Bits']! * 15);
+          final mix = _getEffectiveEffectParam(
+            track,
+            fx,
+            'Mix',
+            1.0,
+            atPlayhead,
+          );
+          final rate = _getEffectiveEffectParam(
+            track,
+            fx,
+            'Rate',
+            0.2,
+            atPlayhead,
+          );
+          final bits = _getEffectiveEffectParam(
+            track,
+            fx,
+            'Bits',
+            0.3,
+            atPlayhead,
+          );
+          filters.lofiFilter.wet().value = mix.clamp(0.0, 1.0);
+          filters.lofiFilter.samplerate().value =
+              (1200.0 + rate * 14000.0).clamp(500.0, 22000.0);
+          filters.lofiFilter.bitdepth().value = (2.0 + bits * 12.0).clamp(
+            1.0,
+            16.0,
+          );
         } else if (fx.name == 'Robotize') {
-          track.bus!.filters.robotizeFilter.activate();
-          track.bus!.filters.robotizeFilter.wet().value = fx.parameters['Mix']!;
-          track.bus!.filters.robotizeFilter.frequency().value =
-              10 + (fx.parameters['Freq']! * 100);
+          final mix = _getEffectiveEffectParam(
+            track,
+            fx,
+            'Mix',
+            1.0,
+            atPlayhead,
+          );
+          final freq = _getEffectiveEffectParam(
+            track,
+            fx,
+            'Freq',
+            0.3,
+            atPlayhead,
+          );
+          filters.robotizeFilter.wet().value = mix.clamp(0.0, 1.0);
+          filters.robotizeFilter.frequency().value =
+              (15.0 + freq * 80.0).clamp(1.0, 100.0);
         } else if (fx.name == 'BassBoost') {
-          track.bus!.filters.bassBoostFilter.activate();
-          track.bus!.filters.bassBoostFilter.wet().value =
-              fx.parameters['Mix']!;
-          track.bus!.filters.bassBoostFilter.boost().value =
-              fx.parameters['Boost']! * 10;
+          final mix = _getEffectiveEffectParam(
+            track,
+            fx,
+            'Mix',
+            1.0,
+            atPlayhead,
+          );
+          final boost = _getEffectiveEffectParam(
+            track,
+            fx,
+            'Boost',
+            0.5,
+            atPlayhead,
+          );
+          filters.bassBoostFilter.wet().value = mix.clamp(0.0, 1.0);
+          filters.bassBoostFilter.boost().value = (boost * 8.0).clamp(
+            0.0,
+            10.0,
+          );
         }
       } catch (e) {
-        print('Error updating filter: $e');
+        debugPrint('Error updating filter: $e');
       }
     }
   }
@@ -1612,137 +1936,28 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
 
   Future<void> _togglePlay() async {
     if (!isPlaying) {
-      final dir = await getProjectMediaDirectory();
       for (var track in tracks) {
         if (track.type == TrackType.midi) {
-          String path = track.instrumentIndex == 1
-              ? '${dir.path}/saw_v2.wav'
-              : (track.instrumentIndex == 2
-                    ? '${dir.path}/sine_v2.wav'
-                    : '${dir.path}/synth_v2.wav');
-          if (track.instrumentIndex == 3) path = 'assets/samples/piano_c4.wav';
-          if (track.instrumentIndex == 4) path = 'assets/samples/cello_c3.wav';
-          if (track.instrumentIndex == 5) path = 'assets/samples/violin_c4.wav';
-
-          if (track.synthSourcePath != path ||
-              (track.synthSource == null && track.instrumentIndex < 3)) {
-            if (track.synthSource != null) {
-              try {
-                SoLoud.instance.disposeSource(track.synthSource!);
-              } catch (_) {}
-            }
-            try {
-              if (track.instrumentIndex >= 3 && track.instrumentIndex <= 5) {
-                track.synthSource = null;
-              } else {
-                track.synthSource = await SoLoud.instance.loadFile(path);
-              }
-              track.synthSourcePath = path;
-            } catch (e) {
-              print('Failed to load synth source: $e');
-            }
-          }
+          final preset = getInstrumentPreset(track.instrumentIndex);
+          track.synthSourcePath = preset.assetPath;
+          track.synthSource = globalInstrumentSounds[track.instrumentIndex];
         }
+        _updateTrackFilters(track, atPlayhead: playheadPosition);
       }
     }
 
     setState(() {
       isPlaying = !isPlaying;
       if (isPlaying) {
-        try {
-          SoLoud.instance.filters.echoFilter.deactivate();
-        } catch (_) {}
-        try {
-          SoLoud.instance.filters.robotizeFilter.deactivate();
-        } catch (_) {}
-        try {
-          SoLoud.instance.filters.compressorFilter.deactivate();
-        } catch (_) {}
-        try {
-          SoLoud.instance.filters.biquadResonantFilter.deactivate();
-        } catch (_) {}
-
         bool anySolo = tracks.any((t) => t.isSolo);
         for (var track in tracks) {
+          track.bus ??= Bus()..playOnEngine();
+          _updateTrackFilters(track, atPlayhead: playheadPosition);
           if (track.isMuted) continue;
           if (anySolo && !track.isSolo) continue;
 
-          if (track.type == TrackType.midi && track.synthSource != null) {
-            try {
-              track.synthSource!.filters.echoFilter.deactivate();
-            } catch (_) {}
-            try {
-              track.synthSource!.filters.robotizeFilter.deactivate();
-            } catch (_) {}
-            try {
-              track.synthSource!.filters.compressorFilter.deactivate();
-            } catch (_) {}
-            try {
-              track.synthSource!.filters.biquadFilter.deactivate();
-            } catch (_) {}
-            try {
-              track.synthSource!.filters.parametricEqFilter.deactivate();
-            } catch (_) {}
-            for (var fx in track.effectsChain) {
-              try {
-                if (fx.name == 'Reverb') {
-                  track.synthSource!.filters.echoFilter.activate();
-                }
-                if (fx.name == 'Distortion') {
-                  track.synthSource!.filters.robotizeFilter.activate();
-                }
-                if (fx.name == 'Compressor') {
-                  track.synthSource!.filters.compressorFilter.activate();
-                }
-                if (fx.name == 'EQ') {
-                  track.synthSource!.filters.parametricEqFilter.activate();
-                }
-              } catch (_) {}
-            }
-          }
-
           for (var clip in trackClips[track.id] ?? []) {
             if (clip is AudioClip && clip.source != null) {
-              try {
-                clip.source!.filters.echoFilter.deactivate();
-              } catch (_) {}
-              try {
-                clip.source!.filters.robotizeFilter.deactivate();
-              } catch (_) {}
-              try {
-                clip.source!.filters.compressorFilter.deactivate();
-              } catch (_) {}
-              try {
-                clip.source!.filters.biquadFilter.deactivate();
-              } catch (_) {}
-              try {
-                clip.source!.filters.parametricEqFilter.deactivate();
-              } catch (_) {}
-              try {
-                clip.source!.filters.waveShaperFilter.deactivate();
-              } catch (_) {}
-              try {
-                clip.source!.filters.biquadFilter.deactivate();
-              } catch (_) {}
-
-              for (var fx in track.effectsChain) {
-                try {
-                  if (fx.name == 'Reverb') {
-                    clip.source!.filters.echoFilter.activate();
-                  }
-                  if (fx.name == 'Compressor') {
-                    clip.source!.filters.compressorFilter.activate();
-                  }
-                  if (fx.name == 'EQ') {
-                    clip.source!.filters.parametricEqFilter.activate();
-                  }
-                  if (fx.name == 'TubeScreamer') {
-                    clip.source!.filters.waveShaperFilter.activate();
-                    clip.source!.filters.biquadFilter.activate();
-                  }
-                } catch (_) {}
-              }
-
               if (playheadPosition >= clip.start &&
                   playheadPosition < clip.start + clip.length) {
                 double offsetMs =
@@ -1750,7 +1965,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                 clip.currentHandle = track.bus!.play(
                   clip.source!,
                   volume: track.volume,
-                  pan: track.pan,
+                  pan: track.pan.clamp(-1.0, 1.0),
                 );
                 SoLoud.instance.seek(
                   clip.currentHandle!,
@@ -1761,10 +1976,21 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           }
         }
 
-        playTimer = Timer.periodic(Duration(milliseconds: 50), (timer) {
+        _playStopwatch
+          ..reset()
+          ..start();
+        _lastStopwatchMicros = 0;
+
+        playTimer = Timer.periodic(const Duration(milliseconds: 10), (timer) {
+          final int nowMicros = _playStopwatch.elapsedMicroseconds;
+          final double dtSec =
+              (nowMicros - _lastStopwatchMicros).clamp(0, 100000) / 1000000.0;
+          _lastStopwatchMicros = nowMicros;
+          if (dtSec <= 0) return;
+
           setState(() {
             double oldPos = playheadPosition;
-            playheadPosition += 5.0;
+            playheadPosition += dtSec * 100.0;
 
             if (isMetronomeEnabled &&
                 globalSawSound != null &&
@@ -1781,7 +2007,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                     volume: volume,
                   );
                   SoLoud.instance.setRelativePlaySpeed(h, speed);
-                  Timer(Duration(milliseconds: 50), () {
+                  Timer(const Duration(milliseconds: 50), () {
                     if (SoLoud.instance.getIsValidVoiceHandle(h)) {
                       SoLoud.instance.stop(h);
                     }
@@ -1819,7 +2045,10 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                       c.currentHandle != null &&
                       SoLoud.instance.getIsValidVoiceHandle(c.currentHandle!)) {
                     try {
-                      SoLoud.instance.setPan(c.currentHandle!, track.pan);
+                      SoLoud.instance.setPan(
+                        c.currentHandle!,
+                        track.pan.clamp(-1.0, 1.0),
+                      );
                     } catch (_) {}
                   }
                 }
@@ -1828,278 +2057,19 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
               if (track.isMuted) continue;
               if (anySolo && !track.isSolo) continue;
 
+              bool hasEffectAutomation = false;
               for (var fx in track.effectsChain) {
                 for (var paramName in fx.parameters.keys) {
                   String autoKey = '${fx.name}_$paramName';
-                  double autoVal = track.getInterpolatedAutomation(
-                    autoKey,
-                    playheadPosition,
-                  );
-                  double val = autoVal >= 0.0
-                      ? autoVal
-                      : fx.parameters[paramName]!;
-
-                  if (track.type == TrackType.midi &&
-                      track.synthSource != null) {
-                    if (fx.name == 'TubeScreamer') {
-                      if (paramName == 'Drive') {
-                        track.synthSource!.filters.waveShaperFilter
-                                .amount()
-                                .value =
-                            val;
-                      }
-                      if (paramName == 'Level') {
-                        track.synthSource!.filters.waveShaperFilter
-                                .wet()
-                                .value =
-                            val;
-                      }
-                      if (paramName == 'Tone') {
-                        track.synthSource!.filters.biquadFilter.type().value =
-                            0;
-                        track.synthSource!.filters.biquadFilter
-                                .frequency()
-                                .value =
-                            500 + val * 5000;
-                      }
-                    }
-                    if (fx.name == 'Reverb') {
-                      if (paramName == 'Mix') {
-                        track.synthSource!.filters.echoFilter.wet().value = val;
-                      }
-                      if (paramName == 'Decay') {
-                        track.synthSource!.filters.echoFilter.decay().value =
-                            val;
-                      }
-                      if (paramName == 'Size') {
-                        track.synthSource!.filters.echoFilter.delay().value =
-                            val * 2.0;
-                      }
-                    }
-                    if (fx.name == 'Compressor') {
-                      if (paramName == 'Thresh') {
-                        track.synthSource!.filters.compressorFilter
-                                .threshold()
-                                .value =
-                            -80.0 + (val * 80.0);
-                      }
-                      if (paramName == 'Ratio') {
-                        track.synthSource!.filters.compressorFilter
-                                .ratio()
-                                .value =
-                            1.0 + (val * 9.0);
-                      }
-                      if (paramName == 'Gain') {
-                        track.synthSource!.filters.compressorFilter
-                                .makeupGain()
-                                .value =
-                            -40.0 + (val * 80.0);
-                      }
-                    }
-                    if (fx.name == 'EQ') {
-                      if (paramName == 'Low') {
-                        track.synthSource!.filters.parametricEqFilter
-                                .bandGain(0)
-                                .value =
-                            val * 4.0;
-                      }
-                      if (paramName == 'Mid') {
-                        track.synthSource!.filters.parametricEqFilter
-                                .bandGain(1)
-                                .value =
-                            val * 4.0;
-                      }
-                      if (paramName == 'High') {
-                        track.synthSource!.filters.parametricEqFilter
-                                .bandGain(2)
-                                .value =
-                            val * 4.0;
-                      }
-                    }
-                  } else if (track.type == TrackType.audio) {
-                    for (var c in trackClips[track.id] ?? []) {
-                      if (c is AudioClip && c.source != null) {
-                        if (fx.name == 'TubeScreamer') {
-                          if (paramName == 'Drive') {
-                            c.source!.filters.waveShaperFilter.amount().value =
-                                val;
-                            if (c.currentHandle != null &&
-                                SoLoud.instance.getIsValidVoiceHandle(
-                                  c.currentHandle!,
-                                )) {
-                              c.source!.filters.waveShaperFilter
-                                      .amount(soundHandle: c.currentHandle)
-                                      .value =
-                                  val;
-                            }
-                          }
-                          if (paramName == 'Level') {
-                            c.source!.filters.waveShaperFilter.wet().value =
-                                val;
-                            if (c.currentHandle != null &&
-                                SoLoud.instance.getIsValidVoiceHandle(
-                                  c.currentHandle!,
-                                )) {
-                              c.source!.filters.waveShaperFilter
-                                      .wet(soundHandle: c.currentHandle)
-                                      .value =
-                                  val;
-                            }
-                          }
-                          if (paramName == 'Tone') {
-                            c.source!.filters.biquadFilter.type().value = 0;
-                            c.source!.filters.biquadFilter.frequency().value =
-                                500 + val * 5000;
-                            if (c.currentHandle != null &&
-                                SoLoud.instance.getIsValidVoiceHandle(
-                                  c.currentHandle!,
-                                )) {
-                              c.source!.filters.biquadFilter
-                                      .type(soundHandle: c.currentHandle)
-                                      .value =
-                                  0;
-                              c.source!.filters.biquadFilter
-                                      .frequency(soundHandle: c.currentHandle)
-                                      .value =
-                                  500 + val * 5000;
-                            }
-                          }
-                        }
-                        if (fx.name == 'Reverb') {
-                          if (paramName == 'Mix') {
-                            c.source!.filters.echoFilter.wet().value = val;
-                            if (c.currentHandle != null &&
-                                SoLoud.instance.getIsValidVoiceHandle(
-                                  c.currentHandle!,
-                                )) {
-                              c.source!.filters.echoFilter
-                                      .wet(soundHandle: c.currentHandle)
-                                      .value =
-                                  val;
-                            }
-                          }
-                          if (paramName == 'Decay') {
-                            c.source!.filters.echoFilter.decay().value = val;
-                            if (c.currentHandle != null &&
-                                SoLoud.instance.getIsValidVoiceHandle(
-                                  c.currentHandle!,
-                                )) {
-                              c.source!.filters.echoFilter
-                                      .decay(soundHandle: c.currentHandle)
-                                      .value =
-                                  val;
-                            }
-                          }
-                          if (paramName == 'Size') {
-                            c.source!.filters.echoFilter.delay().value =
-                                val * 2.0;
-                            if (c.currentHandle != null &&
-                                SoLoud.instance.getIsValidVoiceHandle(
-                                  c.currentHandle!,
-                                )) {
-                              c.source!.filters.echoFilter
-                                      .delay(soundHandle: c.currentHandle)
-                                      .value =
-                                  val * 2.0;
-                            }
-                          }
-                        }
-                        if (fx.name == 'Compressor') {
-                          if (paramName == 'Thresh') {
-                            c.source!.filters.compressorFilter
-                                    .threshold()
-                                    .value =
-                                -80.0 + (val * 80.0);
-                            if (c.currentHandle != null &&
-                                SoLoud.instance.getIsValidVoiceHandle(
-                                  c.currentHandle!,
-                                )) {
-                              c.source!.filters.compressorFilter
-                                      .threshold(soundHandle: c.currentHandle)
-                                      .value =
-                                  -80.0 + (val * 80.0);
-                            }
-                          }
-                          if (paramName == 'Ratio') {
-                            c.source!.filters.compressorFilter.ratio().value =
-                                1.0 + (val * 9.0);
-                            if (c.currentHandle != null &&
-                                SoLoud.instance.getIsValidVoiceHandle(
-                                  c.currentHandle!,
-                                )) {
-                              c.source!.filters.compressorFilter
-                                      .ratio(soundHandle: c.currentHandle)
-                                      .value =
-                                  1.0 + (val * 9.0);
-                            }
-                          }
-                          if (paramName == 'Gain') {
-                            c.source!.filters.compressorFilter
-                                    .makeupGain()
-                                    .value =
-                                -40.0 + (val * 80.0);
-                            if (c.currentHandle != null &&
-                                SoLoud.instance.getIsValidVoiceHandle(
-                                  c.currentHandle!,
-                                )) {
-                              c.source!.filters.compressorFilter
-                                      .makeupGain(soundHandle: c.currentHandle)
-                                      .value =
-                                  -40.0 + (val * 80.0);
-                            }
-                          }
-                        }
-                        if (fx.name == 'EQ') {
-                          if (paramName == 'Low') {
-                            c.source!.filters.parametricEqFilter
-                                    .bandGain(0)
-                                    .value =
-                                val * 4.0;
-                            if (c.currentHandle != null &&
-                                SoLoud.instance.getIsValidVoiceHandle(
-                                  c.currentHandle!,
-                                )) {
-                              c.source!.filters.parametricEqFilter
-                                      .bandGain(0, soundHandle: c.currentHandle)
-                                      .value =
-                                  val * 4.0;
-                            }
-                          }
-                          if (paramName == 'Mid') {
-                            c.source!.filters.parametricEqFilter
-                                    .bandGain(1)
-                                    .value =
-                                val * 4.0;
-                            if (c.currentHandle != null &&
-                                SoLoud.instance.getIsValidVoiceHandle(
-                                  c.currentHandle!,
-                                )) {
-                              c.source!.filters.parametricEqFilter
-                                      .bandGain(1, soundHandle: c.currentHandle)
-                                      .value =
-                                  val * 4.0;
-                            }
-                          }
-                          if (paramName == 'High') {
-                            c.source!.filters.parametricEqFilter
-                                    .bandGain(2)
-                                    .value =
-                                val * 4.0;
-                            if (c.currentHandle != null &&
-                                SoLoud.instance.getIsValidVoiceHandle(
-                                  c.currentHandle!,
-                                )) {
-                              c.source!.filters.parametricEqFilter
-                                      .bandGain(2, soundHandle: c.currentHandle)
-                                      .value =
-                                  val * 4.0;
-                            }
-                          }
-                        }
-                      }
-                    }
+                  if ((track.automation[autoKey]?.isNotEmpty ?? false)) {
+                    hasEffectAutomation = true;
+                    break;
                   }
                 }
+                if (hasEffectAutomation) break;
+              }
+              if (hasEffectAutomation) {
+                _updateTrackFilters(track, atPlayhead: playheadPosition);
               }
 
               for (var clip in trackClips[track.id] ?? []) {
@@ -2125,7 +2095,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                       clip.currentHandle = track.bus!.play(
                         clip.source!,
                         volume: track.volume,
-                        pan: track.pan,
+                        pan: track.pan.clamp(-1.0, 1.0),
                         paused: true,
                       );
                       double offsetMs =
@@ -2160,85 +2130,39 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                               .where((p) => p.midiNote == note.pitch)
                               .firstOrNull;
                           if (pad != null) {
-                            pad.play(note.velocity.toDouble());
+                            pad.play(
+                              note.velocity.toDouble(),
+                              track.bus,
+                              track.volume,
+                              track.pan,
+                            );
                           }
-                        } else if (globalSynthSound != null) {
-                          AudioSource src =
-                              track.synthSource ?? globalSynthSound!;
-                          if (track.synthSource == null) {
-                            if (track.instrumentIndex == 1) {
-                              src = globalSawSound!;
-                            } else if (track.instrumentIndex == 2)
-                              src = globalSineSound!;
-                            else if (track.instrumentIndex == 3)
-                              src = globalPianoSound!;
-                            else if (track.instrumentIndex == 4)
-                              src = globalCelloSound!;
-                            else if (track.instrumentIndex == 5)
-                              src = globalViolinSound!;
-                          }
+                        } else {
                           track.activeMidiHandles.removeWhere(
                             (h) => !SoLoud.instance.getIsValidVoiceHandle(h),
                           );
-                          double volMultiplier = 1.0;
-                          if (track.instrumentIndex == 3) {
-                            volMultiplier = 3.0;
-                          } else if (track.instrumentIndex == 4)
-                            volMultiplier = 2.0;
-                          else if (track.instrumentIndex == 5)
-                            volMultiplier = 1.5;
-
-                          final handle = track.bus!.play(
-                            src,
-                            volume:
-                                (note.velocity / 127.0) *
-                                track.volume *
-                                volMultiplier,
-                            pan: track.pan,
+                          final preset = getInstrumentPreset(
+                            track.instrumentIndex,
                           );
-                          track.activeMidiHandles.add(handle);
-
-                          SoLoud.instance.setLooping(handle, true);
-                          if (track.instrumentIndex >= 3) {
-                            SoLoud.instance.setLoopPoint(
-                              handle,
-                              const Duration(milliseconds: 500),
+                          final handle = triggerInstrumentNote(
+                            track,
+                            note.pitch,
+                            note.velocity,
+                          );
+                          if (handle != null) {
+                            track.activeMidiHandles.add(handle);
+                            final int noteMs = max(
+                              (note.length / beatWidth * (60.0 / bpm) * 1000)
+                                  .round(),
+                              50,
                             );
+                            Timer(Duration(milliseconds: noteMs), () {
+                              releaseInstrumentNote(
+                                handle,
+                                releaseMs: preset.releaseMs,
+                              );
+                            });
                           }
-
-                          int basePitch = 69;
-                          if (track.instrumentIndex == 3) {
-                            basePitch = 60;
-                          } else if (track.instrumentIndex == 4)
-                            basePitch = 48;
-                          else if (track.instrumentIndex == 5)
-                            basePitch = 60;
-                          double speed =
-                              pow(2.0, (note.pitch - basePitch) / 12.0)
-                                  as double;
-                          SoLoud.instance.setRelativePlaySpeed(handle, speed);
-                          Timer(
-                            Duration(
-                              milliseconds: max(
-                                (note.length / beatWidth * (60.0 / bpm) * 1000)
-                                    .toInt(),
-                                50,
-                              ),
-                            ),
-                            () {
-                              if (SoLoud.instance.isInitialized) {
-                                SoLoud.instance.fadeVolume(
-                                  handle,
-                                  0.0,
-                                  Duration(milliseconds: 20),
-                                );
-                                Timer(
-                                  Duration(milliseconds: 20),
-                                  () => SoLoud.instance.stop(handle),
-                                );
-                              }
-                            },
-                          );
                         }
                       }
                     }
@@ -2290,18 +2214,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         });
       } else {
         playTimer?.cancel();
-        try {
-          SoLoud.instance.filters.echoFilter.deactivate();
-        } catch (_) {}
-        try {
-          SoLoud.instance.filters.robotizeFilter.deactivate();
-        } catch (_) {}
-        try {
-          SoLoud.instance.filters.compressorFilter.deactivate();
-        } catch (_) {}
-        try {
-          SoLoud.instance.filters.biquadResonantFilter.deactivate();
-        } catch (_) {}
+        _playStopwatch.stop();
         for (var track in tracks) {
           for (var clip in trackClips[track.id] ?? []) {
             if (clip is AudioClip && clip.currentHandle != null) {
@@ -2310,10 +2223,11 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
               }
             }
           }
+          final releaseMs = getInstrumentPreset(
+            track.instrumentIndex,
+          ).releaseMs;
           for (var h in track.activeMidiHandles) {
-            if (SoLoud.instance.getIsValidVoiceHandle(h)) {
-              SoLoud.instance.stop(h);
-            }
+            releaseInstrumentNote(h, releaseMs: releaseMs);
           }
           track.activeMidiHandles.clear();
           for (var pad in track.samplerPads.values) {
@@ -2324,9 +2238,8 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           }
         }
         for (var list in _activeMidiNotes.values) {
-          for (var h in list) {
-            if (SoLoud.instance.getIsValidVoiceHandle(h))
-              SoLoud.instance.stop(h);
+          for (var entry in list) {
+            releaseInstrumentNote(entry.handle, releaseMs: entry.releaseMs);
           }
         }
         _activeMidiNotes.clear();
@@ -2334,64 +2247,221 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     });
   }
 
-  Future<void> _updateMicState() async {
-    bool wantsRecord = isRecording;
-    bool wantsMonitor = tracks.any(
-      (t) => t.type == TrackType.audio && t.isMonitoring,
-    );
-    bool needsMic = wantsRecord || wantsMonitor;
-
-    if (needsMic && _micStreamSub == null) {
-      bool hasPerm = await _audioRecorder.hasPermission();
-      if (!hasPerm) return;
-
-      if (SoLoud.instance.isInitialized) {
-        _micSource = SoLoud.instance.setBufferStream(
-          maxBufferSizeBytes: 1024 * 1024 * 10,
-          sampleRate: 44100,
-          channels: Channels.stereo,
-          format: BufferType.s16le,
-          bufferingTimeNeeds: 0,
-        );
-        for (var t in tracks) {
-          if (t.type == TrackType.audio && t.isMonitoring && t.bus != null) {
-            t.bus!.play(_micSource!);
+  void _syncTrackMonitoringHandles() {
+    if (!SoLoud.instance.isInitialized) return;
+    final bool anySolo = tracks.any((t) => t.isSolo);
+    for (final t in tracks) {
+      if (t.type != TrackType.audio) continue;
+      if (t.isMonitoring) {
+        t.bus ??= Bus()..playOnEngine();
+        if (t.monitorSource == null) {
+          try {
+            t.monitorSource = SoLoud.instance.setBufferStream(
+              maxBufferSizeBytes: 1024 * 64,
+              bufferingType: BufferingType.released,
+              bufferingTimeNeeds: 0.0,
+              sampleRate: 44100,
+              channels: Channels.stereo,
+              format: BufferType.f32le,
+            );
+            _updateTrackFilters(t);
+          } catch (e) {
+            debugPrint('Failed to create monitor stream: $e');
           }
         }
-      }
-
-      final stream = await _audioRecorder.startStream(
-        RecordConfig(
-          encoder: AudioEncoder.pcm16bits,
-          device: _selectedInputDevice,
-          sampleRate: 44100,
-          numChannels: 2,
-        ),
-      );
-
-      int packetCount = 0;
-      _micStreamSub = stream.listen((data) {
-        packetCount++;
-        if (packetCount < 3) return;
-        if (_micSource != null && wantsMonitor) {
+        if (t.monitorSource != null) {
+          final double effVol =
+              (t.isMuted || (anySolo && !t.isSolo)) ? 0.0 : t.volume;
+          if (t.monitorHandle == null ||
+              !SoLoud.instance.getIsValidVoiceHandle(t.monitorHandle!)) {
+            try {
+              t.monitorHandle = t.bus!.play(
+                t.monitorSource!,
+                volume: effVol,
+                pan: t.pan.clamp(-1.0, 1.0),
+              );
+            } catch (_) {}
+          } else {
+            try {
+              SoLoud.instance.setVolume(t.monitorHandle!, effVol);
+              SoLoud.instance.setPan(
+                t.monitorHandle!,
+                t.pan.clamp(-1.0, 1.0),
+              );
+              if (SoLoud.instance.getPause(t.monitorHandle!)) {
+                SoLoud.instance.setPause(t.monitorHandle!, false);
+              }
+            } catch (_) {}
+          }
+        }
+      } else {
+        if (t.monitorHandle != null) {
           try {
-            SoLoud.instance.addAudioDataStream(_micSource!, data);
+            if (SoLoud.instance.getIsValidVoiceHandle(t.monitorHandle!)) {
+              SoLoud.instance.stop(t.monitorHandle!);
+            }
           } catch (_) {}
+          t.monitorHandle = null;
         }
-        if (isRecording && _wavWriter != null) {
-          _wavWriter!.write(data);
+        if (t.monitorSource != null) {
+          try {
+            SoLoud.instance.disposeSource(t.monitorSource!);
+          } catch (_) {}
+          t.monitorSource = null;
         }
-      });
-    } else if (!needsMic && _micStreamSub != null) {
-      await _micStreamSub!.cancel();
-      _micStreamSub = null;
-      await _audioRecorder.stop();
-      if (_micSource != null) {
-        try {
-          SoLoud.instance.setDataIsEnded(_micSource!);
-        } catch (_) {}
-        _micSource = null;
       }
+    }
+  }
+
+  void _onMicPcmChunk(List<int> rawChunk) {
+    if (rawChunk.isEmpty) return;
+
+    Uint8List combined;
+    if (_micRemainderBytes.isEmpty) {
+      combined = rawChunk is Uint8List
+          ? rawChunk
+          : Uint8List.fromList(rawChunk);
+    } else {
+      combined = Uint8List(_micRemainderBytes.length + rawChunk.length);
+      combined.setRange(0, _micRemainderBytes.length, _micRemainderBytes);
+      combined.setRange(_micRemainderBytes.length, combined.length, rawChunk);
+    }
+
+    // Align to 4-byte stereo 16-bit frames
+    final int alignedLen = combined.length & ~3;
+    if (alignedLen == 0) {
+      _micRemainderBytes = combined;
+      return;
+    }
+    final Uint8List alignedBytes = combined.length == alignedLen
+        ? combined
+        : Uint8List.sublistView(combined, 0, alignedLen);
+    _micRemainderBytes = combined.length > alignedLen
+        ? Uint8List.fromList(combined.sublist(alignedLen))
+        : Uint8List(0);
+
+    if (isRecording && _wavWriter != null) {
+      _wavWriter!.write(alignedBytes);
+    }
+
+    if (!SoLoud.instance.isInitialized) return;
+    final bool anyMonitoring = tracks.any(
+      (t) => t.type == TrackType.audio && t.isMonitoring,
+    );
+    if (!anyMonitoring) return;
+
+    // Convert s16le PCM to f32le PCM for SoLoud BufferStream
+    final int numSamples = alignedLen >> 1;
+    final ByteData bd = ByteData.sublistView(alignedBytes);
+    final Float32List floatSamples = Float32List(numSamples);
+    for (int i = 0; i < numSamples; i++) {
+      floatSamples[i] = bd.getInt16(i << 1, Endian.little) * (1.0 / 32768.0);
+    }
+    final Uint8List floatBytes = floatSamples.buffer.asUint8List();
+
+    final bool anySolo = tracks.any((t) => t.isSolo);
+    for (final t in tracks) {
+      if (t.type != TrackType.audio || !t.isMonitoring) continue;
+      if (t.monitorSource == null) {
+        _syncTrackMonitoringHandles();
+      }
+      final src = t.monitorSource;
+      if (src == null) continue;
+      try {
+        // Bound buffered monitoring audio to < 18ms (6350 bytes of stereo f32le at 44.1kHz)
+        // so live monitoring stays ultra-low-latency and never accumulates lag
+        final int bufferedBytes = SoLoud.instance.getBufferSize(src);
+        if (bufferedBytes > 6350) {
+          SoLoud.instance.resetBufferStream(src);
+        }
+        SoLoud.instance.addAudioDataStream(src, floatBytes);
+
+        final double effVol =
+            (t.isMuted || (anySolo && !t.isSolo)) ? 0.0 : t.volume;
+        if (t.monitorHandle == null ||
+            !SoLoud.instance.getIsValidVoiceHandle(t.monitorHandle!)) {
+          t.bus ??= Bus()..playOnEngine();
+          t.monitorHandle = t.bus!.play(
+            src,
+            volume: effVol,
+            pan: t.pan.clamp(-1.0, 1.0),
+          );
+        } else if (SoLoud.instance.getPause(t.monitorHandle!)) {
+          SoLoud.instance.setPause(t.monitorHandle!, false);
+        }
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _stopMicCapture() async {
+    await _micStreamSub?.cancel();
+    _micStreamSub = null;
+    if (_parecordProcess != null) {
+      _parecordProcess!.kill();
+      _parecordProcess = null;
+    }
+    try {
+      await _audioRecorder.stop();
+    } catch (_) {}
+    _micRemainderBytes = Uint8List(0);
+  }
+
+  Future<void> _restartMicCapture() async {
+    await _stopMicCapture();
+    await _updateMicState();
+  }
+
+  Future<void> _updateMicState() async {
+    final bool wantsRecord =
+        isRecording &&
+        tracks.any((t) => t.type == TrackType.audio && t.isArmed);
+    final bool wantsMonitor = tracks.any(
+      (t) => t.type == TrackType.audio && t.isMonitoring,
+    );
+    final bool needsMic = wantsRecord || wantsMonitor;
+
+    _syncTrackMonitoringHandles();
+
+    if (needsMic && _micStreamSub == null) {
+      _micRemainderBytes = Uint8List(0);
+      bool startedLowLatencyLinux = false;
+      if (Platform.isLinux) {
+        try {
+          final args = <String>[
+            '--raw',
+            '--format=s16le',
+            '--rate=44100',
+            '--channels=2',
+            '--latency-msec=5',
+            '--process-time-msec=2',
+            if (_selectedInputDevice != null &&
+                _selectedInputDevice!.id.isNotEmpty)
+              '--device=${_selectedInputDevice!.id}',
+          ];
+          _parecordProcess = await Process.start('parecord', args);
+          _micStreamSub = _parecordProcess!.stdout.listen(_onMicPcmChunk);
+          startedLowLatencyLinux = true;
+        } catch (e) {
+          debugPrint('Low-latency parecord fallback to AudioRecorder: $e');
+          _parecordProcess = null;
+        }
+      }
+
+      if (!startedLowLatencyLinux) {
+        bool hasPerm = await _audioRecorder.hasPermission();
+        if (!hasPerm) return;
+        final stream = await _audioRecorder.startStream(
+          RecordConfig(
+            encoder: AudioEncoder.pcm16bits,
+            device: _selectedInputDevice,
+            sampleRate: 44100,
+            numChannels: 2,
+          ),
+        );
+        _micStreamSub = stream.listen(_onMicPcmChunk);
+      }
+    } else if (!needsMic && _micStreamSub != null) {
+      await _stopMicCapture();
     }
   }
 
@@ -2437,7 +2507,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           }
 
           List<AudioClip> newClips = [];
-          for (var t in armedTracks) {
+          for (var _ in armedTracks) {
             final clip = AudioClip(
               start: recordingStartPos!,
               length: length,
@@ -2463,7 +2533,8 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       recordingStartPos = null;
       _currentRecordPath = null;
     } else {
-      bool hasPermission = await _audioRecorder.hasPermission();
+      bool hasPermission =
+          Platform.isLinux || await _audioRecorder.hasPermission();
       if (hasPermission) {
         bool hasArmedAudio = tracks.any(
           (t) => t.type == TrackType.audio && t.isArmed,
@@ -2483,9 +2554,8 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           _saveState();
           setState(() {
             isRecording = true;
-            recordingStartPos = snapToGrid
-                ? (playheadPosition / snapResolution).round() * snapResolution
-                : playheadPosition;
+            // Start recording at the exact current playhead position so recorded audio is sample-aligned
+            recordingStartPos = playheadPosition;
             if (!isPlaying) _togglePlay();
           });
           if (hasArmedAudio) {
@@ -2605,13 +2675,9 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     newTrack.bus!.playOnEngine();
 
     if (type == TrackType.midi) {
-      final dir = await getProjectMediaDirectory();
-      newTrack.synthSourcePath = '${dir.path}/synth_v2.wav';
-      if (SoLoud.instance.isInitialized) {
-        newTrack.synthSource = await SoLoud.instance.loadFile(
-          newTrack.synthSourcePath!,
-        );
-      }
+      final preset = getInstrumentPreset(0);
+      newTrack.synthSourcePath = preset.assetPath;
+      newTrack.synthSource = globalInstrumentSounds[0];
     }
     _saveState();
     setState(() {
@@ -2645,15 +2711,36 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   void _executeDeleteTrack(Track track) {
     _saveState();
     setState(() {
-      if (track.bus != null) {
-        try { track.bus!.dispose(); } catch (_) {}
+      if (track.monitorHandle != null) {
+        try {
+          if (SoLoud.instance.getIsValidVoiceHandle(track.monitorHandle!)) {
+            SoLoud.instance.stop(track.monitorHandle!);
+          }
+        } catch (_) {}
+        track.monitorHandle = null;
       }
-      if (track.synthSource != null) {
-        try { SoLoud.instance.disposeSource(track.synthSource!); } catch (_) {}
+      if (track.monitorSource != null) {
+        try {
+          SoLoud.instance.disposeSource(track.monitorSource!);
+        } catch (_) {}
+        track.monitorSource = null;
+      }
+      if (track.bus != null) {
+        try {
+          track.bus!.dispose();
+        } catch (_) {}
+      }
+      if (track.synthSource != null &&
+          !globalInstrumentSounds.values.contains(track.synthSource)) {
+        try {
+          SoLoud.instance.disposeSource(track.synthSource!);
+        } catch (_) {}
       }
       for (var c in trackClips[track.id] ?? []) {
         if (c is AudioClip && c.source != null) {
-          try { SoLoud.instance.disposeSource(c.source!); } catch (_) {}
+          try {
+            SoLoud.instance.disposeSource(c.source!);
+          } catch (_) {}
         }
       }
       tracks.remove(track);
@@ -2661,11 +2748,15 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       if (selectedTrackIndex != null && selectedTrackIndex! >= tracks.length) {
         selectedTrackIndex = tracks.isNotEmpty ? tracks.length - 1 : null;
       }
-      if (selectedClip != null && !trackClips.values.expand((x) => x).contains(selectedClip)) {
+      if (selectedClip != null &&
+          !trackClips.values.expand((x) => x).contains(selectedClip)) {
         selectedClip = null;
       }
-      multiSelectedClips.removeWhere((c) => !trackClips.values.expand((x) => x).contains(c));
+      multiSelectedClips.removeWhere(
+        (c) => !trackClips.values.expand((x) => x).contains(c),
+      );
     });
+    _updateMicState();
   }
 
   void _deleteTrack(Track track) {
@@ -3315,26 +3406,34 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                             _buildTrackButton(
                               'M',
                               track.isMuted,
-                              () => setState(
-                                () => track.isMuted = !track.isMuted,
-                              ),
+                              () {
+                                setState(
+                                  () => track.isMuted = !track.isMuted,
+                                );
+                                _syncTrackMonitoringHandles();
+                              },
                               Colors.redAccent,
                             ),
                             SizedBox(width: 4),
                             _buildTrackButton(
                               'S',
                               track.isSolo,
-                              () =>
-                                  setState(() => track.isSolo = !track.isSolo),
+                              () {
+                                setState(() => track.isSolo = !track.isSolo);
+                                _syncTrackMonitoringHandles();
+                              },
                               Colors.amber,
                             ),
                             SizedBox(width: 4),
                             _buildTrackButton(
                               'R',
                               track.isArmed,
-                              () => setState(
-                                () => track.isArmed = !track.isArmed,
-                              ),
+                              () async {
+                                setState(
+                                  () => track.isArmed = !track.isArmed,
+                                );
+                                await _updateMicState();
+                              },
                               activeRecord,
                             ),
                             if (track.type == TrackType.audio) ...[
@@ -3390,6 +3489,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                                                 );
                                               }
                                             }
+                                            _syncTrackMonitoringHandles();
                                           }),
                                         ),
                                       ),
@@ -3421,6 +3521,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                                             );
                                           }
                                         }
+                                        _syncTrackMonitoringHandles();
                                       }),
                                     ),
                                     Text(
@@ -4702,6 +4803,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                           SoLoud.instance.setPan(c.currentHandle!, v);
                         }
                       }
+                      _syncTrackMonitoringHandles();
                     }),
                   ),
                   SizedBox(height: 8),
@@ -4732,6 +4834,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                                 SoLoud.instance.setVolume(c.currentHandle!, v);
                               }
                             }
+                            _syncTrackMonitoringHandles();
                           }),
                         ),
                       ),
@@ -4794,6 +4897,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                         onChanged: (InputDevice? newValue) {
                           if (newValue != null) {
                             setState(() => _selectedInputDevice = newValue);
+                            _restartMicCapture();
                           }
                         },
                         items: _inputDevices.map<DropdownMenuItem<InputDevice>>(
@@ -4924,10 +5028,18 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                                                 onChangeStart: _saveState,
                                                 pan:
                                                     fx.parameters[k]! * 2 - 1.0,
-                                                onChanged: (v) => setState(
-                                                  () => fx.parameters[k] =
-                                                      (v + 1.0) / 2.0,
-                                                ),
+                                                onChanged: (v) {
+                                                  setState(() {
+                                                    fx.parameters[k] =
+                                                        ((v + 1.0) / 2.0).clamp(
+                                                          0.0,
+                                                          1.0,
+                                                        );
+                                                  });
+                                                  _updateTrackFilters(
+                                                    tracks[selectedTrackIndex!],
+                                                  );
+                                                },
                                               ),
                                               SizedBox(height: 4),
                                               Text(
