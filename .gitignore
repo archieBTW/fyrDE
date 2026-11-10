@@ -17,6 +17,7 @@ build/
 *.swo
 
 # Project specific ignores
+*_root/
 fyrbrowser/plugins/webview_cef/third/cef/
 bin/
 obj/

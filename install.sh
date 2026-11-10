@@ -276,10 +276,11 @@ EOF
 [Desktop Entry]
 Name=fyrFiles
 Comment=A modern, custom file manager
-Exec=/usr/local/bin/fyrfiles
+Exec=/usr/local/bin/fyrfiles %U
 Icon=fyrfiles
 Terminal=false
 Type=Application
+MimeType=inode/directory;
 Categories=Utility;System;FileTools;
 EOF
             sudo tee /usr/local/bin/fyr_files_picker > /dev/null <<'EOF'
@@ -324,12 +325,14 @@ EOF
             sudo tee /usr/share/applications/fyrsettings.desktop > /dev/null <<'EOF'
 [Desktop Entry]
 Name=Settings
+GenericName=Fyr Settings
 Comment=System settings for FyrDE
 Exec=/usr/local/bin/fyrsettings
 Icon=fyrsettings
 Terminal=false
 Type=Application
 Categories=System;Settings;
+Keywords=fyr;fyrsettings;settings;preferences;display;audio;sound;system;appearance;
 EOF
             ;;
         "fyrvirt")
@@ -988,6 +991,26 @@ EOF
         sed -i "s/1920x1080/${WIDTH}x${HEIGHT}/g" ~/.config/sway/config
         echo "Sway config updated with resolution ${WIDTH}x${HEIGHT}"
     fi
+
+    # Configure WirePlumber auto-profile for automatic HDMI and audio detection
+    mkdir -p ~/.config/wireplumber/wireplumber.conf.d
+    cat << 'EOF' > ~/.config/wireplumber/wireplumber.conf.d/50-alsa-auto-profile.conf
+monitor.alsa.rules = [
+  {
+    matches = [
+      {
+        device.name = "~alsa_card.*"
+      }
+    ]
+    actions = {
+      update-props = {
+        api.acp.auto-profile = true
+        api.acp.auto-port = true
+      }
+    }
+  }
+]
+EOF
 }
 
 setup_themes() {

@@ -66,27 +66,39 @@ class _StartMenuPopupState extends State<StartMenuPopup>
   }
 
   void _filterApps() {
-    final query = _searchController.text.toLowerCase();
+    final query = _searchController.text.toLowerCase().trim();
     setState(() {
-      _filteredApps = _apps
-          .where((app) => app.name.toLowerCase().contains(query))
-          .toList();
+      if (query.isEmpty) {
+        _filteredApps = _apps;
+      } else {
+        _filteredApps = _apps.where((app) {
+          final name = app.name.toLowerCase();
+          final exec = app.exec.toLowerCase();
+          final path = app.path.toLowerCase();
+          return name.contains(query) || exec.contains(query) || path.contains(query);
+        }).toList()..sort((a, b) {
+          final aName = a.name.toLowerCase();
+          final bName = b.name.toLowerCase();
+          bool aStarts = aName.startsWith(query);
+          bool bStarts = bName.startsWith(query);
+          if (aStarts && !bStarts) return -1;
+          if (!aStarts && bStarts) return 1;
+          return aName.compareTo(bName);
+        });
+      }
     });
   }
 
   void _launchApp(String exec) {
     widget.onClose();
-    final parts = exec.split(' ');
-    if (parts.isNotEmpty) {
-      try {
-        Process.start(
-          parts[0],
-          parts.sublist(1),
-          mode: ProcessStartMode.detached,
-        );
-      } catch (e) {
-        print('Failed to launch: \$e');
-      }
+    try {
+      Process.start(
+        'sh',
+        ['-c', exec],
+        mode: ProcessStartMode.detached,
+      );
+    } catch (e) {
+      print('Failed to launch: \$e');
     }
   }
 

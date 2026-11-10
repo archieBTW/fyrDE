@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -27,16 +28,53 @@ void main() async {
   int screenHeight = 1080;
 
   try {
-    final res = await Process.run('sh', [
-      '-c',
-      'cat /sys/class/drm/*/modes | head -n 1',
-    ]);
-    if (res.exitCode == 0 && res.stdout.toString().trim().isNotEmpty) {
-      final parts = res.stdout.toString().trim().split('x');
-      screenWidth = int.parse(parts[0]);
-      screenHeight = int.parse(parts[1]);
+    final swayRes = await Process.run('swaymsg', ['-t', 'get_outputs']);
+    if (swayRes.exitCode == 0 && swayRes.stdout.toString().trim().isNotEmpty) {
+      final List<dynamic> outputs = jsonDecode(swayRes.stdout.toString());
+      String? primaryName;
+      final primaryFile = File('${Platform.environment['HOME']}/.config/fyr/primary_display');
+      if (await primaryFile.exists()) {
+        final content = (await primaryFile.readAsString()).trim();
+        if (content.isNotEmpty) primaryName = content;
+      }
+      if (primaryName == null) {
+        final configFile = File('${Platform.environment['HOME']}/.config/sway/config');
+        if (await configFile.exists()) {
+          final configContent = await configFile.readAsString();
+          final match = RegExp(r'assign\s+\[app_id="fyrtaskbar"\]\s+output\s+([^\s]+)').firstMatch(configContent);
+          if (match != null) primaryName = match.group(1);
+        }
+      }
+      final target = outputs.firstWhere(
+        (o) => o['name'] == primaryName && o['active'] == true,
+        orElse: () => outputs.firstWhere(
+          (o) => o['focused'] == true,
+          orElse: () => outputs.firstWhere(
+            (o) => o['active'] == true,
+            orElse: () => outputs.isNotEmpty ? outputs.first : null,
+          ),
+        ),
+      );
+      if (target != null && target['rect'] != null) {
+        screenWidth = (target['rect']['width'] as num?)?.toInt() ?? screenWidth;
+        screenHeight = (target['rect']['height'] as num?)?.toInt() ?? screenHeight;
+      }
+    } else {
+      throw Exception('Sway outputs unavailable');
     }
-  } catch (_) {}
+  } catch (_) {
+    try {
+      final res = await Process.run('sh', [
+        '-c',
+        'cat /sys/class/drm/*/modes | head -n 1',
+      ]);
+      if (res.exitCode == 0 && res.stdout.toString().trim().isNotEmpty) {
+        final parts = res.stdout.toString().trim().split('x');
+        screenWidth = int.parse(parts[0]);
+        screenHeight = int.parse(parts[1]);
+      }
+    } catch (_) {}
+  }
 
   SystemState.screenWidth = screenWidth;
   SystemState.screenHeight = screenHeight;

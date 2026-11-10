@@ -340,15 +340,94 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
         'list',
         'sources',
       ]);
+      final cardsRes = await Process.run('pactl', [
+        '-f',
+        'json',
+        'list',
+        'cards',
+      ]);
 
       final defaultSinkRes = await Process.run('pactl', ['get-default-sink']);
       final defaultSourceRes = await Process.run('pactl', [
         'get-default-source',
       ]);
 
+      List<dynamic> sinksList = [];
+      try {
+        if (sinksRes.exitCode == 0 && sinksRes.stdout.toString().trim().isNotEmpty) {
+          sinksList = jsonDecode(sinksRes.stdout.toString()) as List;
+        }
+      } catch (_) {}
+
+      // Check cards for HDMI and analog fallback
+      try {
+        if (cardsRes.exitCode == 0 && cardsRes.stdout.toString().trim().isNotEmpty) {
+          final cardsList = jsonDecode(cardsRes.stdout.toString()) as List;
+          for (final card in cardsList) {
+            final cardName = card['name']?.toString() ?? '';
+            final activeProfile = card['active_profile']?.toString() ?? '';
+            final cardDesc = card['properties']?['device.description']?.toString() ?? 'Built-in Audio';
+            final Map<String, dynamic> ports = card['ports'] is Map ? Map<String, dynamic>.from(card['ports']) : {};
+            final Map<String, dynamic> profiles = card['profiles'] is Map ? Map<String, dynamic>.from(card['profiles']) : {};
+
+            for (final entry in ports.entries) {
+              final portName = entry.key;
+              final portData = entry.value is Map ? Map<String, dynamic>.from(entry.value) : <String, dynamic>{};
+              final portType = portData['type']?.toString() ?? '';
+              final portAvail = portData['availability']?.toString() ?? '';
+              final portDesc = portData['description']?.toString() ?? 'HDMI / DisplayPort';
+
+              final isHdmi = portType == 'HDMI' || portName.contains('hdmi') || portDesc.toLowerCase().contains('hdmi');
+              final isConnected = (portAvail != 'not available');
+
+              if (isHdmi && isConnected) {
+                final cleanCardId = cardName.replaceAll('alsa_card.', '');
+                bool alreadyInSinks = sinksList.any((d) => d['name'].toString().contains('hdmi') && d['name'].toString().contains(cleanCardId));
+                if (!alreadyInSinks) {
+                  final portProfiles = (portData['profiles'] as List?)?.cast<String>() ?? [];
+                  String targetProfile = portProfiles.firstWhere(
+                    (p) => p.contains('stereo') && p.contains('input:'),
+                    orElse: () => portProfiles.firstWhere(
+                      (p) => p.contains('stereo'),
+                      orElse: () => portProfiles.isNotEmpty ? portProfiles.first : 'output:hdmi-stereo',
+                    ),
+                  );
+                  sinksList.add({
+                    'name': '$cardName:$targetProfile',
+                    'description': '$portDesc ($cardDesc)',
+                    'isCardProfile': true,
+                    'cardName': cardName,
+                    'profileName': targetProfile,
+                    'icon': Icons.tv,
+                  });
+                }
+              }
+            }
+
+            if (activeProfile.contains('hdmi')) {
+              final analogProfile = profiles.keys.firstWhere(
+                (p) => p.startsWith('output:analog-stereo'),
+                orElse: () => 'output:analog-stereo+input:analog-stereo',
+              );
+              bool hasAnalog = sinksList.any((d) => d['name'].toString().contains('analog-stereo'));
+              if (!hasAnalog) {
+                sinksList.add({
+                  'name': '$cardName:$analogProfile',
+                  'description': 'Speakers ($cardDesc)',
+                  'isCardProfile': true,
+                  'cardName': cardName,
+                  'profileName': analogProfile,
+                  'icon': Icons.speaker,
+                });
+              }
+            }
+          }
+        }
+      } catch (_) {}
+
       if (mounted) {
         setState(() {
-          _sinks = jsonDecode(sinksRes.stdout);
+          _sinks = sinksList;
           _sources = (jsonDecode(sourcesRes.stdout) as List)
               .where((s) => !s['name'].toString().contains('.monitor'))
               .toList();
@@ -362,9 +441,34 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
     }
   }
 
-  void _setDefaultSink(String name) {
-    Process.run('pactl', ['set-default-sink', name]);
-    setState(() => _defaultSink = name);
+  void _setDefaultSink(dynamic sinkItem) async {
+    if (sinkItem is Map && sinkItem['isCardProfile'] == true && sinkItem['cardName'] != null && sinkItem['profileName'] != null) {
+      await Process.run('pactl', ['set-card-profile', sinkItem['cardName'], sinkItem['profileName']]);
+      await Future.delayed(const Duration(milliseconds: 150));
+      final sinksRes = await Process.run('pactl', ['-f', 'json', 'list', 'sinks']);
+      if (sinksRes.exitCode == 0) {
+        try {
+          final sinks = jsonDecode(sinksRes.stdout) as List;
+          String? targetSink;
+          if (sinkItem['profileName'].toString().contains('hdmi')) {
+            final m = sinks.firstWhere((s) => s['name'].toString().contains('hdmi'), orElse: () => null);
+            if (m != null) targetSink = m['name'];
+          } else {
+            final m = sinks.firstWhere((s) => s['name'].toString().contains('analog'), orElse: () => null);
+            if (m != null) targetSink = m['name'];
+          }
+          if (targetSink != null) {
+            await Process.run('pactl', ['set-default-sink', targetSink]);
+            _loadAudioDevices();
+            return;
+          }
+        } catch (_) {}
+      }
+    } else {
+      final name = sinkItem is Map ? sinkItem['name'].toString() : sinkItem.toString();
+      await Process.run('pactl', ['set-default-sink', name]);
+    }
+    _loadAudioDevices();
   }
 
   void _setDefaultSource(String name) {
@@ -815,11 +919,21 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
                 ),
                 ..._sinks.map((s) {
                   bool isDefault = s['name'] == _defaultSink;
+                  IconData icon = Icons.speaker;
+                  if (s['icon'] != null && s['icon'] is IconData) {
+                    icon = s['icon'] as IconData;
+                  } else if (s['name'].toString().toLowerCase().contains('hdmi') ||
+                      (s['description'] ?? '').toString().toLowerCase().contains('hdmi')) {
+                    icon = Icons.tv;
+                  } else if (s['name'].toString().toLowerCase().contains('headphone') ||
+                      (s['description'] ?? '').toString().toLowerCase().contains('headphone')) {
+                    icon = Icons.headphones;
+                  }
                   return ListTile(
                     dense: true,
-                    contentPadding: EdgeInsets.symmetric(horizontal: 16),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16),
                     leading: Icon(
-                      Icons.speaker,
+                      icon,
                       size: 16,
                       color: isDefault
                           ? FyrTheme.accentColor
@@ -837,7 +951,7 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
                             size: 16,
                           )
                         : null,
-                    onTap: () => _setDefaultSink(s['name']),
+                    onTap: () => _setDefaultSink(s),
                   );
                 }).toList(),
                 Divider(color: FyrTheme.textColor.withOpacity(0.1)),

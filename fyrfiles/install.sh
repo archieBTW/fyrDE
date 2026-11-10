@@ -30,10 +30,11 @@ fi
 echo "[Desktop Entry]
 Name=fyrFiles
 Comment=A modern, custom file manager
-Exec=/usr/local/bin/fyrfiles
+Exec=/usr/local/bin/fyrfiles %U
 Icon=fyrfiles
 Terminal=false
 Type=Application
+MimeType=inode/directory;
 Categories=Utility;System;FileTools;" | sudo tee /usr/share/applications/fyrfiles.desktop > /dev/null
 
 echo "Updating desktop database..."

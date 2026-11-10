@@ -35,9 +35,12 @@ class _DisplayPaneState extends State<DisplayPane> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('primary_output', name);
 
-    for (final app in ['fyrtaskbar', 'fyrdock']) {
-      await Process.run('swaymsg', ['[app_id="$app"]', 'move', 'output', name]);
-    }
+    // Save to ~/.config/fyr/primary_display for fast lookup across Fyr apps
+    try {
+      final primaryFile = File('${Platform.environment['HOME']}/.config/fyr/primary_display');
+      await primaryFile.parent.create(recursive: true);
+      await primaryFile.writeAsString(name);
+    } catch (_) {}
 
     final configFile = File(
       '${Platform.environment['HOME']}/.config/sway/config',
@@ -64,6 +67,31 @@ class _DisplayPaneState extends State<DisplayPane> {
       newLines.add('assign [app_id="fyrdock"] output $name');
       newLines.add('# END PRIMARY OUTPUT SETTINGS');
       await configFile.writeAsString('${newLines.join('\n')}\n');
+    }
+
+    await _updateWorkspaceBindings();
+    await _restartDesktopStack(name);
+  }
+
+  Future<void> _restartDesktopStack(String outputName) async {
+    try {
+      // 1. Move existing floating/sticky windows to the new output in Sway
+      await Process.run('swaymsg', ['[app_id="fyrtaskbar"]', 'move', 'to', 'output', outputName]);
+      await Process.run('swaymsg', ['[app_id="fyrtaskbar"]', 'move', 'position', '0', '0']);
+      await Process.run('swaymsg', ['[app_id="fyrdock"]', 'move', 'to', 'output', outputName]);
+
+      // 2. Reload Sway config so output assignments and workspace bindings take effect immediately
+      await Process.run('swaymsg', ['reload']);
+
+      // 3. Restart fyrtaskbar and fyrdock so layer-shell surfaces immediately bind to the new output
+      await Process.run('sh', [
+        '-c',
+        'pkill -x fyrtaskbar 2>/dev/null; (/opt/fyrtaskbar/fyrtaskbar >/dev/null 2>&1 &); '
+        'pkill -x fyrdock 2>/dev/null; (/opt/fyrdock/fyrdock >/dev/null 2>&1 &); '
+        'if pgrep -x fyrdesktop >/dev/null 2>&1; then pkill -x fyrdesktop; (/opt/fyrdesktop/fyrdesktop >/dev/null 2>&1 &); fi'
+      ]);
+    } catch (e) {
+      debugPrint('Error restarting desktop stack: $e');
     }
   }
 
@@ -206,6 +234,11 @@ class _DisplayPaneState extends State<DisplayPane> {
       await Process.run('swaymsg', ['output', name, 'pos', '$currentX', '0']);
       currentX += width as int;
     }
+    await _updateSwayConfigDisplays();
+    await Process.run('swaymsg', ['reload']);
+    if (_primaryOutput.isNotEmpty) {
+      await _restartDesktopStack(_primaryOutput);
+    }
     _loadDisplays();
   }
 
@@ -221,6 +254,11 @@ class _DisplayPaneState extends State<DisplayPane> {
         'resolution',
         '${width}x$height',
       ]);
+      await _updateSwayConfigDisplays();
+      await Process.run('swaymsg', ['reload']);
+      if (_primaryOutput == outputName || _primaryOutput.isEmpty) {
+        await _restartDesktopStack(_primaryOutput.isNotEmpty ? _primaryOutput : outputName);
+      }
       _loadDisplays();
     } catch (e) {
       // Ignore
@@ -243,6 +281,8 @@ class _DisplayPaneState extends State<DisplayPane> {
           '${rect['x']}',
           '${rect['y']}',
         ]);
+        await _updateSwayConfigDisplays();
+        await Process.run('swaymsg', ['reload']);
         _loadDisplays();
       }
     } catch (e) {}

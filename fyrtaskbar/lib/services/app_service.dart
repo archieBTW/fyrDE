@@ -10,42 +10,87 @@ class AppService {
     if (cachedApps != null) return cachedApps!;
 
     Map<String, DesktopApp> appMap = {};
-    List<String> searchPaths = [
-      '/usr/share/applications',
-      '${Platform.environment['HOME']}/.local/share/applications',
-    ];
+    final Set<String> searchPaths = {};
+    final home = Platform.environment['HOME'] ?? '';
+    if (home.isNotEmpty) {
+      searchPaths.add('$home/.local/share/applications');
+      searchPaths.add('$home/.local/share/flatpak/exports/share/applications');
+    }
+    final xdgDataDirs = Platform.environment['XDG_DATA_DIRS'];
+    if (xdgDataDirs != null && xdgDataDirs.isNotEmpty) {
+      for (var dir in xdgDataDirs.split(':')) {
+        if (dir.trim().isNotEmpty) {
+          searchPaths.add('${dir.trim()}/applications');
+        }
+      }
+    }
+    searchPaths.add('/usr/local/share/applications');
+    searchPaths.add('/usr/share/applications');
+    searchPaths.add('/var/lib/flatpak/exports/share/applications');
+    searchPaths.add('/var/lib/snapd/desktop/applications');
 
     for (String path in searchPaths) {
       final dir = Directory(path);
       if (await dir.exists()) {
-        final entities = dir.listSync();
-        for (var entity in entities) {
-          if (entity is File && entity.path.endsWith('.desktop')) {
-            try {
-              final content = await entity.readAsString();
-              final fileId = entity.path.split('/').last;
-              String? name;
-              String? exec;
-              String? icon;
-              bool noDisplay = false;
+        try {
+          final entities = dir.listSync();
+          for (var entity in entities) {
+            if (entity is File && entity.path.endsWith('.desktop')) {
+              try {
+                final content = await entity.readAsString();
+                final fileId = entity.path.split('/').last;
+                String? name;
+                String? exec;
+                String? icon;
+                String? onlyShowIn;
+                String? notShowIn;
+                bool noDisplay = false;
 
-              for (var line in content.split('\n')) {
-                if (line.startsWith('Name=') && name == null) {
-                  name = line.substring(5);
-                } else if (line.startsWith('Exec=') && exec == null) {
-                  exec = line.substring(5);
-                } else if (line.startsWith('Icon=') && icon == null) {
-                  icon = line.substring(5);
-                } else if (line.toLowerCase().startsWith('nodisplay=')) {
-                  noDisplay = line.split('=')[1].trim().toLowerCase() == 'true';
+                for (var line in content.split('\n')) {
+                  final trimmed = line.trim();
+                  if (trimmed.startsWith('Name=') && name == null) {
+                    name = trimmed.substring(5).trim();
+                  } else if (trimmed.startsWith('Exec=') && exec == null) {
+                    exec = trimmed.substring(5).trim();
+                  } else if (trimmed.startsWith('Icon=') && icon == null) {
+                    icon = trimmed.substring(5).trim();
+                  } else if (trimmed.toLowerCase().startsWith('nodisplay=')) {
+                    noDisplay = trimmed.split('=')[1].trim().toLowerCase() == 'true';
+                  } else if (trimmed.startsWith('OnlyShowIn=')) {
+                    onlyShowIn = trimmed.substring(11).trim();
+                  } else if (trimmed.startsWith('NotShowIn=')) {
+                    notShowIn = trimmed.substring(10).trim();
+                  }
                 }
-              }
 
-              if (noDisplay) {
-                appMap.remove(fileId);
-              } else if (name != null && exec != null) {
-                // clean up exec line
-                exec = exec.replaceAll(RegExp(r' %[fFuU]'), '');
+                final currentDesktop = (Platform.environment['XDG_CURRENT_DESKTOP'] ?? 'sway').toLowerCase();
+                final currentDesktops = currentDesktop.split(':').map((s) => s.trim().toLowerCase()).where((s) => s.isNotEmpty).toSet();
+                currentDesktops.addAll(['sway', 'fyr', 'fyrde', 'wlroots']);
+
+                if (onlyShowIn != null && onlyShowIn.trim().isNotEmpty) {
+                  final allowed = onlyShowIn.split(';').map((s) => s.trim().toLowerCase()).where((s) => s.isNotEmpty).toSet();
+                  if (allowed.isNotEmpty && !allowed.any((d) => currentDesktops.contains(d))) {
+                    noDisplay = true;
+                  }
+                }
+
+                if (notShowIn != null && notShowIn.trim().isNotEmpty) {
+                  final disallowed = notShowIn.split(';').map((s) => s.trim().toLowerCase()).where((s) => s.isNotEmpty).toSet();
+                  if (disallowed.any((d) => currentDesktops.contains(d))) {
+                    noDisplay = true;
+                  }
+                }
+
+                if (noDisplay) {
+                  appMap.remove(fileId);
+                } else if (name != null && exec != null) {
+                  // clean up exec line
+                  exec = exec
+                      .replaceAll(RegExp(r'@@[uU]?\s+%[uUfF]\s+@@'), '')
+                      .replaceAll(RegExp(r'@@[uU]?'), '')
+                      .replaceAll('@@', '')
+                      .replaceAll(RegExp(r'%[a-zA-Z]'), '')
+                      .trim();
                 if (icon != null && !icon.startsWith('/')) {
                   final possiblePaths = [
                     '/usr/share/pixmaps/$icon.png',
@@ -76,16 +121,17 @@ class AppService {
                     }
                   }
                 }
-                appMap[fileId] = DesktopApp(
-                  name: name,
-                  exec: exec,
-                  icon: icon ?? '',
-                  path: entity.path,
-                );
-              }
-            } catch (e) {}
+                  appMap[fileId] = DesktopApp(
+                    name: name,
+                    exec: exec,
+                    icon: icon ?? '',
+                    path: entity.path,
+                  );
+                }
+              } catch (e) {}
+            }
           }
-        }
+        } catch (_) {}
       }
     }
 

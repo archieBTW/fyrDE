@@ -122,19 +122,52 @@ class _ResizeHandle extends StatelessWidget {
 
 bool isPicker = false;
 String? initialDirectoryPath;
+String? initialSelectedPath;
 
 void main(List<String> args) async {
   if (args.contains('--picker')) {
     isPicker = true;
   }
-  for (final arg in args) {
+  for (final rawArg in args) {
+    if (rawArg.startsWith('--picker')) continue;
+    String arg = rawArg.trim();
+    if (arg.isEmpty) continue;
+
+    if (arg.startsWith('file://')) {
+      try {
+        arg = Uri.parse(arg).toFilePath();
+      } catch (_) {
+        arg = arg.substring(7);
+      }
+    }
+    try {
+      arg = Uri.decodeFull(arg);
+    } catch (_) {}
+
+    final home = Platform.environment['HOME'] ?? '';
+    if (arg == '~' && home.isNotEmpty) {
+      arg = home;
+    } else if (arg.startsWith('~/') && home.isNotEmpty) {
+      arg = p.join(home, arg.substring(2));
+    }
+
     if (!arg.startsWith('-')) {
-      if (Directory(arg).existsSync()) {
-        initialDirectoryPath = arg;
+      final d = Directory(arg);
+      final f = File(arg);
+      if (d.existsSync()) {
+        initialDirectoryPath = d.absolute.path;
         break;
-      } else if (File(arg).existsSync()) {
-        initialDirectoryPath = File(arg).parent.path;
+      } else if (f.existsSync()) {
+        initialDirectoryPath = f.parent.absolute.path;
+        initialSelectedPath = f.absolute.path;
         break;
+      } else {
+        final parent = Directory(p.dirname(arg));
+        if (parent.existsSync()) {
+          initialDirectoryPath = parent.absolute.path;
+          initialSelectedPath = p.canonicalize(arg);
+          break;
+        }
       }
     }
   }
@@ -589,16 +622,20 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
     windowManager.setPreventClose(true);
 
     getHomeDirectoryByPlatform().then((Directory dir) async {
+      final homePath = dir.path;
       final targetDir = (initialDirectoryPath != null && Directory(initialDirectoryPath!).existsSync())
           ? Directory(initialDirectoryPath!)
           : dir;
       setState(() {
         currentDir = targetDir;
-        tagsFilePath = p.join(currentDir.path, '.fyr/files/tags.json');
+        tagsFilePath = p.join(homePath, '.fyr/files/tags.json');
+        if (initialSelectedPath != null) {
+          selectedPaths.add(initialSelectedPath!);
+        }
       });
 
-      String customTagsPath = p.join(currentDir.path, '.fyr/files/tags_config.json');
-      String pinsPath = p.join(currentDir.path, '.fyr/files/pins.json');
+      String customTagsPath = p.join(homePath, '.fyr/files/tags_config.json');
+      String pinsPath = p.join(homePath, '.fyr/files/pins.json');
       
       if (File(customTagsPath).existsSync()) {
         try {
@@ -620,6 +657,9 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
           fileInfoList = loadedFileInfo;
           s3config = loadedS3Config;
           files = currentDir.listSync();
+          if (initialSelectedPath != null && files.any((f) => f.path == initialSelectedPath)) {
+            _lastSelectedIndex = files.indexWhere((f) => f.path == initialSelectedPath);
+          }
         });
         if (s3config.enabled) {
           try {
@@ -1381,10 +1421,7 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
                   await stdout.flush();
                   exit(0);
                 }
-                var result = await Process.run('xdg-open', [filePath]);
-                if (result.exitCode != 0) {
-                  stderr.writeln('Could not open $filePath: ${result.stderr}');
-                }
+                await _openFileOrLaunch(filePath);
               }
             };
           },
@@ -1738,7 +1775,7 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
                                   _buildSidebarItem(Icons.computer, 'My Computer', () => openDirectory(Directory('/'))),
                                   if (s3config.enabled)
                                     _buildSidebarItem(Icons.cloud, 'S3 Storage', () => openDirectory(Directory(S3Service.mountPath))),
-                                  const Divider(),
+                                  const SizedBox(height: 8),
                                   if (!isSidebarCollapsed)
                                     const Padding(
                                       padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
@@ -1756,7 +1793,6 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
                           ],
                         ),
                       ),
-                      VerticalDivider(width: 1, thickness: 1, color: FyrTheme.dividerColor),
                       Expanded(
                         child: StreamBuilder<List<FileSystemEntity>>(
                           stream: fileStream,
@@ -2158,6 +2194,17 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
             },
           ),
         ),
+        if (file.path.endsWith('.desktop'))
+          PopupMenuItem(
+            child: ListTile(
+              leading: const Icon(Icons.play_arrow),
+              title: const Text('Launch Application'),
+              onTap: () {
+                Navigator.pop(context);
+                _launchDesktopFile(file.path);
+              },
+            ),
+          ),
         if (!FileSystemEntity.isDirectorySync(file.path))
           PopupMenuItem(
             child: ListTile(
@@ -2563,6 +2610,28 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
             },
           ),
         ),
+        if (file.path.endsWith('.desktop'))
+          PopupMenuItem(
+            child: ListTile(
+              leading: const Icon(Icons.play_arrow),
+              title: const Text('Launch Application'),
+              onTap: () {
+                Navigator.pop(context);
+                _launchDesktopFile(file.path);
+              },
+            ),
+          ),
+        if (!FileSystemEntity.isDirectorySync(file.path))
+          PopupMenuItem(
+            child: ListTile(
+              leading: const Icon(Icons.open_in_new),
+              title: const Text('Open With...'),
+              onTap: () {
+                Navigator.pop(context);
+                _showOpenWithDialog(context, file.path);
+              },
+            ),
+          ),
         if (_isArchive(file.path))
           PopupMenuItem(
             child: ListTile(
@@ -2644,69 +2713,246 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
     );
   }
 
-  Future<void> _showOpenWithDialog(BuildContext context, String filePath) async {
-    final searchPaths = [
-      '/usr/share/applications',
-      '${Platform.environment['HOME']}/.local/share/applications',
-    ];
-    List<Map<String, String>> apps = [];
-    for (var p in searchPaths) {
-      final dir = Directory(p);
-      if (await dir.exists()) {
-        for (var file in dir.listSync()) {
-          if (file.path.endsWith('.desktop')) {
-            try {
-              final content = await File(file.path).readAsString();
-              String? name;
-              String? exec;
-              for (var line in content.split('\n')) {
-                if (line.startsWith('Name=') && name == null) name = line.substring(5);
-                if (line.startsWith('Exec=') && exec == null) exec = line.substring(5);
-              }
-              if (name != null && exec != null) {
-                exec = exec.replaceAll(RegExp(r' %[fFuU]'), '');
-                apps.add({'name': name, 'exec': exec});
-              }
-            } catch (_) {}
+  Future<void> _openFileOrLaunch(String filePath) async {
+    if (filePath.endsWith('.desktop')) {
+      await _launchDesktopFile(filePath);
+      return;
+    }
+    final file = File(filePath);
+    if (file.existsSync()) {
+      try {
+        final stat = file.statSync();
+        final isExecutable = (stat.mode & 0x49) != 0;
+        if (isExecutable &&
+            (filePath.endsWith('.sh') ||
+                filePath.endsWith('.AppImage') ||
+                !p.basename(filePath).contains('.'))) {
+          await Process.start(filePath, [], mode: ProcessStartMode.detached);
+          return;
+        }
+      } catch (_) {}
+    }
+
+    bool opened = false;
+    try {
+      await Process.start('gio', ['open', filePath], mode: ProcessStartMode.detached);
+      opened = true;
+    } catch (_) {}
+
+    if (!opened) {
+      try {
+        await Process.start('xdg-open', [filePath], mode: ProcessStartMode.detached);
+      } catch (e) {
+        stderr.writeln('Could not open $filePath: $e');
+      }
+    }
+  }
+
+  Future<void> _launchDesktopFile(String desktopPath, [String? fileArg]) async {
+    try {
+      if (fileArg != null) {
+        await Process.start('gio', ['launch', desktopPath, fileArg], mode: ProcessStartMode.detached);
+      } else {
+        await Process.start('gio', ['launch', desktopPath], mode: ProcessStartMode.detached);
+      }
+      return;
+    } catch (_) {}
+
+    try {
+      final lines = await File(desktopPath).readAsLines();
+      String? exec;
+      for (var line in lines) {
+        final trimmed = line.trim();
+        if (trimmed.startsWith('Exec=')) {
+          exec = trimmed.substring(5).trim();
+          break;
+        }
+      }
+      if (exec != null) {
+        if (fileArg != null) {
+          if (exec.contains('@@')) {
+            exec = exec.replaceAll(RegExp(r'@@[uU]?\s+%[uUfF]\s+@@'), fileArg);
+            exec = exec.replaceAll(RegExp(r'@@[uU]?'), '');
+            exec = exec.replaceAll('@@', '');
           }
+          if (exec.contains('%f') || exec.contains('%F') || exec.contains('%u') || exec.contains('%U')) {
+            exec = exec
+                .replaceAll('%f', fileArg)
+                .replaceAll('%F', fileArg)
+                .replaceAll('%u', fileArg)
+                .replaceAll('%U', fileArg);
+          } else {
+            exec = '$exec "$fileArg"';
+          }
+        }
+        exec = exec.replaceAll(RegExp(r'%[a-zA-Z]'), '').replaceAll('@@u', '').replaceAll('@@', '').trim();
+        await Process.start('sh', ['-c', exec], mode: ProcessStartMode.detached);
+      }
+    } catch (e) {
+      stderr.writeln('Error launching $desktopPath: $e');
+    }
+  }
+
+  Future<void> _showOpenWithDialog(BuildContext context, String filePath) async {
+    final Set<String> searchPaths = {};
+    final home = Platform.environment['HOME'] ?? '';
+    if (home.isNotEmpty) {
+      searchPaths.add('$home/.local/share/applications');
+      searchPaths.add('$home/.local/share/flatpak/exports/share/applications');
+    }
+    final xdgDataDirs = Platform.environment['XDG_DATA_DIRS'];
+    if (xdgDataDirs != null && xdgDataDirs.isNotEmpty) {
+      for (var dir in xdgDataDirs.split(':')) {
+        if (dir.trim().isNotEmpty) {
+          searchPaths.add('${dir.trim()}/applications');
         }
       }
     }
-    apps.sort((a, b) => a['name']!.compareTo(b['name']!));
+    searchPaths.add('/usr/local/share/applications');
+    searchPaths.add('/usr/share/applications');
+    searchPaths.add('/var/lib/flatpak/exports/share/applications');
+    searchPaths.add('/var/lib/snapd/desktop/applications');
+
+    final Set<String> seenDesktopFiles = {};
+    List<Map<String, String>> apps = [];
+
+    for (var pth in searchPaths) {
+      final dir = Directory(pth);
+      if (await dir.exists()) {
+        try {
+          for (var file in dir.listSync()) {
+            if (file.path.endsWith('.desktop')) {
+              final desktopFile = file.path.split('/').last;
+              if (seenDesktopFiles.contains(desktopFile)) continue;
+              try {
+                final content = await File(file.path).readAsString();
+                String? name;
+                String? exec;
+                bool noDisplay = false;
+                for (var line in content.split('\n')) {
+                  final trimmed = line.trim();
+                  if (trimmed.startsWith('Name=') && name == null) name = trimmed.substring(5).trim();
+                  if (trimmed.startsWith('Exec=') && exec == null) exec = trimmed.substring(5).trim();
+                  if (trimmed.toLowerCase() == 'nodisplay=true') noDisplay = true;
+                }
+                if (name != null && exec != null && !noDisplay) {
+                  seenDesktopFiles.add(desktopFile);
+                  apps.add({
+                    'name': name,
+                    'exec': exec,
+                    'desktopPath': file.path,
+                    'desktopFile': desktopFile,
+                  });
+                }
+              } catch (_) {}
+            }
+          }
+        } catch (_) {}
+      }
+    }
+    apps.sort((a, b) => a['name']!.toLowerCase().compareTo(b['name']!.toLowerCase()));
+
+    if (!context.mounted) return;
 
     showDialog(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: FyrTheme.bgColor,
-          title: Text('Open With...', style: TextStyle(color: FyrTheme.textColor)),
-          content: SizedBox(
-            width: 400,
-            height: 400,
-            child: ListView.builder(
-              itemCount: apps.length,
-              itemBuilder: (context, index) {
-                return ListTile(
-                  title: Text(apps[index]['name']!, style: TextStyle(color: FyrTheme.textColor)),
-                  onTap: () {
-                    Navigator.pop(context);
-                    final parts = apps[index]['exec']!.trim().split(' ').where((s) => s.isNotEmpty).toList();
-                    if (parts.isNotEmpty) {
-                      Process.start(parts[0], [...parts.sublist(1), filePath], mode: ProcessStartMode.detached);
-                    }
-                  },
-                );
-              },
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text('Cancel', style: TextStyle(color: FyrTheme.accentColor)),
-            )
-          ],
+      builder: (dialogCtx) {
+        String searchQuery = '';
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            final filteredApps = searchQuery.isEmpty
+                ? apps
+                : apps.where((a) => a['name']!.toLowerCase().contains(searchQuery.toLowerCase())).toList();
+
+            return AlertDialog(
+              backgroundColor: FyrTheme.cardColor,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: FyrTheme.isDark ? BorderSide.none : BorderSide(color: FyrTheme.dividerColor),
+              ),
+              title: Row(
+                children: [
+                  Icon(Icons.open_in_new, color: FyrTheme.accentColor),
+                  const SizedBox(width: 12),
+                  Text('Open With...', style: TextStyle(color: FyrTheme.textColor, fontWeight: FontWeight.bold)),
+                ],
+              ),
+              content: SizedBox(
+                width: 440,
+                height: 480,
+                child: Column(
+                  children: [
+                    TextField(
+                      decoration: InputDecoration(
+                        hintText: 'Search applications...',
+                        hintStyle: TextStyle(color: FyrTheme.textColorMuted),
+                        prefixIcon: Icon(Icons.search, color: FyrTheme.accentColor),
+                        filled: true,
+                        fillColor: FyrTheme.isDark ? Colors.black26 : Colors.black.withOpacity(0.04),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: BorderSide.none,
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      ),
+                      style: TextStyle(color: FyrTheme.textColor),
+                      onChanged: (val) {
+                        setModalState(() {
+                          searchQuery = val;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    Expanded(
+                      child: filteredApps.isEmpty
+                          ? Center(
+                              child: Text(
+                                'No matching applications',
+                                style: TextStyle(color: FyrTheme.textColorMuted),
+                              ),
+                            )
+                          : ListView.builder(
+                              itemCount: filteredApps.length,
+                              itemBuilder: (context, index) {
+                                final app = filteredApps[index];
+                                return ListTile(
+                                  leading: Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: FyrTheme.accentColor.withOpacity(0.12),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Icon(Icons.apps, color: FyrTheme.accentColor, size: 20),
+                                  ),
+                                  title: Text(
+                                    app['name']!,
+                                    style: TextStyle(color: FyrTheme.textColor, fontWeight: FontWeight.w500),
+                                  ),
+                                  subtitle: Text(
+                                    app['desktopFile']!,
+                                    style: TextStyle(color: FyrTheme.textColorMuted, fontSize: 11),
+                                  ),
+                                  onTap: () async {
+                                    Navigator.pop(dialogCtx);
+                                    await _launchDesktopFile(app['desktopPath']!, filePath);
+                                  },
+                                );
+                              },
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogCtx),
+                  child: Text('Cancel', style: TextStyle(color: FyrTheme.accentColor)),
+                ),
+              ],
+            );
+          },
         );
-      }
+      },
     );
   }
 }

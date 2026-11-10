@@ -320,39 +320,89 @@ class AppService {
     if (cachedApps != null) return cachedApps!;
 
     List<DesktopApp> apps = [];
-    List<String> searchPaths = [
-      '/usr/share/applications',
-      '${Platform.environment['HOME']}/.local/share/applications',
-    ];
+    final Set<String> searchPaths = {};
+    final home = Platform.environment['HOME'] ?? '';
+    if (home.isNotEmpty) {
+      searchPaths.add('$home/.local/share/applications');
+      searchPaths.add('$home/.local/share/flatpak/exports/share/applications');
+    }
+    final xdgDataDirs = Platform.environment['XDG_DATA_DIRS'];
+    if (xdgDataDirs != null && xdgDataDirs.isNotEmpty) {
+      for (var dir in xdgDataDirs.split(':')) {
+        if (dir.trim().isNotEmpty) {
+          searchPaths.add('${dir.trim()}/applications');
+        }
+      }
+    }
+    searchPaths.add('/usr/local/share/applications');
+    searchPaths.add('/usr/share/applications');
+    searchPaths.add('/var/lib/flatpak/exports/share/applications');
+    searchPaths.add('/var/lib/snapd/desktop/applications');
+
+    final Set<String> seenDesktopFiles = {};
 
     for (String path in searchPaths) {
       final dir = Directory(path);
       if (await dir.exists()) {
-        final entities = dir.listSync();
-        for (var entity in entities) {
-          if (entity is File && entity.path.endsWith('.desktop')) {
-            try {
-              final content = await entity.readAsString();
-              String? name;
-              String? exec;
-              String? icon;
-              bool noDisplay = false;
+        try {
+          final entities = dir.listSync();
+          for (var entity in entities) {
+            if (entity is File && entity.path.endsWith('.desktop')) {
+              final desktopFile = entity.path.split('/').last;
+              if (seenDesktopFiles.contains(desktopFile)) continue;
+              try {
+                final content = await entity.readAsString();
+                String? name;
+                String? exec;
+                String? icon;
+                String? onlyShowIn;
+                String? notShowIn;
+                bool noDisplay = false;
 
-              for (var line in content.split('\n')) {
-                if (line.startsWith('Name=') && name == null) {
-                  name = line.substring(5);
-                } else if (line.startsWith('Exec=') && exec == null) {
-                  exec = line.substring(5);
-                } else if (line.startsWith('Icon=') && icon == null) {
-                  icon = line.substring(5);
-                } else if (line.startsWith('NoDisplay=true')) {
-                  noDisplay = true;
+                for (var line in content.split('\n')) {
+                  final trimmed = line.trim();
+                  if (trimmed.startsWith('Name=') && name == null) {
+                    name = trimmed.substring(5).trim();
+                  } else if (trimmed.startsWith('Exec=') && exec == null) {
+                    exec = trimmed.substring(5).trim();
+                  } else if (trimmed.startsWith('Icon=') && icon == null) {
+                    icon = trimmed.substring(5).trim();
+                  } else if (trimmed.toLowerCase() == 'nodisplay=true') {
+                    noDisplay = true;
+                  } else if (trimmed.startsWith('OnlyShowIn=')) {
+                    onlyShowIn = trimmed.substring(11).trim();
+                  } else if (trimmed.startsWith('NotShowIn=')) {
+                    notShowIn = trimmed.substring(10).trim();
+                  }
                 }
-              }
 
-              if (name != null && exec != null && !noDisplay) {
-                // clean up exec line
-                exec = exec.replaceAll(RegExp(r' %[fFuU]'), '');
+                final currentDesktop = (Platform.environment['XDG_CURRENT_DESKTOP'] ?? 'sway').toLowerCase();
+                final currentDesktops = currentDesktop.split(':').map((s) => s.trim().toLowerCase()).where((s) => s.isNotEmpty).toSet();
+                currentDesktops.addAll(['sway', 'fyr', 'fyrde', 'wlroots']);
+
+                if (onlyShowIn != null && onlyShowIn.trim().isNotEmpty) {
+                  final allowed = onlyShowIn.split(';').map((s) => s.trim().toLowerCase()).where((s) => s.isNotEmpty).toSet();
+                  if (allowed.isNotEmpty && !allowed.any((d) => currentDesktops.contains(d))) {
+                    noDisplay = true;
+                  }
+                }
+
+                if (notShowIn != null && notShowIn.trim().isNotEmpty) {
+                  final disallowed = notShowIn.split(';').map((s) => s.trim().toLowerCase()).where((s) => s.isNotEmpty).toSet();
+                  if (disallowed.any((d) => currentDesktops.contains(d))) {
+                    noDisplay = true;
+                  }
+                }
+
+                if (name != null && exec != null && !noDisplay) {
+                  seenDesktopFiles.add(desktopFile);
+                  // clean up exec line
+                  exec = exec
+                      .replaceAll(RegExp(r'@@[uU]?\s+%[uUfF]\s+@@'), '')
+                      .replaceAll(RegExp(r'@@[uU]?'), '')
+                      .replaceAll('@@', '')
+                      .replaceAll(RegExp(r'%[a-zA-Z]'), '')
+                      .trim();
                 if (icon != null && !icon.startsWith('/')) {
                   final possiblePaths = [
                     '/usr/share/pixmaps/$icon.png',
@@ -386,8 +436,9 @@ class AppService {
             } catch (e) {}
           }
         }
-      }
+      } catch (_) {}
     }
+  }
 
     apps.sort((a, b) => a.name.compareTo(b.name));
     cachedApps = apps;
@@ -879,11 +930,25 @@ class _StartMenuPopupState extends State<StartMenuPopup>
   }
 
   void _filterApps() {
-    final query = _searchController.text.toLowerCase();
+    final query = _searchController.text.toLowerCase().trim();
     setState(() {
-      _filteredApps = _apps
-          .where((app) => app.name.toLowerCase().contains(query))
-          .toList();
+      if (query.isEmpty) {
+        _filteredApps = _apps;
+      } else {
+        _filteredApps = _apps.where((app) {
+          final name = app.name.toLowerCase();
+          final exec = app.exec.toLowerCase();
+          return name.contains(query) || exec.contains(query);
+        }).toList()..sort((a, b) {
+          final aName = a.name.toLowerCase();
+          final bName = b.name.toLowerCase();
+          bool aStarts = aName.startsWith(query);
+          bool bStarts = bName.startsWith(query);
+          if (aStarts && !bStarts) return -1;
+          if (!aStarts && bStarts) return 1;
+          return aName.compareTo(bName);
+        });
+      }
     });
   }
 

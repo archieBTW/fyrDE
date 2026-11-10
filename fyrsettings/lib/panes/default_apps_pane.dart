@@ -35,44 +35,65 @@ class _DefaultAppsPaneState extends State<DefaultAppsPane> {
 
   Future<void> _loadInstalledApps() async {
     List<DesktopApp> apps = [];
-    List<String> searchPaths = [
-      '/usr/share/applications',
-      '${Platform.environment['HOME']}/.local/share/applications',
-    ];
+    final Set<String> searchPaths = {};
+    final home = Platform.environment['HOME'] ?? '';
+    if (home.isNotEmpty) {
+      searchPaths.add('$home/.local/share/applications');
+      searchPaths.add('$home/.local/share/flatpak/exports/share/applications');
+    }
+    final xdgDataDirs = Platform.environment['XDG_DATA_DIRS'];
+    if (xdgDataDirs != null && xdgDataDirs.isNotEmpty) {
+      for (var dir in xdgDataDirs.split(':')) {
+        if (dir.trim().isNotEmpty) {
+          searchPaths.add('${dir.trim()}/applications');
+        }
+      }
+    }
+    searchPaths.add('/usr/local/share/applications');
+    searchPaths.add('/usr/share/applications');
+    searchPaths.add('/var/lib/flatpak/exports/share/applications');
+    searchPaths.add('/var/lib/snapd/desktop/applications');
+
+    final Set<String> seenDesktopFiles = {};
 
     for (String path in searchPaths) {
       final dir = Directory(path);
       if (await dir.exists()) {
-        final entities = dir.listSync();
-        for (var entity in entities) {
-          if (entity is File && entity.path.endsWith('.desktop')) {
-            try {
-              final content = await entity.readAsString();
-              String? name;
-              String? exec;
-              bool noDisplay = false;
+        try {
+          final entities = dir.listSync();
+          for (var entity in entities) {
+            if (entity is File && entity.path.endsWith('.desktop')) {
+              final desktopFile = entity.path.split('/').last;
+              if (seenDesktopFiles.contains(desktopFile)) continue;
+              try {
+                final content = await entity.readAsString();
+                String? name;
+                String? exec;
+                bool noDisplay = false;
 
-              for (var line in content.split('\n')) {
-                if (line.startsWith('Name=') && name == null) {
-                  name = line.substring(5);
-                } else if (line.startsWith('Exec=') && exec == null) {
-                  exec = line.substring(5);
-                } else if (line.startsWith('NoDisplay=true')) {
-                  noDisplay = true;
+                for (var line in content.split('\n')) {
+                  final trimmed = line.trim();
+                  if (trimmed.startsWith('Name=') && name == null) {
+                    name = trimmed.substring(5).trim();
+                  } else if (trimmed.startsWith('Exec=') && exec == null) {
+                    exec = trimmed.substring(5).trim();
+                  } else if (trimmed.toLowerCase() == 'nodisplay=true') {
+                    noDisplay = true;
+                  }
                 }
-              }
 
-              if (name != null && exec != null && !noDisplay) {
-                final desktopFile = entity.path.split('/').last;
-                apps.add(DesktopApp(name: name, exec: exec, desktopFile: desktopFile));
-              }
-            } catch (e) {}
+                if (name != null && exec != null && !noDisplay) {
+                  seenDesktopFiles.add(desktopFile);
+                  apps.add(DesktopApp(name: name, exec: exec, desktopFile: desktopFile));
+                }
+              } catch (e) {}
+            }
           }
-        }
+        } catch (_) {}
       }
     }
 
-    apps.sort((a, b) => a.name.compareTo(b.name));
+    apps.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     setState(() {
       _installedApps = apps;
     });
@@ -231,12 +252,19 @@ class _DefaultAppsPaneState extends State<DefaultAppsPane> {
             ),
             dropdownColor: FyrTheme.cardColor,
             style: TextStyle(color: FyrTheme.textColor, fontSize: 16),
-            items: _installedApps.map((app) {
-              return DropdownMenuItem<String>(
-                value: app.desktopFile,
-                child: Text(app.name, overflow: TextOverflow.ellipsis),
-              );
-            }).toList(),
+            items: [
+              ..._installedApps.map((app) {
+                return DropdownMenuItem<String>(
+                  value: app.desktopFile,
+                  child: Text(app.name, overflow: TextOverflow.ellipsis),
+                );
+              }),
+              if (value.isNotEmpty && !_installedApps.any((app) => app.desktopFile == value))
+                DropdownMenuItem<String>(
+                  value: value,
+                  child: Text(value.replaceAll('.desktop', ''), overflow: TextOverflow.ellipsis),
+                ),
+            ],
             onChanged: (val) {
               if (val != null) {
                 onChanged(val);

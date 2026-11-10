@@ -54,6 +54,9 @@ class DesktopApp {
   final String exec;
   final String? icon;
   final bool noDisplay;
+  final String? genericName;
+  final String? comment;
+  final String? keywords;
 
   DesktopApp({
     required this.id,
@@ -61,6 +64,9 @@ class DesktopApp {
     required this.exec,
     this.icon,
     this.noDisplay = false,
+    this.genericName,
+    this.comment,
+    this.keywords,
   });
 }
 
@@ -120,66 +126,125 @@ class _LauncherScreenState extends State<LauncherScreen>
 
 
   Future<void> _loadApps() async {
-    final List<String> searchPaths = [
-      '/usr/share/applications',
-      '${Platform.environment['HOME']}/.local/share/applications',
-    ];
+    final Set<String> searchPaths = {};
+    final home = Platform.environment['HOME'] ?? '';
+    if (home.isNotEmpty) {
+      searchPaths.add('$home/.local/share/applications');
+      searchPaths.add('$home/.local/share/flatpak/exports/share/applications');
+    }
+    final xdgDataDirs = Platform.environment['XDG_DATA_DIRS'];
+    if (xdgDataDirs != null && xdgDataDirs.isNotEmpty) {
+      for (var dir in xdgDataDirs.split(':')) {
+        if (dir.trim().isNotEmpty) {
+          searchPaths.add('${dir.trim()}/applications');
+        }
+      }
+    }
+    searchPaths.add('/usr/local/share/applications');
+    searchPaths.add('/usr/share/applications');
+    searchPaths.add('/var/lib/flatpak/exports/share/applications');
+    searchPaths.add('/var/lib/snapd/desktop/applications');
 
     List<DesktopApp> loadedApps = [];
+    final Set<String> seenFileIds = {};
 
     for (String path in searchPaths) {
       final dir = Directory(path);
       if (await dir.exists()) {
-        final files = dir.listSync().whereType<File>().where(
-          (f) => f.path.endsWith('.desktop'),
-        );
+        try {
+          final files = dir.listSync().whereType<File>().where(
+            (f) => f.path.endsWith('.desktop'),
+          );
 
-        for (var file in files) {
-          final content = await file.readAsLines();
-          final fileId = file.path.split('/').last;
+          for (var file in files) {
+            final fileId = file.path.split('/').last;
+            if (seenFileIds.contains(fileId)) continue;
+            final content = await file.readAsLines();
 
-          String? name;
-          String? exec;
-          String? icon;
-          bool noDisplay = false;
+            String? name;
+            String? exec;
+            String? icon;
+            String? genericName;
+            String? comment;
+            String? keywords;
+            String? onlyShowIn;
+            String? notShowIn;
+            bool noDisplay = false;
 
-          for (var line in content) {
-            if (line.startsWith('Name=') && name == null) {
-              name = line.substring(5).trim();
+            for (var line in content) {
+              final trimmed = line.trim();
+              if (trimmed.startsWith('Name=') && name == null) {
+                name = trimmed.substring(5).trim();
+              }
+              if (trimmed.startsWith('GenericName=') && genericName == null) {
+                genericName = trimmed.substring(12).trim();
+              }
+              if (trimmed.startsWith('Comment=') && comment == null) {
+                comment = trimmed.substring(8).trim();
+              }
+              if (trimmed.startsWith('Keywords=') && keywords == null) {
+                keywords = trimmed.substring(9).trim();
+              }
+              if (trimmed.startsWith('Icon=') && icon == null) {
+                icon = trimmed.substring(5).trim();
+              }
+              if (trimmed.startsWith('NoDisplay=')) {
+                noDisplay = trimmed.substring(10).trim().toLowerCase() == 'true';
+              }
+              if (trimmed.startsWith('OnlyShowIn=')) {
+                onlyShowIn = trimmed.substring(11).trim();
+              }
+              if (trimmed.startsWith('NotShowIn=')) {
+                notShowIn = trimmed.substring(10).trim();
+              }
+              if (trimmed.startsWith('Exec=') && exec == null) {
+                exec = trimmed
+                    .substring(5)
+                    .replaceAll(RegExp(r'@@[uU]?\s+%[uUfF]\s+@@'), '')
+                    .replaceAll(RegExp(r'@@[uU]?'), '')
+                    .replaceAll('@@', '')
+                    .replaceAll(RegExp(r'%[a-zA-Z]'), '')
+                    .trim();
+              }
             }
-            if (line.startsWith('Icon=') && icon == null) {
-              icon = line.substring(5).trim();
+
+            // Exclude apps not intended for this desktop (e.g. OnlyShowIn=GNOME)
+            final currentDesktop = (Platform.environment['XDG_CURRENT_DESKTOP'] ?? 'sway').toLowerCase();
+            final currentDesktops = currentDesktop.split(':').map((s) => s.trim().toLowerCase()).where((s) => s.isNotEmpty).toSet();
+            currentDesktops.addAll(['sway', 'fyr', 'fyrde', 'wlroots']);
+
+            if (onlyShowIn != null && onlyShowIn.trim().isNotEmpty) {
+              final allowed = onlyShowIn.split(';').map((s) => s.trim().toLowerCase()).where((s) => s.isNotEmpty).toSet();
+              if (allowed.isNotEmpty && !allowed.any((d) => currentDesktops.contains(d))) {
+                noDisplay = true;
+              }
             }
-            if (line.startsWith('NoDisplay=') ) {
-              noDisplay = line.substring(10).trim().toLowerCase() == 'true';
+
+            if (notShowIn != null && notShowIn.trim().isNotEmpty) {
+              final disallowed = notShowIn.split(';').map((s) => s.trim().toLowerCase()).where((s) => s.isNotEmpty).toSet();
+              if (disallowed.any((d) => currentDesktops.contains(d))) {
+                noDisplay = true;
+              }
             }
-            if (line.startsWith('Exec=') && exec == null) {
-              exec = line
-                  .substring(5)
-                  .replaceAll(RegExp(r'%[a-zA-Z]'), '')
-                  .replaceAll('@@u', '')
-                  .trim();
+
+            if (name != null && exec != null && !noDisplay) {
+              seenFileIds.add(fileId);
+              loadedApps.add(
+                DesktopApp(
+                  id: fileId,
+                  name: name,
+                  exec: exec,
+                  icon: icon,
+                  genericName: genericName,
+                  comment: comment,
+                  keywords: keywords,
+                ),
+              );
             }
           }
-
-          if (name != null && exec != null) {
-            loadedApps.add(
-              DesktopApp(
-                id: fileId,
-                name: name,
-                exec: exec,
-                icon: icon,
-                noDisplay: noDisplay,
-              ),
-            );
-          }
-        }
+        } catch (_) {}
       }
     }
-
-    final uniqueApps = {
-      for (var app in loadedApps) app.name: app,
-    }.values.toList();
 
     final orderedIds = [
       'fyrbrowser.desktop',
@@ -196,6 +261,26 @@ class _LauncherScreenState extends State<LauncherScreen>
       'fyrcalender.desktop',
       'fyrclock.desktop',
     ];
+
+    // Deduplicate by app name or desktop file ID without letting foreign apps overwrite FyrDE apps
+    final Map<String, DesktopApp> uniqueAppsMap = {};
+    for (var app in loadedApps) {
+      final key = app.name.toLowerCase().trim();
+      if (!uniqueAppsMap.containsKey(key)) {
+        uniqueAppsMap[key] = app;
+      } else {
+        final existing = uniqueAppsMap[key]!;
+        final isAppFyr = orderedIds.contains(app.id) || app.id.startsWith('fyr');
+        final isExistingFyr = orderedIds.contains(existing.id) || existing.id.startsWith('fyr');
+        if (isAppFyr && !isExistingFyr) {
+          uniqueAppsMap[key] = app;
+        } else if (!isAppFyr && !isExistingFyr && app.id != existing.id) {
+          uniqueAppsMap['${key}_${app.id}'] = app;
+        }
+      }
+    }
+
+    final uniqueApps = uniqueAppsMap.values.toList();
 
     uniqueApps.sort((a, b) {
       int indexA = orderedIds.indexOf(a.id);
@@ -219,25 +304,71 @@ class _LauncherScreenState extends State<LauncherScreen>
 
   Future<void> _filterApps(String query) async {
     setState(() {
-      if (query.isEmpty) {
+      final q = query.toLowerCase().trim();
+      if (q.isEmpty) {
         _filteredApps = List.from(_defaultApps);
       } else {
-        _filteredApps =
-            _allApps.where((app) {
-              return !app.noDisplay && app.name.toLowerCase().contains(query.toLowerCase());
-            }).toList()..sort((a, b) {
-              final lowerQuery = query.toLowerCase();
-              final aName = a.name.toLowerCase();
-              final bName = b.name.toLowerCase();
+        final orderedIds = [
+          'fyrbrowser.desktop',
+          'fyrfiles.desktop',
+          'fyrterm.desktop',
+          'fyrstore.desktop',
+          'fyrsettings.desktop',
+          'fyrcalculator.desktop',
+          'fyrdaw.desktop',
+          'fyrjournal.desktop',
+          'fyrvirt.desktop',
+          'fyrphotos.desktop',
+          'fyrav.desktop',
+          'fyrcalender.desktop',
+          'fyrclock.desktop',
+        ];
 
-              bool aStarts = aName.startsWith(lowerQuery);
-              bool bStarts = bName.startsWith(lowerQuery);
+        _filteredApps = _allApps.where((app) {
+          if (app.noDisplay) return false;
+          final name = app.name.toLowerCase();
+          final id = app.id.toLowerCase().replaceAll('.desktop', '');
+          final exec = app.exec.toLowerCase();
+          final generic = (app.genericName ?? '').toLowerCase();
+          final comment = (app.comment ?? '').toLowerCase();
+          final keywords = (app.keywords ?? '').toLowerCase();
 
-              if (aStarts && !bStarts) return -1;
-              if (!aStarts && bStarts) return 1;
+          return name.contains(q) ||
+              id.contains(q) ||
+              exec.contains(q) ||
+              generic.contains(q) ||
+              comment.contains(q) ||
+              keywords.contains(q);
+        }).toList()..sort((a, b) {
+          final aName = a.name.toLowerCase();
+          final bName = b.name.toLowerCase();
+          final aId = a.id.toLowerCase().replaceAll('.desktop', '');
+          final bId = b.id.toLowerCase().replaceAll('.desktop', '');
 
-              return aName.compareTo(bName);
-            });
+          // Exact match priority
+          if (aName == q || aId == q) return -1;
+          if (bName == q || bId == q) return 1;
+
+          // Name prefix match
+          bool aStarts = aName.startsWith(q);
+          bool bStarts = bName.startsWith(q);
+          if (aStarts && !bStarts) return -1;
+          if (!aStarts && bStarts) return 1;
+
+          // ID prefix match
+          bool aIdStarts = aId.startsWith(q);
+          bool bIdStarts = bId.startsWith(q);
+          if (aIdStarts && !bIdStarts) return -1;
+          if (!aIdStarts && bIdStarts) return 1;
+
+          // FyrDE apps priority
+          final aIsFyr = orderedIds.contains(a.id) || a.id.startsWith('fyr');
+          final bIsFyr = orderedIds.contains(b.id) || b.id.startsWith('fyr');
+          if (aIsFyr && !bIsFyr) return -1;
+          if (!aIsFyr && bIsFyr) return 1;
+
+          return aName.compareTo(bName);
+        });
       }
       _selectedIndex = -1;
       _currentPage = 0;
