@@ -325,9 +325,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
               children: [
                 GestureDetector(
                   onTap: () async {
-                    FilePickerResult? result = await FilePicker.platform.pickFiles(type: FileType.image);
-                    if (result != null) {
-                      setDialogState(() => newArtworkPath = result.files.single.path);
+                    final imagePath = await _pickFileOrDirectory(
+                      title: 'Select Artwork Image',
+                      type: FileType.image,
+                    );
+                    if (imagePath != null) {
+                      setDialogState(() => newArtworkPath = imagePath);
                     }
                   },
                   child: Container(
@@ -483,8 +486,103 @@ class _LibraryScreenState extends State<LibraryScreen> {
     }
   }
 
+  Future<String?> _pickFileOrDirectory({
+    String? title,
+    String? initialDirectory,
+    bool pickDirectory = false,
+    FileType type = FileType.any,
+    List<String>? allowedExtensions,
+  }) async {
+    final home = Platform.environment['HOME'] ?? '';
+    final fyrfilesCandidates = [
+      if (home.isNotEmpty) p.join(home, '.local/bin/fyrfiles'),
+      if (home.isNotEmpty) p.join(home, '.local/share/fyrDE/fyrfiles/fyrfiles'),
+      '/usr/local/bin/fyrfiles',
+      '/usr/bin/fyrfiles',
+    ];
+
+    String? fyrfilesPath;
+    for (final c in fyrfilesCandidates) {
+      if (File(c).existsSync()) {
+        fyrfilesPath = c;
+        break;
+      }
+    }
+
+    if (fyrfilesPath != null) {
+      try {
+        final defaultFallback = pickDirectory
+            ? (home.isNotEmpty && Directory(p.join(home, 'Music')).existsSync()
+                ? p.join(home, 'Music')
+                : (home.isNotEmpty ? home : '.'))
+            : (home.isNotEmpty && Directory(p.join(home, 'Pictures')).existsSync()
+                ? p.join(home, 'Pictures')
+                : (home.isNotEmpty ? home : '.'));
+
+        final startDir = (initialDirectory != null && (Directory(initialDirectory).existsSync() || File(initialDirectory).existsSync()))
+            ? initialDirectory
+            : defaultFallback;
+
+        final args = <String>['--picker'];
+        if (title != null && title.isNotEmpty) {
+          args.add('--title=$title');
+        }
+        args.add(startDir);
+
+        final res = await Process.run(fyrfilesPath, args);
+        if (res.exitCode == 0) {
+          final out = res.stdout.toString().trim();
+          if (out.isNotEmpty) {
+            final picked = out.split('\n').first.trim();
+            if (pickDirectory) {
+              if (Directory(picked).existsSync()) {
+                return picked;
+              } else if (File(picked).existsSync()) {
+                return p.dirname(picked);
+              }
+            } else {
+              if (File(picked).existsSync()) {
+                return picked;
+              }
+            }
+          }
+        }
+        return null;
+      } catch (_) {}
+    }
+
+    try {
+      if (pickDirectory) {
+        return await FilePicker.platform.getDirectoryPath(
+          dialogTitle: title,
+          initialDirectory: initialDirectory,
+        );
+      } else {
+        final result = await FilePicker.platform.pickFiles(
+          dialogTitle: title,
+          initialDirectory: initialDirectory,
+          type: type,
+          allowedExtensions: allowedExtensions,
+        );
+        if (result != null && result.files.isNotEmpty && result.files.single.path != null) {
+          return result.files.single.path;
+        }
+      }
+    } catch (_) {}
+
+    return null;
+  }
+
   Future<void> _importFolder() async {
-    String? folder = await FilePicker.platform.getDirectoryPath();
+    final home = Platform.environment['HOME'] ?? '';
+    final defaultDir = home.isNotEmpty && Directory(p.join(home, 'Music')).existsSync()
+        ? p.join(home, 'Music')
+        : null;
+    String? folder = await _pickFileOrDirectory(
+      title: 'Select Music Folder',
+      initialDirectory: defaultDir,
+      pickDirectory: true,
+    );
     if (folder == null) return;
 
     setState(() => _loading = true);

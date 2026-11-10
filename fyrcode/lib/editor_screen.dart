@@ -9,6 +9,7 @@ import 'package:window_manager/window_manager.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
+import 'package:path/path.dart' as p;
 import 'fyr_theme.dart';
 
 class EditorScreen extends StatefulWidget {
@@ -150,10 +151,88 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
+  Future<String?> _pickFileOrDirectory({
+    String? title,
+    String? initialDirectory,
+    bool pickDirectory = false,
+  }) async {
+    final home = Platform.environment['HOME'] ?? '';
+    final fyrfilesCandidates = [
+      if (home.isNotEmpty) p.join(home, '.local/bin/fyrfiles'),
+      if (home.isNotEmpty) p.join(home, '.local/share/fyrDE/fyrfiles/fyrfiles'),
+      '/usr/local/bin/fyrfiles',
+      '/usr/bin/fyrfiles',
+    ];
+
+    String? fyrfilesPath;
+    for (final c in fyrfilesCandidates) {
+      if (File(c).existsSync()) {
+        fyrfilesPath = c;
+        break;
+      }
+    }
+
+    if (fyrfilesPath != null) {
+      try {
+        final startDir = (initialDirectory != null && (Directory(initialDirectory).existsSync() || File(initialDirectory).existsSync()))
+            ? (File(initialDirectory).existsSync() ? p.dirname(initialDirectory) : initialDirectory)
+            : (home.isNotEmpty ? home : '.');
+
+        final args = <String>['--picker'];
+        if (title != null && title.isNotEmpty) {
+          args.add('--title=$title');
+        }
+        args.add(startDir);
+
+        final res = await Process.run(fyrfilesPath, args);
+        if (res.exitCode == 0) {
+          final out = res.stdout.toString().trim();
+          if (out.isNotEmpty) {
+            final picked = out.split('\n').first.trim();
+            if (pickDirectory) {
+              if (Directory(picked).existsSync()) {
+                return picked;
+              } else if (File(picked).existsSync()) {
+                return p.dirname(picked);
+              }
+            } else {
+              if (File(picked).existsSync()) {
+                return picked;
+              }
+            }
+          }
+        }
+        return null;
+      } catch (_) {}
+    }
+
+    try {
+      if (pickDirectory) {
+        return await FilePicker.getDirectoryPath(
+          dialogTitle: title,
+          initialDirectory: initialDirectory,
+        );
+      } else {
+        final result = await FilePicker.pickFiles(
+          dialogTitle: title,
+          initialDirectory: initialDirectory,
+        );
+        if (result != null && result.files.isNotEmpty && result.files.single.path != null) {
+          return result.files.single.path;
+        }
+      }
+    } catch (_) {}
+
+    return null;
+  }
+
   Future<void> _openFile() async {
-    FilePickerResult? result = await FilePicker.pickFiles();
-    if (result != null && result.files.single.path != null) {
-      final path = result.files.single.path!;
+    final path = await _pickFileOrDirectory(
+      title: 'Open File',
+      initialDirectory: _currentDirectory,
+      pickDirectory: false,
+    );
+    if (path != null) {
       setState(() {
         if (!_openFiles.contains(path)) {
           _openFiles.add(path);
@@ -165,7 +244,11 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   Future<void> _openFolder() async {
-    String? selectedDirectory = await FilePicker.getDirectoryPath();
+    String? selectedDirectory = await _pickFileOrDirectory(
+      title: 'Open Folder',
+      initialDirectory: _currentDirectory,
+      pickDirectory: true,
+    );
     if (selectedDirectory != null) {
       setState(() {
         _currentDirectory = selectedDirectory;

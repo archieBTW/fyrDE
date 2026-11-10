@@ -295,6 +295,145 @@ if [ ! -s "$out" ]; then exit 1; fi
 exit 0
 EOF
             sudo chmod +x /usr/local/bin/fyr_files_picker
+
+            sudo tee /usr/local/bin/zenity > /dev/null <<'EOF'
+#!/bin/bash
+# zenity / qarma / kdialog compatibility wrapper routing file selection to fyrfiles
+
+target_path=""
+multiple=false
+directory_only=false
+save_file=false
+title=""
+separator="|"
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --file-selection)
+            shift
+            ;;
+        --title)
+            title="$2"
+            shift 2
+            ;;
+        --title=*)
+            title="${1#*=}"
+            shift
+            ;;
+        --filename)
+            target_path="$2"
+            shift 2
+            ;;
+        --filename=*)
+            target_path="${1#*=}"
+            shift
+            ;;
+        --getopenfilename|--getsavefilename|--getexistingdirectory)
+            if [ "$1" = "--getexistingdirectory" ]; then
+                directory_only=true
+            elif [ "$1" = "--getsavefilename" ]; then
+                save_file=true
+            fi
+            shift
+            if [ $# -gt 0 ] && [[ "$1" != -* ]]; then
+                target_path="$1"
+                shift
+            fi
+            ;;
+        --multiple)
+            multiple=true
+            shift
+            ;;
+        --separate-output)
+            multiple=true
+            separator=$'\n'
+            shift
+            ;;
+        --directory)
+            directory_only=true
+            shift
+            ;;
+        --save)
+            save_file=true
+            shift
+            ;;
+        --separator=*)
+            separator="${1#*=}"
+            shift
+            ;;
+        --separator)
+            separator="$2"
+            shift 2
+            ;;
+        --confirm-overwrite)
+            shift
+            ;;
+        --file-filter=*)
+            shift
+            ;;
+        --file-filter)
+            shift 2
+            ;;
+        *)
+            if [[ "$1" != -* ]] && [ -z "$target_path" ]; then
+                target_path="$1"
+            fi
+            shift
+            ;;
+    esac
+done
+
+if [ -z "$target_path" ]; then
+    target_path="$HOME"
+fi
+
+fyrfiles_bin=""
+for candidate in "$HOME/.local/bin/fyrfiles" "$HOME/.local/share/fyrDE/fyrfiles/fyrfiles" "/usr/local/bin/fyrfiles" "/usr/bin/fyrfiles" "/opt/fyrfiles/fyrfiles"; do
+    if [ -x "$candidate" ]; then
+        fyrfiles_bin="$candidate"
+        break
+    fi
+done
+
+if [ -z "$fyrfiles_bin" ]; then
+    fyrfiles_bin="$(command -v fyrfiles 2>/dev/null)"
+fi
+
+if [ -z "$fyrfiles_bin" ] || [ ! -x "$fyrfiles_bin" ]; then
+    echo "zenity: fyrfiles executable not found" >&2
+    exit 1
+fi
+
+cmd_args=("--picker")
+if [ -n "$title" ]; then
+    cmd_args+=("--title=$title")
+fi
+cmd_args+=("$target_path")
+
+selected="$("$fyrfiles_bin" "${cmd_args[@]}")"
+exit_code=$?
+
+if [ $exit_code -ne 0 ] || [ -z "$selected" ]; then
+    exit 1
+fi
+
+if [ "$multiple" = true ]; then
+    echo "$selected" | tr '\n' "$separator" | sed "s/$separator\$//"
+else
+    echo "$selected" | head -n 1
+fi
+
+exit 0
+EOF
+            sudo chmod +x /usr/local/bin/zenity
+            sudo ln -sf /usr/local/bin/zenity /usr/local/bin/qarma
+            sudo ln -sf /usr/local/bin/zenity /usr/local/bin/kdialog
+
+            mkdir -p ~/.local/bin
+            cp /usr/local/bin/zenity ~/.local/bin/zenity 2>/dev/null || true
+            ln -sf zenity ~/.local/bin/qarma 2>/dev/null || true
+            ln -sf zenity ~/.local/bin/kdialog 2>/dev/null || true
+
             mkdir -p ~/.config/xdg-desktop-portal-termfilechooser
             echo -e "[filechooser]\ncmd=/usr/local/bin/fyr_files_picker" > ~/.config/xdg-desktop-portal-termfilechooser/config
             mkdir -p ~/.config/xdg-desktop-portal

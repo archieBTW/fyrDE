@@ -260,15 +260,77 @@ class _FyrTextHomeState extends State<FyrTextHome> {
     });
   }
 
+  Future<String?> _pickFile({
+    String? title,
+    String? initialDirectory,
+    FileType type = FileType.any,
+  }) async {
+    final home = Platform.environment['HOME'] ?? '';
+    final fyrfilesCandidates = [
+      if (home.isNotEmpty) p.join(home, '.local/bin/fyrfiles'),
+      if (home.isNotEmpty) p.join(home, '.local/share/fyrDE/fyrfiles/fyrfiles'),
+      '/usr/local/bin/fyrfiles',
+      '/usr/bin/fyrfiles',
+    ];
+
+    String? fyrfilesPath;
+    for (final c in fyrfilesCandidates) {
+      if (File(c).existsSync()) {
+        fyrfilesPath = c;
+        break;
+      }
+    }
+
+    if (fyrfilesPath != null) {
+      try {
+        final startDir = (initialDirectory != null && Directory(initialDirectory).existsSync())
+            ? initialDirectory
+            : (home.isNotEmpty && Directory(p.join(home, 'Documents')).existsSync()
+                ? p.join(home, 'Documents')
+                : (home.isNotEmpty ? home : '.'));
+
+        final args = <String>['--picker'];
+        if (title != null && title.isNotEmpty) {
+          args.add('--title=$title');
+        }
+        args.add(startDir);
+
+        final res = await Process.run(fyrfilesPath, args);
+        if (res.exitCode == 0) {
+          final out = res.stdout.toString().trim();
+          if (out.isNotEmpty) {
+            final picked = out.split('\n').first.trim();
+            if (File(picked).existsSync()) {
+              return picked;
+            }
+          }
+        }
+        return null;
+      } catch (_) {}
+    }
+
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        dialogTitle: title,
+        initialDirectory: initialDirectory,
+        type: type,
+      );
+      if (result != null && result.files.isNotEmpty && result.files.single.path != null) {
+        return result.files.single.path;
+      }
+    } catch (_) {}
+
+    return null;
+  }
+
   Future<void> _openFile([String? path]) async {
     String? targetPath = path;
     if (targetPath == null) {
-      FilePickerResult? result = await FilePicker.platform.pickFiles(
-        type: FileType.any,
+      final startDir = _currentFilePath != null ? p.dirname(_currentFilePath!) : null;
+      targetPath = await _pickFile(
+        title: 'Open Document',
+        initialDirectory: startDir,
       );
-      if (result != null && result.files.single.path != null) {
-        targetPath = result.files.single.path;
-      }
     }
 
     if (targetPath != null) {
@@ -314,10 +376,28 @@ class _FyrTextHomeState extends State<FyrTextHome> {
   }
 
   Future<void> _saveFileAs() async {
-    String? outputFile = await FilePicker.platform.saveFile(
-      dialogTitle: 'Save As',
-      fileName: _currentFilePath != null ? p.basename(_currentFilePath!) : 'untitled.txt',
-    );
+    String? outputFile;
+    final defaultFileName = _currentFilePath != null ? p.basename(_currentFilePath!) : 'untitled.txt';
+    try {
+      outputFile = await FilePicker.platform.saveFile(
+        dialogTitle: 'Save As',
+        fileName: defaultFileName,
+      );
+    } catch (_) {}
+
+    if (outputFile == null) {
+      final picked = await _pickFile(
+        title: 'Save As - Select Destination',
+        initialDirectory: _currentFilePath != null ? p.dirname(_currentFilePath!) : null,
+      );
+      if (picked != null) {
+        if (Directory(picked).existsSync()) {
+          outputFile = p.join(picked, defaultFileName);
+        } else {
+          outputFile = picked;
+        }
+      }
+    }
 
     if (outputFile != null) {
       setState(() {

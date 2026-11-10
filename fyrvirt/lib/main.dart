@@ -160,8 +160,14 @@ class VMInfo {
   final String id;
   final String name;
   final String state;
+  final String uri;
 
-  VMInfo({required this.id, required this.name, required this.state});
+  VMInfo({
+    required this.id,
+    required this.name,
+    required this.state,
+    this.uri = 'qemu:///system',
+  });
 
   bool get isRunning => state.toLowerCase().contains('running');
 }
@@ -205,12 +211,78 @@ class _FyrVirtState extends State<FyrVirt> {
     }
   }
 
+  Future<String?> _pickFile({String? title, String? initialDirectory}) async {
+    final home = Platform.environment['HOME'] ?? '';
+    final fyrfilesCandidates = [
+      if (home.isNotEmpty) p.join(home, '.local/bin/fyrfiles'),
+      if (home.isNotEmpty) p.join(home, '.local/share/fyrDE/fyrfiles/fyrfiles'),
+      '/usr/local/bin/fyrfiles',
+      '/usr/bin/fyrfiles',
+    ];
+
+    String? fyrfilesPath;
+    for (final c in fyrfilesCandidates) {
+      if (File(c).existsSync()) {
+        fyrfilesPath = c;
+        break;
+      }
+    }
+
+    final virtImagesDir = '/var/lib/libvirt/images';
+    final userVmsDir = home.isNotEmpty ? p.join(home, 'vms') : '';
+    final defaultDir = (initialDirectory != null && (Directory(initialDirectory).existsSync() || File(initialDirectory).existsSync()))
+        ? (File(initialDirectory).existsSync() ? p.dirname(initialDirectory) : initialDirectory)
+        : (Directory(virtImagesDir).existsSync()
+            ? virtImagesDir
+            : (userVmsDir.isNotEmpty && Directory(userVmsDir).existsSync()
+                ? userVmsDir
+                : (home.isNotEmpty && Directory(p.join(home, 'Downloads')).existsSync()
+                    ? p.join(home, 'Downloads')
+                    : (home.isNotEmpty ? home : '.'))));
+
+    if (fyrfilesPath != null) {
+      try {
+        final args = <String>['--picker'];
+        if (title != null && title.isNotEmpty) {
+          args.add('--title=$title');
+        }
+        args.add(defaultDir);
+
+        final res = await Process.run(fyrfilesPath, args);
+        if (res.exitCode == 0) {
+          final out = res.stdout.toString().trim();
+          if (out.isNotEmpty) {
+            final picked = out.split('\n').first.trim();
+            if (File(picked).existsSync() || Directory(picked).existsSync()) {
+              return picked;
+            }
+          }
+        }
+        return null;
+      } catch (_) {}
+    }
+
+    try {
+      final res = await Process.run('zenity', [
+        '--file-selection',
+        '--title=${title ?? "Select File"}',
+        '--filename=$defaultDir',
+      ]);
+      if (res.exitCode == 0) {
+        final path = res.stdout.toString().trim();
+        if (path.isNotEmpty) return path;
+      }
+    } catch (_) {}
+
+    return null;
+  }
+
   Future<void> _takeScreenshots() async {
     for (var vm in vms) {
       if (vm.isRunning) {
         final filePath = '$_cachePath/${vm.name}.png';
         try {
-          await Process.run('virsh', ['-c', 'qemu:///session', 'screenshot', vm.name, '--file', filePath]);
+          await Process.run('virsh', ['-c', vm.uri, 'screenshot', vm.name, '--file', filePath]);
           if (File(filePath).existsSync()) {
             setState(() {
               _screenshots[vm.name] = filePath;
@@ -223,53 +295,82 @@ class _FyrVirtState extends State<FyrVirt> {
     }
   }
 
+  List<VMInfo> _parseVirshList(String output, String uri) {
+    final lines = output.split('\n');
+    List<VMInfo> list = [];
+    bool startParsing = false;
+    for (var line in lines) {
+      line = line.trim();
+      if (line.startsWith('---')) {
+        startParsing = true;
+        continue;
+      }
+      if (startParsing && line.isNotEmpty) {
+        final parts = line.split(RegExp(r'\s{2,}'));
+        if (parts.length >= 3) {
+          list.add(VMInfo(
+            id: parts[0].trim(),
+            name: parts[1].trim(),
+            state: parts[2].trim(),
+            uri: uri,
+          ));
+        }
+      }
+    }
+    return list;
+  }
+
   Future<void> refreshVMs() async {
     try {
-      final result = await Process.run('virsh', ['-c', 'qemu:///session', 'list', '--all']);
-      if (result.exitCode == 0) {
-        final lines = result.stdout.toString().split('\n');
-        List<VMInfo> newVMs = [];
-        bool startParsing = false;
-        for (var line in lines) {
-          line = line.trim();
-          if (line.startsWith('---')) {
-            startParsing = true;
-            continue;
-          }
-          if (startParsing && line.isNotEmpty) {
-            final parts = line.split(RegExp(r'\s{2,}'));
-            if (parts.length >= 3) {
-              newVMs.add(VMInfo(
-                id: parts[0].trim(),
-                name: parts[1].trim(),
-                state: parts[2].trim(),
-              ));
+      List<VMInfo> newVMs = [];
+
+      // 1. Query qemu:///system (virt-manager connection)
+      try {
+        final systemRes = await Process.run('virsh', ['-c', 'qemu:///system', 'list', '--all']);
+        if (systemRes.exitCode == 0) {
+          newVMs.addAll(_parseVirshList(systemRes.stdout.toString(), 'qemu:///system'));
+        }
+      } catch (e) {
+        print('Error querying qemu:///system: $e');
+      }
+
+      // 2. Query qemu:///session (user session connection)
+      try {
+        final sessionRes = await Process.run('virsh', ['-c', 'qemu:///session', 'list', '--all']);
+        if (sessionRes.exitCode == 0) {
+          final sessionList = _parseVirshList(sessionRes.stdout.toString(), 'qemu:///session');
+          for (final svm in sessionList) {
+            if (!newVMs.any((v) => v.name == svm.name)) {
+              newVMs.add(svm);
             }
           }
         }
-        setState(() {
-          vms = newVMs;
-          isLoading = false;
-        });
+      } catch (e) {
+        print('Error querying qemu:///session: $e');
       }
+
+      setState(() {
+        vms = newVMs;
+        isLoading = false;
+      });
     } catch (e) {
       print('Error refreshing VMs: $e');
       setState(() => isLoading = false);
     }
   }
 
-  Future<void> vmAction(String name, String action) async {
-    await Process.run('virsh', ['-c', 'qemu:///session', action, name]);
+  Future<void> vmAction(VMInfo vm, String action) async {
+    await Process.run('virsh', ['-c', vm.uri, action, vm.name]);
     refreshVMs();
   }
 
   Future<void> deleteVM(VMInfo vm) async {
     try {
       if (vm.isRunning) {
-        await Process.run('virsh', ['-c', 'qemu:///session', 'destroy', vm.name]);
+        await Process.run('virsh', ['-c', vm.uri, 'destroy', vm.name]);
       }
       final result = await Process.run('virsh', [
-        '-c', 'qemu:///session',
+        '-c', vm.uri,
         'undefine', vm.name,
         '--remove-all-storage',
         '--nvram',
@@ -289,11 +390,11 @@ class _FyrVirtState extends State<FyrVirt> {
     }
   }
 
-  Future<void> launchVM(String name, {bool fullscreen = false}) async {
+  Future<void> launchVM(VMInfo vm, {bool fullscreen = false}) async {
     try {
-      List<String> args = ['-c', 'qemu:///session', '--attach'];
+      List<String> args = ['-c', vm.uri, '--attach'];
       if (fullscreen) args.add('-f');
-      args.add(name);
+      args.add(vm.name);
       await Process.start('virt-viewer', args);
     } catch (e) {
       if (mounted) {
@@ -356,9 +457,12 @@ class _FyrVirtState extends State<FyrVirt> {
                         IconButton(
                           icon: Icon(Icons.folder_open, color: FyrTheme.accentColor),
                           onPressed: () async {
-                            final result = await Process.run('fyrfiles', ['--picker']);
-                            if (result.exitCode == 0) {
-                              isoController.text = result.stdout.toString().trim();
+                            final picked = await _pickFile(
+                              title: 'Select Installation ISO',
+                              initialDirectory: '/var/lib/libvirt/images',
+                            );
+                            if (picked != null) {
+                              isoController.text = picked;
                             }
                           },
                         ),
@@ -446,7 +550,7 @@ class _FyrVirtState extends State<FyrVirt> {
                       '--cdrom', iso,
                       '--osinfo', 'detect=on,require=off',
                       '--graphics', 'spice,listen=none',
-                      '--connect', 'qemu:///session',
+                      '--connect', 'qemu:///system',
                       '--noautoconsole'
                     ];
 
@@ -475,7 +579,7 @@ class _FyrVirtState extends State<FyrVirt> {
                     }
 
                     if (autostart) {
-                      await Process.run('virsh', ['-c', 'qemu:///session', 'autostart', name]);
+                      await Process.run('virsh', ['-c', 'qemu:///system', 'autostart', name]);
                     }
                     
                     refreshVMs();
@@ -489,6 +593,162 @@ class _FyrVirtState extends State<FyrVirt> {
                 },
                 style: ElevatedButton.styleFrom(backgroundColor: FyrTheme.accentColor),
                 child: const Text('Create VM', style: TextStyle(color: Colors.white)),
+              ),
+            ],
+          );
+        });
+      },
+    );
+  }
+
+  Future<void> _showImportVMDialog() async {
+    final nameController = TextEditingController();
+    final ramController = TextEditingController(text: '2048');
+    final cpuController = TextEditingController(text: '2');
+    final diskPathController = TextEditingController();
+    final descController = TextEditingController();
+    String uri = 'qemu:///system';
+    bool autostart = false;
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(builder: (dialogContext, setDialogState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF2A282C),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: const Text('Import Existing Virtual Machine Disk', style: TextStyle(color: Colors.white)),
+            content: SizedBox(
+              width: 500,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(child: _buildDialogField('Disk Image Path (.qcow2, .img, .raw)', diskPathController)),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          icon: Icon(Icons.folder_open, color: FyrTheme.accentColor),
+                          onPressed: () async {
+                            final picked = await _pickFile(
+                              title: 'Select Existing VM Disk Image',
+                              initialDirectory: '/var/lib/libvirt/images',
+                            );
+                            if (picked != null) {
+                              diskPathController.text = picked;
+                              if (nameController.text.isEmpty) {
+                                final base = p.basenameWithoutExtension(picked);
+                                nameController.text = base.replaceAll('.qcow2', '').replaceAll('.img', '');
+                              }
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    _buildDialogField('VM Name', nameController),
+                    const SizedBox(height: 12),
+                    _buildDialogField('Description', descController),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(child: _buildDialogField('RAM (MiB)', ramController, isNumber: true)),
+                        const SizedBox(width: 16),
+                        Expanded(child: _buildDialogField('CPU Cores', cpuController, isNumber: true)),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        const Text('Target Environment', style: TextStyle(color: Colors.white70)),
+                        const Spacer(),
+                        DropdownButton<String>(
+                          value: uri,
+                          dropdownColor: const Color(0xFF2A282C),
+                          underline: Container(),
+                          style: TextStyle(color: FyrTheme.accentColor),
+                          items: const [
+                            DropdownMenuItem(value: 'qemu:///system', child: Text('virt-manager (System)')),
+                            DropdownMenuItem(value: 'qemu:///session', child: Text('User Session')),
+                          ],
+                          onChanged: (val) => setDialogState(() => uri = val!),
+                        ),
+                      ],
+                    ),
+                    SwitchListTile(
+                      title: const Text('Autostart on Boot', style: TextStyle(color: Colors.white70, fontSize: 14)),
+                      value: autostart,
+                      activeColor: FyrTheme.accentColor,
+                      contentPadding: EdgeInsets.zero,
+                      onChanged: (val) => setDialogState(() => autostart = val),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: Text('Cancel', style: TextStyle(color: FyrTheme.textColorMuted)),
+              ),
+              ElevatedButton(
+                onPressed: () async {
+                  final name = nameController.text.trim();
+                  final diskPath = diskPathController.text.trim();
+                  final ram = ramController.text.trim();
+                  final cpus = cpuController.text.trim();
+                  final desc = descController.text.trim();
+
+                  if (name.isEmpty || diskPath.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('VM Name and Disk Image Path are required')),
+                    );
+                    return;
+                  }
+
+                  Navigator.pop(dialogContext);
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Importing VM...')));
+
+                  try {
+                    List<String> args = [
+                      '--name', name,
+                      '--ram', ram,
+                      '--vcpus', cpus,
+                      '--disk', 'path=$diskPath,bus=virtio',
+                      '--import',
+                      '--osinfo', 'detect=on,require=off',
+                      '--graphics', 'spice,listen=none',
+                      '--connect', uri,
+                      '--noautoconsole'
+                    ];
+
+                    if (desc.isNotEmpty) {
+                      args.addAll(['--description', desc]);
+                    }
+
+                    final result = await Process.run('virt-install', args);
+                    if (result.exitCode != 0) {
+                      throw Exception(result.stderr.toString().trim());
+                    }
+
+                    if (autostart) {
+                      await Process.run('virsh', ['-c', uri, 'autostart', name]);
+                    }
+
+                    refreshVMs();
+                  } catch (e) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Error importing VM: $e'), backgroundColor: Colors.redAccent),
+                      );
+                    }
+                  }
+                },
+                style: ElevatedButton.styleFrom(backgroundColor: FyrTheme.accentColor),
+                child: const Text('Import VM', style: TextStyle(color: Colors.white)),
               ),
             ],
           );
@@ -512,7 +772,7 @@ class _FyrVirtState extends State<FyrVirt> {
   }
 
   Future<void> _showSettings(VMInfo vm) async {
-    final result = await Process.run('virsh', ['-c', 'qemu:///session', 'dominfo', vm.name]);
+    final result = await Process.run('virsh', ['-c', vm.uri, 'dominfo', vm.name]);
     if (result.exitCode != 0) return;
 
     final lines = result.stdout.toString().split('\n');
@@ -529,15 +789,15 @@ class _FyrVirtState extends State<FyrVirt> {
     }
 
     // Check for Autostart
-    final autoResult = await Process.run('virsh', ['-c', 'qemu:///session', 'dominfo', vm.name]);
+    final autoResult = await Process.run('virsh', ['-c', vm.uri, 'dominfo', vm.name]);
     bool autostart = autoResult.stdout.toString().contains('Autostart:       enable');
 
     // Check for Description
-    final descResult = await Process.run('virsh', ['-c', 'qemu:///session', 'desc', vm.name]);
+    final descResult = await Process.run('virsh', ['-c', vm.uri, 'desc', vm.name]);
     String description = descResult.stdout.toString().trim();
 
     // Check for 3D acceleration
-    final xmlResult = await Process.run('virsh', ['-c', 'qemu:///session', 'dumxml', vm.name]);
+    final xmlResult = await Process.run('virsh', ['-c', vm.uri, 'dumpxml', vm.name]);
     bool accel3d = xmlResult.stdout.toString().contains("accel3d='yes'");
 
     final cpuController = TextEditingController(text: cpus);
@@ -611,25 +871,25 @@ class _FyrVirtState extends State<FyrVirt> {
                   final newMem = memController.text;
                   
                   try {
-                    await Process.run('virsh', ['-c', 'qemu:///session', 'setvcpus', vm.name, newCpus, '--config', '--maximum']);
-                    await Process.run('virsh', ['-c', 'qemu:///session', 'setvcpus', vm.name, newCpus, '--config']);
-                    await Process.run('virsh', ['-c', 'qemu:///session', 'setmaxmem', vm.name, '${newMem}MiB', '--config']);
-                    await Process.run('virsh', ['-c', 'qemu:///session', 'setmem', vm.name, '${newMem}MiB', '--config']);
+                    await Process.run('virsh', ['-c', vm.uri, 'setvcpus', vm.name, newCpus, '--config', '--maximum']);
+                    await Process.run('virsh', ['-c', vm.uri, 'setvcpus', vm.name, newCpus, '--config']);
+                    await Process.run('virsh', ['-c', vm.uri, 'setmaxmem', vm.name, '${newMem}MiB', '--config']);
+                    await Process.run('virsh', ['-c', vm.uri, 'setmem', vm.name, '${newMem}MiB', '--config']);
                     
                     // Update Autostart
                     await Process.run('virsh', [
-                      '-c', 'qemu:///session',
+                      '-c', vm.uri,
                       'autostart',
                       vm.name,
                       if (!autostart) '--disable'
                     ]);
 
                     // Update Description
-                    await Process.run('virsh', ['-c', 'qemu:///session', 'desc', vm.name, descController.text]);
+                    await Process.run('virsh', ['-c', vm.uri, 'desc', vm.name, descController.text]);
 
                     // Apply 3D Accel using virt-xml
                     await Process.run('virt-xml', [
-                      '--connect', 'qemu:///session',
+                      '--connect', vm.uri,
                       vm.name,
                       '--edit',
                       '--video', 'model.type=virtio,accel3d=${accel3d ? 'yes' : 'no'}',
@@ -754,6 +1014,11 @@ class _FyrVirtState extends State<FyrVirt> {
                     ),
                     const Spacer(),
                     IconButton(
+                      icon: Icon(Icons.file_open_outlined, color: FyrTheme.textColor, size: 20),
+                      onPressed: _showImportVMDialog,
+                      tooltip: 'Import Existing VM Disk Image',
+                    ),
+                    IconButton(
                       icon: Icon(Icons.add_circle_outline, color: FyrTheme.accentColor, size: 22),
                       onPressed: _showCreateVMDialog,
                       tooltip: 'Create New VM',
@@ -800,11 +1065,22 @@ class _FyrVirtState extends State<FyrVirt> {
                                       style: TextStyle(color: FyrTheme.textColorMuted),
                                     ),
                                     const SizedBox(height: 16),
-                                    ElevatedButton.icon(
-                                      onPressed: _showCreateVMDialog,
-                                      icon: const Icon(Icons.add, color: Colors.white),
-                                      label: const Text('Create your first VM', style: TextStyle(color: Colors.white)),
-                                      style: ElevatedButton.styleFrom(backgroundColor: FyrTheme.accentColor),
+                                    Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        ElevatedButton.icon(
+                                          onPressed: _showCreateVMDialog,
+                                          icon: const Icon(Icons.add, color: Colors.white),
+                                          label: const Text('Create New VM', style: TextStyle(color: Colors.white)),
+                                          style: ElevatedButton.styleFrom(backgroundColor: FyrTheme.accentColor),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        OutlinedButton.icon(
+                                          onPressed: _showImportVMDialog,
+                                          icon: Icon(Icons.file_open_outlined, color: FyrTheme.textColor),
+                                          label: Text('Import Existing Disk', style: TextStyle(color: FyrTheme.textColor)),
+                                        ),
+                                      ],
                                     ),
                                   ],
                                 ),
@@ -874,7 +1150,12 @@ class _FyrVirtState extends State<FyrVirt> {
           // Preview Area
           Expanded(
             child: InkWell(
-              onTap: () => launchVM(vm.name),
+              onTap: () async {
+                if (!vm.isRunning) {
+                  await vmAction(vm, 'start');
+                }
+                launchVM(vm);
+              },
               child: Stack(
                 fit: StackFit.expand,
                 children: [
@@ -938,7 +1219,7 @@ class _FyrVirtState extends State<FyrVirt> {
                           style: IconButton.styleFrom(
                             backgroundColor: Colors.black.withOpacity(0.5),
                           ),
-                          onPressed: () => launchVM(vm.name, fullscreen: true),
+                          onPressed: () => launchVM(vm, fullscreen: true),
                         ),
                       ),
                     ),
@@ -965,14 +1246,37 @@ class _FyrVirtState extends State<FyrVirt> {
                         ),
                         overflow: TextOverflow.ellipsis,
                       ),
-                      Text(
-                        vm.state.toUpperCase(),
-                        style: TextStyle(
-                          color: FyrTheme.textColorMuted,
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1.2,
-                        ),
+                      const SizedBox(height: 2),
+                      Row(
+                        children: [
+                          Text(
+                            vm.state.toUpperCase(),
+                            style: TextStyle(
+                              color: vm.isRunning ? Colors.greenAccent : FyrTheme.textColorMuted,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 1.2,
+                            ),
+                          ),
+                          if (vm.uri.contains('system')) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                              decoration: BoxDecoration(
+                                color: FyrTheme.accentColor.withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                'virt-manager',
+                                style: TextStyle(
+                                  color: FyrTheme.accentColor,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                     ],
                   ),
@@ -980,13 +1284,13 @@ class _FyrVirtState extends State<FyrVirt> {
                 if (!vm.isRunning)
                   IconButton(
                     icon: Icon(Icons.play_arrow_rounded, color: FyrTheme.accentColor, size: 28),
-                    onPressed: () => vmAction(vm.name, 'start'),
+                    onPressed: () => vmAction(vm, 'start'),
                     tooltip: 'Start',
                   ),
                 if (vm.isRunning)
                   IconButton(
                     icon: const Icon(Icons.power_settings_new_rounded, color: Colors.redAccent, size: 28),
-                    onPressed: () => vmAction(vm.name, 'destroy'),
+                    onPressed: () => vmAction(vm, 'destroy'),
                     tooltip: 'Force Stop',
                   ),
                 IconButton(

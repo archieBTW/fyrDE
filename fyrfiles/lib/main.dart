@@ -123,59 +123,86 @@ class _ResizeHandle extends StatelessWidget {
 bool isPicker = false;
 String? initialDirectoryPath;
 String? initialSelectedPath;
+String? pickerTitle;
+
+void _parsePickerPath(String raw) {
+  String arg = raw.trim();
+  if (arg.isEmpty) return;
+
+  if (arg.startsWith('file://')) {
+    try {
+      arg = Uri.parse(arg).toFilePath();
+    } catch (_) {
+      arg = arg.substring(7);
+    }
+  }
+  try {
+    arg = Uri.decodeFull(arg);
+  } catch (_) {}
+
+  final home = Platform.environment['HOME'] ?? '';
+  if (arg == '~' && home.isNotEmpty) {
+    arg = home;
+  } else if (arg.startsWith('~/') && home.isNotEmpty) {
+    arg = p.join(home, arg.substring(2));
+  }
+
+  final d = Directory(arg);
+  final f = File(arg);
+  if (d.existsSync()) {
+    initialDirectoryPath = d.absolute.path;
+  } else if (f.existsSync()) {
+    initialDirectoryPath = f.parent.absolute.path;
+    initialSelectedPath = f.absolute.path;
+  } else {
+    final parent = Directory(p.dirname(arg));
+    if (parent.existsSync()) {
+      initialDirectoryPath = parent.absolute.path;
+      initialSelectedPath = p.canonicalize(arg);
+    }
+  }
+}
 
 void main(List<String> args) async {
-  if (args.contains('--picker')) {
+  if (args.any((a) => a == '--picker' || a.startsWith('--picker=') || a == '--file-selection')) {
     isPicker = true;
   }
-  for (final rawArg in args) {
-    if (rawArg.startsWith('--picker')) continue;
-    String arg = rawArg.trim();
-    if (arg.isEmpty) continue;
-
-    if (arg.startsWith('file://')) {
-      try {
-        arg = Uri.parse(arg).toFilePath();
-      } catch (_) {
-        arg = arg.substring(7);
-      }
+  for (int i = 0; i < args.length; i++) {
+    final rawArg = args[i];
+    if (rawArg == '--picker' || rawArg == '--file-selection') continue;
+    if (rawArg.startsWith('--picker=')) {
+      final pStr = rawArg.substring('--picker='.length).trim();
+      if (pStr.isNotEmpty) _parsePickerPath(pStr);
+      continue;
     }
-    try {
-      arg = Uri.decodeFull(arg);
-    } catch (_) {}
-
-    final home = Platform.environment['HOME'] ?? '';
-    if (arg == '~' && home.isNotEmpty) {
-      arg = home;
-    } else if (arg.startsWith('~/') && home.isNotEmpty) {
-      arg = p.join(home, arg.substring(2));
+    if (rawArg.startsWith('--filename=')) {
+      final fStr = rawArg.substring('--filename='.length).trim();
+      if (fStr.isNotEmpty) _parsePickerPath(fStr);
+      continue;
     }
-
-    if (!arg.startsWith('-')) {
-      final d = Directory(arg);
-      final f = File(arg);
-      if (d.existsSync()) {
-        initialDirectoryPath = d.absolute.path;
-        break;
-      } else if (f.existsSync()) {
-        initialDirectoryPath = f.parent.absolute.path;
-        initialSelectedPath = f.absolute.path;
-        break;
-      } else {
-        final parent = Directory(p.dirname(arg));
-        if (parent.existsSync()) {
-          initialDirectoryPath = parent.absolute.path;
-          initialSelectedPath = p.canonicalize(arg);
-          break;
-        }
-      }
+    if (rawArg == '--filename' && i + 1 < args.length) {
+      _parsePickerPath(args[++i].trim());
+      continue;
     }
+    if (rawArg.startsWith('--title=')) {
+      pickerTitle = rawArg.substring('--title='.length).trim();
+      continue;
+    }
+    if (rawArg == '--title' && i + 1 < args.length) {
+      pickerTitle = args[++i].trim();
+      continue;
+    }
+    if (rawArg.startsWith('-')) continue;
+
+    _parsePickerPath(rawArg.trim());
   }
   WidgetsFlutterBinding.ensureInitialized();
   FyrTheme.initialize();
   await windowManager.ensureInitialized();
-  WindowOptions windowOptions = const WindowOptions(
-    size: Size(800, 600),
+  WindowOptions windowOptions = WindowOptions(
+    size: const Size(800, 600),
+    center: true,
+    title: isPicker ? (pickerTitle ?? 'Open File') : 'fyrfiles',
     titleBarStyle: TitleBarStyle.hidden,
   );
   windowManager.waitUntilReadyToShow(windowOptions, () async {
@@ -234,7 +261,7 @@ Future<void> saveCustomPins() async {
 }
 
 class FileInfo {
-  final String filePath;
+  String filePath;
   String? tag;
 
   FileInfo({required this.filePath, this.tag});
@@ -798,15 +825,212 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
     return parents.reversed.toList();
   }
 
-  Future<bool> isClipboardDataAvailable() async {
-    ClipboardData? clipboardData = await Clipboard.getData('text/plain');
-    String? path = clipboardData?.text;
+  List<String> _extractPathsFromClipboard(String? text) {
+    if (text == null || text.trim().isEmpty) return [];
+    List<String> results = [];
+    final lines = text.split(RegExp(r'[\r\n]+'));
+    for (var line in lines) {
+      line = line.trim();
+      if (line.isEmpty) continue;
 
-    if (path != null && path.isNotEmpty) {
-      return FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound;
+      // Handle file:// URIs (e.g. from nautilus, dolphin, browsers)
+      if (line.startsWith('file://')) {
+        try {
+          line = Uri.parse(line).toFilePath();
+        } catch (_) {
+          line = line.replaceFirst(RegExp(r'^file://+'), '/');
+        }
+      }
+
+      // Strip wrapping quotes
+      if ((line.startsWith('"') && line.endsWith('"')) || (line.startsWith("'") && line.endsWith("'"))) {
+        line = line.substring(1, line.length - 1);
+      }
+
+      line = line.trim();
+      if (line.isNotEmpty) {
+        results.add(line);
+      }
     }
+    return results;
+  }
+
+  Future<bool> isClipboardDataAvailable() async {
+    try {
+      ClipboardData? clipboardData = await Clipboard.getData('text/plain');
+      final paths = _extractPathsFromClipboard(clipboardData?.text);
+      if (paths.isEmpty) return false;
+
+      for (final p in paths) {
+        try {
+          if (FileSystemEntity.typeSync(p) != FileSystemEntityType.notFound) {
+            return true;
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
 
     return false;
+  }
+
+  Widget _buildDragFeedback(List<String> paths) {
+    final count = paths.length;
+    final first = paths.first;
+    final isDir = Directory(first).existsSync();
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: FyrTheme.cardColor.withOpacity(0.92),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: FyrTheme.accentColor, width: 1.5),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.4),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              count > 1 ? Icons.copy_all : (isDir ? Icons.folder : Icons.insert_drive_file),
+              color: FyrTheme.accentColor,
+              size: 20,
+            ),
+            const SizedBox(width: 8),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 220),
+              child: Text(
+                count > 1 ? '$count items' : p.basename(first),
+                style: TextStyle(
+                  color: FyrTheme.textColor,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  decoration: TextDecoration.none,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _moveItemsToDirectory(List<String> sourcePaths, String destinationDirPath) async {
+    if (sourcePaths.isEmpty || destinationDirPath.isEmpty) return;
+
+    final destDir = Directory(destinationDirPath);
+    if (!destDir.existsSync()) {
+      try {
+        destDir.createSync(recursive: true);
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Cannot create destination directory: $e'), backgroundColor: Colors.redAccent),
+          );
+        }
+        return;
+      }
+    }
+
+    final isTrash = destinationDirPath.contains('Trash/files');
+    int movedCount = 0;
+    List<String> failed = [];
+
+    for (final src in sourcePaths) {
+      if (!File(src).existsSync() && !Directory(src).existsSync()) continue;
+
+      // Skip moving into parent if already there
+      if (p.dirname(src) == destinationDirPath) continue;
+
+      // Don't move directory into itself or child
+      if (src == destinationDirPath || destinationDirPath.startsWith('$src/')) continue;
+
+      if (isTrash) {
+        try {
+          final res = Process.runSync('gio', ['trash', src]);
+          if (res.exitCode == 0) {
+            movedCount++;
+            continue;
+          }
+        } catch (_) {}
+      }
+
+      final fileName = p.basename(src);
+      String targetPath = p.join(destinationDirPath, fileName);
+
+      // Handle collision
+      if (File(targetPath).existsSync() || Directory(targetPath).existsSync()) {
+        final ext = p.extension(fileName);
+        final base = p.basenameWithoutExtension(fileName);
+        int counter = 1;
+        while (File(targetPath).existsSync() || Directory(targetPath).existsSync()) {
+          targetPath = p.join(destinationDirPath, '$base ($counter)$ext');
+          counter++;
+        }
+      }
+
+      try {
+        if (FileSystemEntity.isDirectorySync(src)) {
+          try {
+            Directory(src).renameSync(targetPath);
+          } catch (_) {
+            final transferId = DateTime.now().millisecondsSinceEpoch.toString();
+            await _copyDirectoryWithProgress(Directory(src), targetPath, transferId);
+            Directory(src).deleteSync(recursive: true);
+          }
+        } else {
+          try {
+            File(src).renameSync(targetPath);
+          } catch (_) {
+            File(src).copySync(targetPath);
+            File(src).deleteSync();
+          }
+        }
+
+        // Update tag if any
+        final tagIndex = fileInfoList.indexWhere((info) => info.filePath == src);
+        if (tagIndex != -1) {
+          fileInfoList[tagIndex].filePath = targetPath;
+          await writeTagsToFile(fileInfoList, tagsFilePath);
+        }
+
+        movedCount++;
+      } catch (e) {
+        failed.add(fileName);
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        selectedPaths.removeWhere((p) => sourcePaths.contains(p));
+      });
+      openDirectory(currentDir);
+
+      if (failed.isEmpty && movedCount > 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(isTrash
+                ? 'Moved $movedCount item(s) to Trash'
+                : 'Moved $movedCount item(s) to ${p.basename(destinationDirPath)}'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      } else if (failed.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to move ${failed.join(", ")}'),
+            backgroundColor: Colors.redAccent,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
   }
 
   String formatPath(String path) {
@@ -920,14 +1144,12 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
 
   Future<void> pasteFile(Directory targetDir) async {
     try {
-      ClipboardData data =
-          await Clipboard.getData('text/plain') as ClipboardData;
-      String text = data.text ?? '';
-      List<String> paths = text.split('\n');
+      ClipboardData? data = await Clipboard.getData('text/plain');
+      final paths = _extractPathsFromClipboard(data?.text);
+      if (paths.isEmpty) return;
       
       for (String path in paths) {
-        path = path.trim();
-        if (path.isEmpty) continue;
+        if (!File(path).existsSync() && !Directory(path).existsSync()) continue;
         
         final transferId = DateTime.now().millisecondsSinceEpoch.toString() + path;
         final fileName = p.basename(path);
@@ -941,7 +1163,18 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
 
         try {
           final isS3 = path.startsWith(S3Service.mountPath) || targetDir.path.startsWith(S3Service.mountPath);
-          final targetPath = p.join(targetDir.path, fileName);
+          String targetPath = p.join(targetDir.path, fileName);
+
+          // Handle collision when copying into same folder
+          if (File(targetPath).existsSync() || Directory(targetPath).existsSync()) {
+            final ext = p.extension(fileName);
+            final base = p.basenameWithoutExtension(fileName);
+            int counter = 1;
+            while (File(targetPath).existsSync() || Directory(targetPath).existsSync()) {
+              targetPath = p.join(targetDir.path, '$base (copy $counter)$ext');
+              counter++;
+            }
+          }
 
           if (isS3) {
             await _copyToS3WithProgress(path, targetPath, transferId);
@@ -954,7 +1187,8 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
           }
           
           setState(() {
-            activeTransfers.firstWhere((t) => t.id == transferId).isCompleted = true;
+            final idx = activeTransfers.indexWhere((t) => t.id == transferId);
+            if (idx != -1) activeTransfers[idx].isCompleted = true;
           });
           
           // Remove from list after a short delay
@@ -966,14 +1200,18 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
             }
           });
         } catch (e) {
-          setState(() {
-            final t = activeTransfers.firstWhere((t) => t.id == transferId);
-            t.isError = true;
-            t.errorMessage = e.toString();
-          });
+          if (mounted) {
+            setState(() {
+              final idx = activeTransfers.indexWhere((t) => t.id == transferId);
+              if (idx != -1) {
+                activeTransfers[idx].isError = true;
+                activeTransfers[idx].errorMessage = e.toString();
+              }
+            });
+          }
         }
       }
-      setState(() {});
+      openDirectory(targetDir);
     } catch (err) {
       stderr.writeln(err);
     }
@@ -1029,9 +1267,10 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
     );
   }
 
-  Widget _buildSidebarItem(IconData icon, String label, VoidCallback onTap, {VoidCallback? onUnpin}) {
+  Widget _buildSidebarItem(IconData icon, String label, VoidCallback onTap, {VoidCallback? onUnpin, String? targetPath}) {
+    Widget item;
     if (isSidebarCollapsed) {
-      return Tooltip(
+      item = Tooltip(
         message: label,
         child: InkWell(
           onTap: onTap,
@@ -1041,19 +1280,49 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
           ),
         ),
       );
+    } else {
+      item = ListTile(
+        leading: Icon(icon, size: 20, color: FyrTheme.accentColor),
+        title: Text(label, style: const TextStyle(fontSize: 14), overflow: TextOverflow.ellipsis),
+        dense: true,
+        onTap: onTap,
+        trailing: onUnpin != null ? IconButton(
+          icon: const Icon(Icons.close, size: 16),
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(),
+          onPressed: onUnpin,
+        ) : null,
+      );
     }
-    return ListTile(
-      leading: Icon(icon, size: 20, color: FyrTheme.accentColor),
-      title: Text(label, style: const TextStyle(fontSize: 14), overflow: TextOverflow.ellipsis),
-      dense: true,
-      onTap: onTap,
-      trailing: onUnpin != null ? IconButton(
-        icon: const Icon(Icons.close, size: 16),
-        padding: EdgeInsets.zero,
-        constraints: const BoxConstraints(),
-        onPressed: onUnpin,
-      ) : null,
-    );
+
+    if (targetPath != null) {
+      return DragTarget<List<String>>(
+        onWillAcceptWithDetails: (details) {
+          final dropped = details.data;
+          if (dropped.contains(targetPath)) return false;
+          for (final p in dropped) {
+            if (targetPath.startsWith(p)) return false;
+          }
+          return true;
+        },
+        onAcceptWithDetails: (details) async {
+          await _moveItemsToDirectory(details.data, targetPath);
+        },
+        builder: (context, candidateData, rejectedData) {
+          final isHovered = candidateData.isNotEmpty;
+          return Container(
+            decoration: BoxDecoration(
+              color: isHovered ? FyrTheme.accentColor.withOpacity(0.2) : Colors.transparent,
+              borderRadius: BorderRadius.circular(8),
+              border: isHovered ? Border.all(color: FyrTheme.accentColor, width: 1.5) : null,
+            ),
+            child: item,
+          );
+        },
+      );
+    }
+
+    return item;
   }
 
   void _showSettingsModal(BuildContext context) {
@@ -1367,18 +1636,13 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
       );
     }
 
-    return RawGestureDetector(
+    final dragPayload = isSelected && selectedPaths.contains(file.path)
+        ? selectedPaths.toList()
+        : [file.path];
+
+    Widget itemWidget = RawGestureDetector(
       behavior: HitTestBehavior.opaque,
       gestures: {
-        MousePanGestureRecognizer: GestureRecognizerFactoryWithHandlers<MousePanGestureRecognizer>(
-          () => MousePanGestureRecognizer(allowedButtonsFilter: (int buttons) => buttons == kPrimaryButton),
-          (MousePanGestureRecognizer instance) {
-            instance.onStart = (details) {
-              List<String> paths = isSelected ? selectedPaths.toList() : [file.path];
-              dragChannel.invokeMethod('startDrag', paths);
-            };
-          },
-        ),
         TapGestureRecognizer: GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
           () => TapGestureRecognizer(),
           (TapGestureRecognizer instance) {
@@ -1447,6 +1711,57 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
         child: content,
       ),
     );
+
+    Widget draggableItem = Draggable<List<String>>(
+      data: dragPayload,
+      dragAnchorStrategy: pointerDragAnchorStrategy,
+      onDragStarted: () {
+        if (!selectedPaths.contains(file.path)) {
+          setState(() {
+            selectedPaths.clear();
+            selectedPaths.add(file.path);
+            _lastSelectedIndex = index;
+          });
+        }
+      },
+      feedback: _buildDragFeedback(dragPayload),
+      childWhenDragging: Opacity(
+        opacity: 0.35,
+        child: itemWidget,
+      ),
+      child: itemWidget,
+    );
+
+    if (isDir) {
+      return DragTarget<List<String>>(
+        onWillAcceptWithDetails: (details) {
+          final dropped = details.data;
+          if (dropped.contains(file.path)) return false;
+          for (final p in dropped) {
+            if (file.path.startsWith(p)) return false;
+          }
+          return true;
+        },
+        onAcceptWithDetails: (details) async {
+          await _moveItemsToDirectory(details.data, file.path);
+        },
+        builder: (context, candidateData, rejectedData) {
+          if (candidateData.isNotEmpty) {
+            return Container(
+              decoration: BoxDecoration(
+                border: Border.all(color: FyrTheme.accentColor, width: 2),
+                borderRadius: BorderRadius.circular(8),
+                color: FyrTheme.accentColor.withOpacity(0.18),
+              ),
+              child: draggableItem,
+            );
+          }
+          return draggableItem;
+        },
+      );
+    }
+
+    return draggableItem;
   }
 
   @override
@@ -1616,22 +1931,59 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
                         Expanded(
                           child: SingleChildScrollView(
                             scrollDirection: Axis.horizontal,
-                            child: RichText(
-                              text: TextSpan(
-                                children: getParentDirectories(currentDir).map((dir) {
-                                  return TextSpan(
-                                    text: displayText(dir, currentDir, selectedTag != null),
-                                    style: TextStyle(
-                                      color: FyrTheme.textColor,
+                            child: Row(
+                              children: getParentDirectories(currentDir).map((dir) {
+                                final isCurrent = dir.path == currentDir.path;
+                                final text = displayText(dir, currentDir, selectedTag != null);
+                                if (text.isEmpty) return const SizedBox();
+
+                                Widget crumb = InkWell(
+                                  borderRadius: BorderRadius.circular(4),
+                                  onTap: () {
+                                    selectedTag = null;
+                                    openDirectory(dir);
+                                  },
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+                                    child: Text(
+                                      text,
+                                      style: TextStyle(
+                                        color: isCurrent ? FyrTheme.accentColor : FyrTheme.textColor,
+                                        fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
+                                        fontSize: 14,
+                                      ),
                                     ),
-                                    recognizer: TapGestureRecognizer()
-                                      ..onTap = () {
-                                        selectedTag = null;
-                                        openDirectory(dir);
-                                      },
+                                  ),
+                                );
+
+                                if (!isCurrent) {
+                                  return DragTarget<List<String>>(
+                                    onWillAcceptWithDetails: (details) {
+                                      final dropped = details.data;
+                                      if (dropped.contains(dir.path)) return false;
+                                      for (final p in dropped) {
+                                        if (dir.path.startsWith(p)) return false;
+                                      }
+                                      return true;
+                                    },
+                                    onAcceptWithDetails: (details) async {
+                                      await _moveItemsToDirectory(details.data, dir.path);
+                                    },
+                                    builder: (context, candidateData, rejectedData) {
+                                      final isHovered = candidateData.isNotEmpty;
+                                      return Container(
+                                        decoration: BoxDecoration(
+                                          color: isHovered ? FyrTheme.accentColor.withOpacity(0.25) : Colors.transparent,
+                                          borderRadius: BorderRadius.circular(4),
+                                          border: isHovered ? Border.all(color: FyrTheme.accentColor, width: 1.5) : null,
+                                        ),
+                                        child: crumb,
+                                      );
+                                    },
                                   );
-                                }).toList(),
-                              ),
+                                }
+                                return crumb;
+                              }).toList(),
                             ),
                           ),
                         ),
@@ -1763,31 +2115,36 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
                               ),
                             ),
                             Expanded(
-                              child: ListView(
-                                padding: EdgeInsets.zero,
-                                children: [
-                                  _buildSidebarItem(Icons.home, 'Home', () => getHomeDirectoryByPlatform().then((d) => openDirectory(d))),
-                                  _buildSidebarItem(Icons.desktop_mac, 'Desktop', () => getHomeDirectoryByPlatform().then((d) => openDirectory(Directory(p.join(d.path, 'Desktop'))))),
-                                  _buildSidebarItem(Icons.library_music, 'Music', () => getHomeDirectoryByPlatform().then((d) => openDirectory(Directory(p.join(d.path, 'Music'))))),
-                                  _buildSidebarItem(Icons.photo_library, 'Pictures', () => getHomeDirectoryByPlatform().then((d) => openDirectory(Directory(p.join(d.path, 'Pictures'))))),
-                                  _buildSidebarItem(Icons.file_download, 'Downloads', () => getHomeDirectoryByPlatform().then((d) => openDirectory(Directory(p.join(d.path, 'Downloads'))))),
-                                  _buildSidebarItem(Icons.delete, 'Trash', () => getHomeDirectoryByPlatform().then((d) => openDirectory(Directory(p.join(d.path, '.local/share/Trash/files'))))),
-                                  _buildSidebarItem(Icons.computer, 'My Computer', () => openDirectory(Directory('/'))),
-                                  if (s3config.enabled)
-                                    _buildSidebarItem(Icons.cloud, 'S3 Storage', () => openDirectory(Directory(S3Service.mountPath))),
-                                  const SizedBox(height: 8),
-                                  if (!isSidebarCollapsed)
-                                    const Padding(
-                                      padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-                                      child: Text("Custom Pins", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                                    ),
-                                  ...customPins.map((pin) => _buildSidebarItem(Icons.folder, p.basename(pin), () => openDirectory(Directory(pin)), onUnpin: () {
-                                    setState(() {
-                                      customPins.remove(pin);
-                                    });
-                                    saveCustomPins();
-                                  })),
-                                ],
+                              child: Builder(
+                                builder: (context) {
+                                  final userHome = Platform.environment['HOME'] ?? '/home/archer';
+                                  return ListView(
+                                    padding: EdgeInsets.zero,
+                                    children: [
+                                      _buildSidebarItem(Icons.home, 'Home', () => getHomeDirectoryByPlatform().then((d) => openDirectory(d)), targetPath: userHome),
+                                      _buildSidebarItem(Icons.desktop_mac, 'Desktop', () => getHomeDirectoryByPlatform().then((d) => openDirectory(Directory(p.join(d.path, 'Desktop')))), targetPath: p.join(userHome, 'Desktop')),
+                                      _buildSidebarItem(Icons.library_music, 'Music', () => getHomeDirectoryByPlatform().then((d) => openDirectory(Directory(p.join(d.path, 'Music')))), targetPath: p.join(userHome, 'Music')),
+                                      _buildSidebarItem(Icons.photo_library, 'Pictures', () => getHomeDirectoryByPlatform().then((d) => openDirectory(Directory(p.join(d.path, 'Pictures')))), targetPath: p.join(userHome, 'Pictures')),
+                                      _buildSidebarItem(Icons.file_download, 'Downloads', () => getHomeDirectoryByPlatform().then((d) => openDirectory(Directory(p.join(d.path, 'Downloads')))), targetPath: p.join(userHome, 'Downloads')),
+                                      _buildSidebarItem(Icons.delete, 'Trash', () => getHomeDirectoryByPlatform().then((d) => openDirectory(Directory(p.join(d.path, '.local/share/Trash/files')))), targetPath: p.join(userHome, '.local/share/Trash/files')),
+                                      _buildSidebarItem(Icons.computer, 'My Computer', () => openDirectory(Directory('/')), targetPath: '/'),
+                                      if (s3config.enabled)
+                                        _buildSidebarItem(Icons.cloud, 'S3 Storage', () => openDirectory(Directory(S3Service.mountPath)), targetPath: S3Service.mountPath),
+                                      const SizedBox(height: 8),
+                                      if (!isSidebarCollapsed)
+                                        const Padding(
+                                          padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                                          child: Text("Custom Pins", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                                        ),
+                                      ...customPins.map((pin) => _buildSidebarItem(Icons.folder, p.basename(pin), () => openDirectory(Directory(pin)), targetPath: pin, onUnpin: () {
+                                        setState(() {
+                                          customPins.remove(pin);
+                                        });
+                                        saveCustomPins();
+                                      })),
+                                    ],
+                                  );
+                                },
                               ),
                             ),
                           ],
@@ -2032,15 +2389,27 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
                       ),
                     ),
                     child: Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
                       children: [
+                        if (pickerTitle != null && pickerTitle!.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 4.0),
+                            child: Text(
+                              pickerTitle!,
+                              style: TextStyle(
+                                color: FyrTheme.textColor.withOpacity(0.85),
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        const Spacer(),
                         TextButton(
                           onPressed: () => exit(1),
                           child: Text(
                             'Cancel',
                             style: TextStyle(
                               color: FyrTheme.textColor,
-                            )
+                            ),
                           ),
                         ),
                         const SizedBox(width: 8),
@@ -2137,6 +2506,15 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
 
   Future<dynamic> openIconContextMenuRightClick(
       BuildContext context, PointerDownEvent event, FileSystemEntity file) {
+    final currentFileInfo = fileInfoList.firstWhere(
+      (info) => info.filePath == file.path,
+      orElse: () => FileInfo(filePath: file.path),
+    );
+    final hasActiveTag = currentFileInfo.tag != null && currentFileInfo.tag!.isNotEmpty;
+    final targetPaths = selectedPaths.contains(file.path) && selectedPaths.length > 1
+        ? selectedPaths.toList()
+        : [file.path];
+
     return showMenu(
       context: context,
       position: RelativeRect.fromLTRB(event.position.dx, event.position.dy,
@@ -2268,31 +2646,61 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
             ],
           ),
         ),
-        ...customTags.map((tag) => PopupMenuItem(
-          child: GestureDetector(
-              onTap: () async {
-                FileInfo currentFileInfo = fileInfoList.firstWhere(
-                  (info) => info.filePath == file.path,
-                  orElse: () => FileInfo(filePath: file.path),
-                );
+        if (hasActiveTag)
+          PopupMenuItem(
+            onTap: () async {
+              setState(() {
+                for (final tp in targetPaths) {
+                  fileInfoList.removeWhere((info) => info.filePath == tp);
+                }
+              });
+              await writeTagsToFile(fileInfoList, tagsFilePath);
+            },
+            child: Row(
+              children: [
+                Icon(Icons.label_off_outlined, color: Colors.red.shade300, size: 18),
+                const SizedBox(width: 8),
+                Text('Remove Tag', style: TextStyle(color: Colors.red.shade300)),
+              ],
+            ),
+          ),
+        ...customTags.map((tag) {
+          final currentFileInfo = fileInfoList.firstWhere(
+            (info) => info.filePath == file.path,
+            orElse: () => FileInfo(filePath: file.path),
+          );
+          final isTagApplied = currentFileInfo.tag == tag['id'];
+          final targetPaths = selectedPaths.contains(file.path) && selectedPaths.length > 1
+              ? selectedPaths.toList()
+              : [file.path];
 
-                currentFileInfo.tag = tag['id'];
-
-                fileInfoList.removeWhere((info) => info.filePath == file.path);
-                fileInfoList.add(currentFileInfo);
-
-                await writeTagsToFile(fileInfoList, tagsFilePath);
-
-                Navigator.pop(context);
-              },
-              child: Row(
-                children: [
-                  getDotColor(Color(tag['colorValue'])),
-                  const SizedBox(width: 8),
-                  Text(tag['name']),
-                ],
-              )),
-        )),
+          return PopupMenuItem(
+            onTap: () async {
+              setState(() {
+                if (isTagApplied) {
+                  for (final tp in targetPaths) {
+                    fileInfoList.removeWhere((info) => info.filePath == tp);
+                  }
+                } else {
+                  for (final tp in targetPaths) {
+                    fileInfoList.removeWhere((info) => info.filePath == tp);
+                    fileInfoList.add(FileInfo(filePath: tp, tag: tag['id']));
+                  }
+                }
+              });
+              await writeTagsToFile(fileInfoList, tagsFilePath);
+            },
+            child: Row(
+              children: [
+                getDotColor(Color(tag['colorValue'])),
+                const SizedBox(width: 8),
+                Expanded(child: Text(tag['name'])),
+                if (isTagApplied)
+                  Icon(Icons.check, size: 16, color: FyrTheme.accentColor),
+              ],
+            ),
+          );
+        }),
       ],
     );
   }
@@ -2550,6 +2958,15 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
 
   Future<dynamic> openIconContextMenu(BuildContext context,
       LongPressStartDetails event, FileSystemEntity file) {
+    final currentFileInfo = fileInfoList.firstWhere(
+      (info) => info.filePath == file.path,
+      orElse: () => FileInfo(filePath: file.path),
+    );
+    final hasActiveTag = currentFileInfo.tag != null && currentFileInfo.tag!.isNotEmpty;
+    final targetPaths = selectedPaths.contains(file.path) && selectedPaths.length > 1
+        ? selectedPaths.toList()
+        : [file.path];
+
     return showMenu(
       context: context,
       position: RelativeRect.fromLTRB(
@@ -2684,31 +3101,61 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
             ],
           ),
         ),
-        ...customTags.map((tag) => PopupMenuItem(
-          child: GestureDetector(
-              onTap: () async {
-                FileInfo currentFileInfo = fileInfoList.firstWhere(
-                  (info) => info.filePath == file.path,
-                  orElse: () => FileInfo(filePath: file.path),
-                );
+        if (hasActiveTag)
+          PopupMenuItem(
+            onTap: () async {
+              setState(() {
+                for (final tp in targetPaths) {
+                  fileInfoList.removeWhere((info) => info.filePath == tp);
+                }
+              });
+              await writeTagsToFile(fileInfoList, tagsFilePath);
+            },
+            child: Row(
+              children: [
+                Icon(Icons.label_off_outlined, color: Colors.red.shade300, size: 18),
+                const SizedBox(width: 8),
+                Text('Remove Tag', style: TextStyle(color: Colors.red.shade300)),
+              ],
+            ),
+          ),
+        ...customTags.map((tag) {
+          final currentFileInfo = fileInfoList.firstWhere(
+            (info) => info.filePath == file.path,
+            orElse: () => FileInfo(filePath: file.path),
+          );
+          final isTagApplied = currentFileInfo.tag == tag['id'];
+          final targetPaths = selectedPaths.contains(file.path) && selectedPaths.length > 1
+              ? selectedPaths.toList()
+              : [file.path];
 
-                currentFileInfo.tag = tag['id'];
-
-                fileInfoList.removeWhere((info) => info.filePath == file.path);
-                fileInfoList.add(currentFileInfo);
-
-                await writeTagsToFile(fileInfoList, tagsFilePath);
-
-                Navigator.pop(context);
-              },
-              child: Row(
-                children: [
-                  getDotColor(Color(tag['colorValue'])),
-                  const SizedBox(width: 8),
-                  Text(tag['name']),
-                ],
-              )),
-        )),
+          return PopupMenuItem(
+            onTap: () async {
+              setState(() {
+                if (isTagApplied) {
+                  for (final tp in targetPaths) {
+                    fileInfoList.removeWhere((info) => info.filePath == tp);
+                  }
+                } else {
+                  for (final tp in targetPaths) {
+                    fileInfoList.removeWhere((info) => info.filePath == tp);
+                    fileInfoList.add(FileInfo(filePath: tp, tag: tag['id']));
+                  }
+                }
+              });
+              await writeTagsToFile(fileInfoList, tagsFilePath);
+            },
+            child: Row(
+              children: [
+                getDotColor(Color(tag['colorValue'])),
+                const SizedBox(width: 8),
+                Expanded(child: Text(tag['name'])),
+                if (isTagApplied)
+                  Icon(Icons.check, size: 16, color: FyrTheme.accentColor),
+              ],
+            ),
+          );
+        }),
       ],
     );
   }

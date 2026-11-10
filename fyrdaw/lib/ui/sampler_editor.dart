@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import 'dart:io';
+import 'package:path/path.dart' as p;
 import 'package:flutter_soloud/flutter_soloud.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:fyrdaw/main.dart';
@@ -70,6 +72,65 @@ class _SamplerEditorWidgetState extends State<SamplerEditorWidget> {
         ),
       ],
     );
+  }
+
+  Future<String?> _pickAudioFile({String? title, String? initialDirectory}) async {
+    final home = Platform.environment['HOME'] ?? '';
+    final fyrfilesCandidates = [
+      if (home.isNotEmpty) p.join(home, '.local/bin/fyrfiles'),
+      if (home.isNotEmpty) p.join(home, '.local/share/fyrDE/fyrfiles/fyrfiles'),
+      '/usr/local/bin/fyrfiles',
+      '/usr/bin/fyrfiles',
+    ];
+
+    String? fyrfilesPath;
+    for (final c in fyrfilesCandidates) {
+      if (File(c).existsSync()) {
+        fyrfilesPath = c;
+        break;
+      }
+    }
+
+    if (fyrfilesPath != null) {
+      try {
+        final startDir = (initialDirectory != null && Directory(initialDirectory).existsSync())
+            ? initialDirectory
+            : (home.isNotEmpty && Directory(p.join(home, 'Music')).existsSync()
+                ? p.join(home, 'Music')
+                : (home.isNotEmpty ? home : '.'));
+
+        final args = <String>['--picker'];
+        if (title != null && title.isNotEmpty) {
+          args.add('--title=$title');
+        }
+        args.add(startDir);
+
+        final res = await Process.run(fyrfilesPath, args);
+        if (res.exitCode == 0) {
+          final out = res.stdout.toString().trim();
+          if (out.isNotEmpty) {
+            final picked = out.split('\n').first.trim();
+            if (File(picked).existsSync()) {
+              return picked;
+            }
+          }
+        }
+        return null;
+      } catch (_) {}
+    }
+
+    try {
+      final result = await FilePicker.pickFiles(
+        dialogTitle: title,
+        initialDirectory: initialDirectory,
+        type: FileType.audio,
+      );
+      if (result != null && result.files.isNotEmpty && result.files.single.path != null) {
+        return result.files.single.path;
+      }
+    } catch (_) {}
+
+    return null;
   }
 
   @override
@@ -146,12 +207,8 @@ class _SamplerEditorWidgetState extends State<SamplerEditorWidget> {
                         backgroundColor: panelLight,
                       ),
                       onPressed: () async {
-                        FilePickerResult? result = await FilePicker.pickFiles(
-                          type: FileType.audio,
-                        );
-                        if (result != null &&
-                            result.files.single.path != null) {
-                          String p = result.files.single.path!;
+                        final p = await _pickAudioFile(title: 'Load Audio Sample');
+                        if (p != null) {
                           pad.filePath = p;
                           if (SoLoud.instance.isInitialized) {
                             try {

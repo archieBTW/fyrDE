@@ -209,8 +209,72 @@ class _LibraryScreenState extends State<LibraryScreen> {
     await file.writeAsString(jsonEncode(data));
   }
 
+  Future<String?> _pickDirectory({String? title, String? initialDirectory}) async {
+    final home = Platform.environment['HOME'] ?? '';
+    final fyrfilesCandidates = [
+      if (home.isNotEmpty) p.join(home, '.local/bin/fyrfiles'),
+      if (home.isNotEmpty) p.join(home, '.local/share/fyrDE/fyrfiles/fyrfiles'),
+      '/usr/local/bin/fyrfiles',
+      '/usr/bin/fyrfiles',
+    ];
+
+    String? fyrfilesPath;
+    for (final c in fyrfilesCandidates) {
+      if (File(c).existsSync()) {
+        fyrfilesPath = c;
+        break;
+      }
+    }
+
+    if (fyrfilesPath != null) {
+      try {
+        final startDir = (initialDirectory != null && Directory(initialDirectory).existsSync())
+            ? initialDirectory
+            : (home.isNotEmpty && Directory(p.join(home, 'Pictures')).existsSync()
+                ? p.join(home, 'Pictures')
+                : (home.isNotEmpty ? home : '.'));
+
+        final args = <String>['--picker'];
+        if (title != null && title.isNotEmpty) {
+          args.add('--title=$title');
+        }
+        args.add(startDir);
+
+        final res = await Process.run(fyrfilesPath, args);
+        if (res.exitCode == 0) {
+          final out = res.stdout.toString().trim();
+          if (out.isNotEmpty) {
+            final picked = out.split('\n').first.trim();
+            if (Directory(picked).existsSync()) {
+              return picked;
+            } else if (File(picked).existsSync()) {
+              return p.dirname(picked);
+            }
+          }
+        }
+        return null;
+      } catch (_) {}
+    }
+
+    try {
+      return await FilePicker.platform.getDirectoryPath(
+        dialogTitle: title,
+        initialDirectory: initialDirectory,
+      );
+    } catch (_) {}
+
+    return null;
+  }
+
   Future<void> _importFolder() async {
-    String? folder = await FilePicker.platform.getDirectoryPath();
+    final home = Platform.environment['HOME'] ?? '';
+    final defaultDir = home.isNotEmpty && Directory(p.join(home, 'Pictures')).existsSync()
+        ? p.join(home, 'Pictures')
+        : null;
+    String? folder = await _pickDirectory(
+      title: 'Select Photos Folder',
+      initialDirectory: defaultDir,
+    );
     if (folder == null) return;
 
     setState(() => _loading = true);

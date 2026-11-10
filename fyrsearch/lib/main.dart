@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:ui';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -94,17 +95,35 @@ class _LauncherScreenState extends State<LauncherScreen>
   final int _rowsPerPage = 2;
   late final int _itemsPerPage;
 
+  Timer? _refreshTimer;
+  Timer? _debounceTimer;
+  final List<StreamSubscription> _dirWatchers = [];
+  final Map<String, DateTime> _lastDirModified = {};
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _itemsPerPage = _crossAxisCount * _rowsPerPage;
     _loadApps();
+    _setupWatchers();
+    _refreshTimer = Timer.periodic(const Duration(seconds: 4), (_) => _checkAppsModified());
+    _focusNode.addListener(() {
+      if (_focusNode.hasFocus) {
+        _checkAppsModified();
+      }
+    });
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _refreshTimer?.cancel();
+    _debounceTimer?.cancel();
+    for (var sub in _dirWatchers) {
+      sub.cancel();
+    }
+    _dirWatchers.clear();
     _searchController.dispose();
     _focusNode.dispose();
     _pageController.dispose();
@@ -114,6 +133,7 @@ class _LauncherScreenState extends State<LauncherScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      _checkAppsModified();
       setState(() {
         _searchController.clear();
         _filterApps('');
@@ -124,8 +144,7 @@ class _LauncherScreenState extends State<LauncherScreen>
     }
   }
 
-
-  Future<void> _loadApps() async {
+  Set<String> _getSearchPaths() {
     final Set<String> searchPaths = {};
     final home = Platform.environment['HOME'] ?? '';
     if (home.isNotEmpty) {
@@ -144,6 +163,58 @@ class _LauncherScreenState extends State<LauncherScreen>
     searchPaths.add('/usr/share/applications');
     searchPaths.add('/var/lib/flatpak/exports/share/applications');
     searchPaths.add('/var/lib/snapd/desktop/applications');
+    return searchPaths;
+  }
+
+  void _setupWatchers() {
+    for (var sub in _dirWatchers) {
+      sub.cancel();
+    }
+    _dirWatchers.clear();
+
+    for (final path in _getSearchPaths()) {
+      final dir = Directory(path);
+      if (dir.existsSync()) {
+        try {
+          final sub = dir.watch().listen((event) {
+            _debounceLoadApps();
+          }, onError: (_) {});
+          _dirWatchers.add(sub);
+        } catch (_) {}
+      }
+    }
+  }
+
+  void _debounceLoadApps() {
+    _debounceTimer?.cancel();
+    _debounceTimer = Timer(const Duration(milliseconds: 300), () {
+      if (mounted) _loadApps();
+    });
+  }
+
+  void _checkAppsModified() {
+    bool hasChanged = false;
+    for (final path in _getSearchPaths()) {
+      final dir = Directory(path);
+      if (dir.existsSync()) {
+        try {
+          final stat = dir.statSync();
+          final last = _lastDirModified[path];
+          if (last == null || stat.modified.isAfter(last)) {
+            _lastDirModified[path] = stat.modified;
+            hasChanged = true;
+          }
+        } catch (_) {}
+      }
+    }
+    if (hasChanged && mounted) {
+      _loadApps();
+      _setupWatchers();
+    }
+  }
+
+  Future<void> _loadApps() async {
+    final Set<String> searchPaths = _getSearchPaths();
 
     List<DesktopApp> loadedApps = [];
     final Set<String> seenFileIds = {};
@@ -295,10 +366,15 @@ class _LauncherScreenState extends State<LauncherScreen>
 
     final defaultApps = uniqueApps.where((app) => !app.noDisplay).toList();
 
+    if (!mounted) return;
     setState(() {
       _allApps = uniqueApps;
       _defaultApps = defaultApps;
-      _filteredApps = defaultApps;
+      if (_searchController.text.trim().isEmpty) {
+        _filteredApps = defaultApps;
+      } else {
+        _filterApps(_searchController.text);
+      }
     });
   }
 
@@ -391,7 +467,22 @@ class _LauncherScreenState extends State<LauncherScreen>
 
   Future<void> _launchApp(String exec) async {
     try {
-      await Process.start('sh', ['-c', exec], mode: ProcessStartMode.detached);
+      final home = Platform.environment['HOME'] ?? '';
+      final currentPath = Platform.environment['PATH'] ?? '';
+      final env = Map<String, String>.from(Platform.environment);
+      if (home.isNotEmpty && !currentPath.contains('$home/.local/bin')) {
+        env['PATH'] = '$home/.local/bin:$currentPath';
+      }
+      var targetExec = exec;
+      final parts = targetExec.trim().split(RegExp(r'\s+'));
+      if (parts.isNotEmpty && home.isNotEmpty) {
+        final binName = parts[0].split('/').last;
+        final localBin = '$home/.local/bin/$binName';
+        if (File(localBin).existsSync()) {
+          targetExec = ([localBin, ...parts.sublist(1)]).join(' ');
+        }
+      }
+      await Process.start('sh', ['-c', targetExec], environment: env, mode: ProcessStartMode.detached);
     } catch (e) {
       debugPrint('Failed to launch app: $e');
     } finally {

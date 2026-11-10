@@ -101,18 +101,87 @@ class FyrTorrentApp extends StatelessWidget {
 class MainScreen extends StatelessWidget {
   const MainScreen({super.key});
 
+  Future<String?> _pickFile({
+    String? title,
+    String? initialDirectory,
+    FileType type = FileType.any,
+    List<String>? allowedExtensions,
+  }) async {
+    final home = Platform.environment['HOME'] ?? '';
+    final fyrfilesCandidates = [
+      if (home.isNotEmpty) p.join(home, '.local/bin/fyrfiles'),
+      if (home.isNotEmpty) p.join(home, '.local/share/fyrDE/fyrfiles/fyrfiles'),
+      '/usr/local/bin/fyrfiles',
+      '/usr/bin/fyrfiles',
+    ];
+
+    String? fyrfilesPath;
+    for (final c in fyrfilesCandidates) {
+      if (File(c).existsSync()) {
+        fyrfilesPath = c;
+        break;
+      }
+    }
+
+    if (fyrfilesPath != null) {
+      try {
+        final startDir = (initialDirectory != null && Directory(initialDirectory).existsSync())
+            ? initialDirectory
+            : (home.isNotEmpty && Directory(p.join(home, 'Downloads')).existsSync()
+                ? p.join(home, 'Downloads')
+                : (home.isNotEmpty ? home : '.'));
+
+        final args = <String>['--picker'];
+        if (title != null && title.isNotEmpty) {
+          args.add('--title=$title');
+        }
+        args.add(startDir);
+
+        final res = await Process.run(fyrfilesPath, args);
+        if (res.exitCode == 0) {
+          final out = res.stdout.toString().trim();
+          if (out.isNotEmpty) {
+            final picked = out.split('\n').first.trim();
+            if (File(picked).existsSync()) {
+              return picked;
+            }
+          }
+        }
+        return null;
+      } catch (_) {}
+    }
+
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        dialogTitle: title,
+        initialDirectory: initialDirectory,
+        type: type,
+        allowedExtensions: allowedExtensions,
+      );
+      if (result != null && result.files.isNotEmpty && result.files.single.path != null) {
+        return result.files.single.path;
+      }
+    } catch (_) {}
+
+    return null;
+  }
+
   void _addTorrent(BuildContext context) async {
-    final result = await FilePicker.platform.pickFiles(
+    final home = Platform.environment['HOME'] ?? '';
+    final downloadsDir = home.isNotEmpty ? p.join(home, 'Downloads') : null;
+    final path = await _pickFile(
+      title: 'Select Torrent File',
+      initialDirectory: downloadsDir,
       type: FileType.custom,
       allowedExtensions: ['torrent'],
     );
 
-    if (result != null && result.files.single.path != null) {
+    if (path != null && context.mounted) {
       // ignore: use_build_context_synchronously
       Provider.of<TorrentService>(
         context,
         listen: false,
-      ).addTorrentFromFile(result.files.single.path!);
+      ).addTorrentFromFile(path);
     }
   }
 

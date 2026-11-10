@@ -368,7 +368,18 @@ class _DockScreenState extends State<DockScreen> {
     final parts = exec.split(' ');
     if (parts.isNotEmpty) {
       try {
-        Process.start(parts[0], parts.sublist(1));
+        final home = Platform.environment['HOME'] ?? '';
+        final currentPath = Platform.environment['PATH'] ?? '';
+        final env = Map<String, String>.from(Platform.environment);
+        if (home.isNotEmpty && !currentPath.contains('$home/.local/bin')) {
+          env['PATH'] = '$home/.local/bin:$currentPath';
+        }
+        var cmd = parts[0];
+        final baseName = cmd.split('/').last;
+        if (home.isNotEmpty && File('$home/.local/bin/$baseName').existsSync()) {
+          cmd = '$home/.local/bin/$baseName';
+        }
+        Process.start(cmd, parts.sublist(1), environment: env);
       } catch (e) {
         print(e);
       }

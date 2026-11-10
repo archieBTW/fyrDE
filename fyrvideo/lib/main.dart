@@ -187,23 +187,93 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     } catch (_) {}
   }
 
+  Future<String?> _pickFile({
+    String? title,
+    String? initialDirectory,
+    FileType type = FileType.any,
+    List<String>? allowedExtensions,
+  }) async {
+    final home = Platform.environment['HOME'] ?? '';
+    final fyrfilesCandidates = [
+      if (home.isNotEmpty) p.join(home, '.local/bin/fyrfiles'),
+      if (home.isNotEmpty) p.join(home, '.local/share/fyrDE/fyrfiles/fyrfiles'),
+      '/usr/local/bin/fyrfiles',
+      '/usr/bin/fyrfiles',
+    ];
+
+    String? fyrfilesPath;
+    for (final c in fyrfilesCandidates) {
+      if (File(c).existsSync()) {
+        fyrfilesPath = c;
+        break;
+      }
+    }
+
+    if (fyrfilesPath != null) {
+      try {
+        final startDir = (initialDirectory != null && Directory(initialDirectory).existsSync())
+            ? initialDirectory
+            : (home.isNotEmpty && Directory(p.join(home, 'Videos')).existsSync()
+                ? p.join(home, 'Videos')
+                : (home.isNotEmpty ? home : '.'));
+
+        final args = <String>['--picker'];
+        if (title != null && title.isNotEmpty) {
+          args.add('--title=$title');
+        }
+        args.add(startDir);
+
+        final res = await Process.run(fyrfilesPath, args);
+        if (res.exitCode == 0) {
+          final out = res.stdout.toString().trim();
+          if (out.isNotEmpty) {
+            final picked = out.split('\n').first.trim();
+            if (File(picked).existsSync()) {
+              return picked;
+            }
+          }
+        }
+        return null;
+      } catch (_) {}
+    }
+
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        dialogTitle: title,
+        initialDirectory: initialDirectory,
+        type: type,
+        allowedExtensions: allowedExtensions,
+      );
+      if (result != null && result.files.isNotEmpty && result.files.single.path != null) {
+        return result.files.single.path;
+      }
+    } catch (_) {}
+
+    return null;
+  }
+
   Future<void> _openFilePicker() async {
-    FilePickerResult? result = await FilePicker.platform.pickFiles(
+    final startDir = _currentFilePath != null ? p.dirname(_currentFilePath!) : null;
+    final picked = await _pickFile(
+      title: 'Open Video',
+      initialDirectory: startDir,
       type: FileType.video,
     );
 
-    if (result != null && result.files.single.path != null) {
-      _playFile(result.files.single.path!);
+    if (picked != null) {
+      _playFile(picked);
     }
   }
 
   Future<void> _pickSubtitleFile() async {
-    FilePickerResult? result = await FilePicker.platform.pickFiles(
+    final startDir = _currentFilePath != null ? p.dirname(_currentFilePath!) : null;
+    final subPath = await _pickFile(
+      title: 'Select Subtitles',
+      initialDirectory: startDir,
       type: FileType.custom,
       allowedExtensions: ['srt', 'vtt', 'ass', 'ssa', 'sub'],
     );
-    if (result != null && result.files.single.path != null) {
-      final subPath = result.files.single.path!;
+    if (subPath != null) {
       final track = SubtitleTrack.uri(subPath, title: p.basename(subPath));
       await player.setSubtitleTrack(track);
       setState(() {
