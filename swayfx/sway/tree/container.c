@@ -568,6 +568,12 @@ void container_destroy(struct sway_container *con) {
 	free(con->title);
 	free(con->formatted_title);
 	free(con->title_format);
+	if (con->animation_state.animation) {
+		if (con->animation_state.animation->initialized) {
+			wl_list_remove(&con->animation_state.animation->link);
+		}
+		free(con->animation_state.animation);
+	}
 	list_free(con->pending.children);
 	list_free(con->current.children);
 

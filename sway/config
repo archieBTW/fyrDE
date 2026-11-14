@@ -1,7 +1,8 @@
 output * bg ~/.config/fyr/space.jpg fill
 
-exec /opt/fyrtaskbar/fyrtaskbar
-exec /opt/fyrdock/fyrdock
+exec ~/.local/bin/fyrtaskbar
+exec ~/.local/bin/fyrtaskbar --desktop
+exec ~/.local/bin/fyrdock
 exec --no-startup-id /opt/fyrsearch/fyrsearch
 
 # Taskbar window rules
@@ -37,7 +38,7 @@ animation_duration_ms 300
 # -------------------------------------------------------------
 # Keybindings
 # -------------------------------------------------------------
-bindsym $mod+q kill
+bindsym $mod+q exec ~/.config/fyr/close_window.sh
 bindsym Mod1+Tab exec $HOME/.config/fyr/alttab.py
 bindsym Mod1+Shift+Tab focus prev
 bindsym XF86AudioRaiseVolume exec wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+
@@ -160,9 +161,9 @@ bindsym $mod+Ctrl exec ~/.config/fyr/help_toggle.sh
 # ==========================================
 # Fyremoji Sway Configuration
 # ==========================================
-exec /opt/fyremoji/fyremoji
-for_window [app_id="fyremoji"] floating enable, border none, resize set 400 250, move scratchpad
-bindsym $mod+period [app_id="fyremoji"] scratchpad show, resize set 400 250, border none, move position mouse
+exec ~/.local/bin/fyremoji
+for_window [app_id="fyremoji"] floating enable, border none, resize set width 400 px height 250 px, move scratchpad
+bindsym $mod+period exec ~/.config/fyr/emoji_toggle.sh
 
 
 # PRIMARY OUTPUT SETTINGS

@@ -33,6 +33,7 @@ static void fyr_method_call_cb(FlMethodChannel* channel, FlMethodCall* method_ca
         int width = fl_value_get_int(width_val);
         int height = fl_value_get_int(height_val);
         gtk_widget_set_size_request(GTK_WIDGET(window), width, height);
+        gtk_window_resize(window, width, height);
       }
     }
     g_autoptr(FlMethodResponse) response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));

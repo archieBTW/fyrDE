@@ -290,8 +290,45 @@ directory="$2"
 save="$3"
 path="$4"
 out="$5"
-/usr/local/bin/fyrfiles --picker "$path" > "$out"
+
+fyrfiles_bin=""
+for candidate in "$HOME/.local/bin/fyrfiles" "$HOME/.local/share/fyrDE/fyrfiles/fyrfiles" "/usr/local/bin/fyrfiles" "/usr/bin/fyrfiles" "/opt/fyrfiles/fyrfiles"; do
+    if [ -x "$candidate" ]; then
+        fyrfiles_bin="$candidate"
+        break
+    fi
+done
+if [ -z "$fyrfiles_bin" ]; then
+    fyrfiles_bin="$(command -v fyrfiles 2>/dev/null)"
+fi
+
+cmd_args=("--picker")
+if [ "$multiple" = "1" ]; then
+    cmd_args+=("--multiple")
+fi
+if [ "$directory" = "1" ]; then
+    cmd_args+=("--directory")
+fi
+if [ "$save" = "1" ]; then
+    cmd_args+=("--save")
+fi
+cmd_args+=("$path")
+
+"$fyrfiles_bin" "${cmd_args[@]}" > "$out"
+
+if [ "$save" = "1" ] && [ -f "$path" ] && grep -q "xdg-desktop-portal-termfilechooser" "$path" 2>/dev/null; then
+    rm -f "$path"
+fi
+
 if [ ! -s "$out" ]; then exit 1; fi
+
+if [ "$save" = "1" ]; then
+    chosen="$(head -n 1 "$out")"
+    if [ -d "$chosen" ] && [ -n "$path" ]; then
+        printf "%s/%s\n" "${chosen%/}" "$(basename "$path")" > "$out"
+    fi
+fi
+
 exit 0
 EOF
             sudo chmod +x /usr/local/bin/fyr_files_picker
@@ -405,6 +442,15 @@ if [ -z "$fyrfiles_bin" ] || [ ! -x "$fyrfiles_bin" ]; then
 fi
 
 cmd_args=("--picker")
+if [ "$multiple" = true ]; then
+    cmd_args+=("--multiple")
+fi
+if [ "$directory_only" = true ]; then
+    cmd_args+=("--directory")
+fi
+if [ "$save_file" = true ]; then
+    cmd_args+=("--save")
+fi
 if [ -n "$title" ]; then
     cmd_args+=("--title=$title")
 fi
@@ -415,6 +461,10 @@ exit_code=$?
 
 if [ $exit_code -ne 0 ] || [ -z "$selected" ]; then
     exit 1
+fi
+
+if [ "$save_file" = true ] && [ -d "$selected" ] && [ -n "$target_path" ] && [ ! -d "$target_path" ]; then
+    selected="${selected%/}/$(basename "$target_path")"
 fi
 
 if [ "$multiple" = true ]; then
@@ -430,12 +480,14 @@ EOF
             sudo ln -sf /usr/local/bin/zenity /usr/local/bin/kdialog
 
             mkdir -p ~/.local/bin
+            cp /usr/local/bin/fyr_files_picker ~/.local/bin/fyr_files_picker 2>/dev/null || true
+            chmod +x ~/.local/bin/fyr_files_picker 2>/dev/null || true
             cp /usr/local/bin/zenity ~/.local/bin/zenity 2>/dev/null || true
             ln -sf zenity ~/.local/bin/qarma 2>/dev/null || true
             ln -sf zenity ~/.local/bin/kdialog 2>/dev/null || true
 
             mkdir -p ~/.config/xdg-desktop-portal-termfilechooser
-            echo -e "[filechooser]\ncmd=/usr/local/bin/fyr_files_picker" > ~/.config/xdg-desktop-portal-termfilechooser/config
+            echo -e "[filechooser]\ncmd=$HOME/.local/bin/fyr_files_picker\ncreate_help_file=0" > ~/.config/xdg-desktop-portal-termfilechooser/config
             mkdir -p ~/.config/xdg-desktop-portal
             echo -e "[preferred]\ndefault=wlr;gtk;\norg.freedesktop.impl.portal.FileChooser=termfilechooser" > ~/.config/xdg-desktop-portal/sway-portals.conf
             ;;

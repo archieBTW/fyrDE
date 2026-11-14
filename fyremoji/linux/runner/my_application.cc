@@ -16,12 +16,26 @@ G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
-  gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
+  GtkWidget* toplevel = gtk_widget_get_toplevel(GTK_WIDGET(view));
+  if (GTK_IS_WINDOW(toplevel)) {
+    GtkWindow* win = GTK_WINDOW(toplevel);
+    GdkGeometry geometry;
+    geometry.min_width = 400;
+    geometry.min_height = 250;
+    geometry.max_width = 400;
+    geometry.max_height = 250;
+    gtk_window_set_geometry_hints(
+        win, nullptr, &geometry,
+        static_cast<GdkWindowHints>(GDK_HINT_MIN_SIZE | GDK_HINT_MAX_SIZE));
+    gtk_window_set_resizable(win, FALSE);
+    gtk_window_resize(win, 400, 250);
+  }
+  gtk_widget_show(toplevel);
 }
 
 // Intercept close requests (e.g., Sway kill command)
 static gboolean on_window_delete_event(GtkWidget* widget, GdkEvent* event, gpointer user_data) {
-  system("swaymsg move scratchpad > /dev/null 2>&1");
+  system("swaymsg '[app_id=\"fyremoji\"] move scratchpad' > /dev/null 2>&1");
   return TRUE; // Prevent the window from actually closing
 }
 
@@ -45,7 +59,17 @@ static void my_application_activate(GApplication* application) {
   gtk_css_provider_load_from_data(css, "window, decoration { background: transparent; }", -1, nullptr);
   gtk_style_context_add_provider_for_screen(screen, GTK_STYLE_PROVIDER(css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
 
-  gtk_window_set_default_size(window, 350, 400);
+  gtk_window_set_default_size(window, 400, 250);
+  gtk_widget_set_size_request(GTK_WIDGET(window), 400, 250);
+  gtk_window_set_resizable(window, FALSE);
+  GdkGeometry geometry;
+  geometry.min_width = 400;
+  geometry.min_height = 250;
+  geometry.max_width = 400;
+  geometry.max_height = 250;
+  gtk_window_set_geometry_hints(
+      window, nullptr, &geometry,
+      static_cast<GdkWindowHints>(GDK_HINT_MIN_SIZE | GDK_HINT_MAX_SIZE));
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();
   fl_dart_project_set_dart_entrypoint_arguments(

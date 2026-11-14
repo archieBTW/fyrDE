@@ -926,7 +926,9 @@ static void transaction_apply(struct sway_transaction *transaction) {
 			struct sway_output *output = node->sway_output;
 			struct sway_workspace *old_ws = output->current.active_workspace;
 			struct sway_workspace *new_ws = instruction->output_state.active_workspace;
-			if (old_ws && new_ws && old_ws != new_ws && config->animation_duration_ms > 0) {
+			if (old_ws && new_ws && old_ws != new_ws &&
+					!old_ws->node.destroying && !new_ws->node.destroying &&
+					config->animation_duration_ms > 0) {
 				should_start_new_animation = true;
 
 				int direction = 0;
@@ -957,7 +959,8 @@ static void transaction_apply(struct sway_transaction *transaction) {
 			break;
 		case N_CONTAINER: {
 			struct sway_container *con = node->sway_container;
-			if (should_con_new_animation(con, &instruction->container_state)) {
+			if (!con->node.destroying &&
+					should_con_new_animation(con, &instruction->container_state)) {
 				should_start_new_animation = true;
 
 				// TODO: reset animation state on going to scratchpad

@@ -13,7 +13,7 @@ void main() async {
     size: Size(400, 250),
     minimumSize: Size(400, 250),
     maximumSize: Size(400, 250),
-    center: true,
+    center: false,
     backgroundColor: Colors.transparent,
     skipTaskbar: true,
     titleBarStyle: TitleBarStyle.hidden,
@@ -22,6 +22,9 @@ void main() async {
   windowManager.waitUntilReadyToShow(windowOptions, () async {
     await windowManager.setAsFrameless();
     await windowManager.setBackgroundColor(Colors.transparent);
+    await windowManager.setMinimumSize(const Size(400, 250));
+    await windowManager.setMaximumSize(const Size(400, 250));
+    await windowManager.setSize(const Size(400, 250));
     await windowManager.setResizable(false);
     await windowManager.show();
   });
@@ -74,7 +77,7 @@ class _EmojiPickerScreenState extends State<EmojiPickerScreen> {
   }
 
   void _hidePicker() {
-    Process.start('swaymsg', ['move', 'scratchpad'], mode: ProcessStartMode.detached);
+    Process.start('swaymsg', ['[app_id="fyremoji"] move scratchpad'], mode: ProcessStartMode.detached);
   }
 
   void _onEmojiSelected(Category? category, Emoji emoji) {

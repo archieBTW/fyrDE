@@ -11,10 +11,33 @@ import 'panes/default_apps_pane.dart';
 import 'panes/sound_pane.dart';
 import 'fyr_theme.dart';
 
-void main() async {
+void main(List<String> args) async {
   FyrTheme.initialize();
   WidgetsFlutterBinding.ensureInitialized();
   await windowManager.ensureInitialized();
+
+  int initialIndex = 0;
+  for (final rawArg in args) {
+    final arg = rawArg.toLowerCase().replaceAll('--', '').trim();
+    if (arg == 'personalization' ||
+        arg == 'appearance' ||
+        arg == 'wallpaper' ||
+        arg == 'background') {
+      initialIndex = 4;
+    } else if (arg == 'displays' || arg == 'display') {
+      initialIndex = 2;
+    } else if (arg == 'sound' || arg == 'audio') {
+      initialIndex = 3;
+    } else if (arg == 'default-apps' || arg == 'apps') {
+      initialIndex = 5;
+    } else if (arg == 'power' || arg == 'battery') {
+      initialIndex = 6;
+    } else if (arg == 'bluetooth') {
+      initialIndex = 1;
+    } else if (arg == 'wifi' || arg == 'network') {
+      initialIndex = 0;
+    }
+  }
 
   WindowOptions windowOptions = const WindowOptions(
     size: Size(1280, 720),
@@ -29,11 +52,12 @@ void main() async {
     await windowManager.focus();
   });
 
-  runApp(const FyrSettingsApp());
+  runApp(FyrSettingsApp(initialIndex: initialIndex));
 }
 
 class FyrSettingsApp extends StatelessWidget {
-  const FyrSettingsApp({super.key});
+  final int initialIndex;
+  const FyrSettingsApp({super.key, this.initialIndex = 0});
 
   @override
   Widget build(BuildContext context) {
@@ -59,7 +83,7 @@ class FyrSettingsApp extends StatelessWidget {
           secondary: FyrTheme.accentColor,
         ),
       ),
-      home: SettingsScreen(),
+      home: SettingsScreen(initialIndex: initialIndex),
     ),
     );
   }
@@ -74,15 +98,22 @@ class SettingsCategory {
 }
 
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key});
+  final int initialIndex;
+  const SettingsScreen({super.key, this.initialIndex = 0});
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  int _selectedIndex = 0;
+  late int _selectedIndex;
   bool _isSidebarCollapsed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedIndex = widget.initialIndex;
+  }
 
   @override
   Widget build(BuildContext context) {

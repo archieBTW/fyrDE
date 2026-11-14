@@ -26,12 +26,11 @@ packages:
     source: hosted
     version: "1.0.5"
   bittorrent_dht:
-    dependency: transitive
+    dependency: "direct overridden"
     description:
-      name: bittorrent_dht
-      sha256: "0514aa2e7777cff37e7cbce08eeb8be8691a7171381068fd1714f96c1671d6f7"
-      url: "https://pub.dev"
-    source: hosted
+      path: "packages/bittorrent_dht"
+      relative: true
+    source: path
     version: "0.0.15"
   boolean_selector:
     dependency: transitive
@@ -124,10 +123,9 @@ packages:
   dtorrent_task:
     dependency: "direct main"
     description:
-      name: dtorrent_task
-      sha256: b2d62d8672d723d05c9547ca60a02c4a9e2a272d2a2d34b3c767d87012721579
-      url: "https://pub.dev"
-    source: hosted
+      path: "packages/dtorrent_task"
+      relative: true
+    source: path
     version: "0.4.1"
   dtorrent_tracker:
     dependency: transitive

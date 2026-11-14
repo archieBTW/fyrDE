@@ -107,6 +107,77 @@ class _StartMenuPopupState extends State<StartMenuPopup>
     Process.start(command, args, mode: ProcessStartMode.detached);
   }
 
+  Future<void> _confirmPowerAction({
+    required String title,
+    required String message,
+    required String confirmLabel,
+    required IconData icon,
+    required String command,
+    required List<String> args,
+    bool isDanger = false,
+  }) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: FyrTheme.bgColor,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: FyrTheme.cardColor),
+        ),
+        title: Row(
+          children: [
+            Icon(
+              icon,
+              color: isDanger ? Colors.redAccent : FyrTheme.accentColor,
+              size: 24,
+            ),
+            const SizedBox(width: 12),
+            Text(
+              title,
+              style: TextStyle(
+                color: FyrTheme.textColor,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          message,
+          style: TextStyle(
+            color: FyrTheme.textColor.withOpacity(0.85),
+            fontSize: 15,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text(
+              'Cancel',
+              style: TextStyle(color: FyrTheme.textColor.withOpacity(0.7)),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: isDanger
+                  ? Colors.redAccent
+                  : FyrTheme.accentColor,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(confirmLabel),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      _runCommand(command, args);
+    }
+  }
+
   void _pinApp(DesktopApp app) async {
     final dir = Directory('${Platform.environment['HOME']}/.config/fyrdock');
     if (!await dir.exists()) await dir.create(recursive: true);
@@ -445,17 +516,42 @@ class _StartMenuPopupState extends State<StartMenuPopup>
                   PowerButton(
                     icon: Icons.logout,
                     label: "Logout",
-                    onTap: () => _runCommand('swaymsg', ['exit']),
+                    onTap: () => _confirmPowerAction(
+                      title: 'Log Out',
+                      message:
+                          'Are you sure you want to log out of your current session?',
+                      confirmLabel: 'Log Out',
+                      icon: Icons.logout,
+                      command: 'swaymsg',
+                      args: ['exit'],
+                    ),
                   ),
                   PowerButton(
                     icon: Icons.restart_alt,
                     label: "Restart",
-                    onTap: () => _runCommand('systemctl', ['reboot']),
+                    onTap: () => _confirmPowerAction(
+                      title: 'Restart Computer',
+                      message:
+                          'Are you sure you want to restart your computer? Any unsaved work will be lost.',
+                      confirmLabel: 'Restart',
+                      icon: Icons.restart_alt,
+                      command: 'systemctl',
+                      args: ['reboot'],
+                    ),
                   ),
                   PowerButton(
                     icon: Icons.power_settings_new,
                     label: "Shutdown",
-                    onTap: () => _runCommand('systemctl', ['poweroff']),
+                    onTap: () => _confirmPowerAction(
+                      title: 'Shut Down Computer',
+                      message:
+                          'Are you sure you want to shut down your computer? Any unsaved work will be lost.',
+                      confirmLabel: 'Shut Down',
+                      icon: Icons.power_settings_new,
+                      command: 'systemctl',
+                      args: ['poweroff'],
+                      isDanger: true,
+                    ),
                     isDanger: true,
                   ),
                 ],

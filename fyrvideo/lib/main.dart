@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
@@ -742,61 +743,28 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    MaterialVideoControlsTheme(
-                      normal: MaterialVideoControlsThemeData(
-                        bottomButtonBar: [
-                          const MaterialPositionIndicator(),
-                          const Spacer(),
-                          MaterialCustomButton(
-                            onPressed: _showSubtitlesDialog,
-                            icon: Icon(
-                              _subtitlesEnabled && _selectedSubtitleTrack.id != 'no'
-                                  ? Icons.subtitles
-                                  : Icons.subtitles_off,
-                              color: _subtitlesEnabled && _selectedSubtitleTrack.id != 'no'
-                                  ? FyrTheme.accentColor
-                                  : Colors.white,
-                            ),
-                          ),
-                          const MaterialFullscreenButton(),
-                        ],
+                    Video(
+                      controller: controller,
+                      controls: (videoState) => _FyrVideoControls(
+                        videoState: videoState,
+                        player: player,
+                        subtitlesEnabled: _subtitlesEnabled && _selectedSubtitleTrack.id != 'no',
+                        onOpenSubtitles: _showSubtitlesDialog,
                       ),
-                      fullscreen: MaterialVideoControlsThemeData(
-                        bottomButtonBar: [
-                          const MaterialPositionIndicator(),
-                          const Spacer(),
-                          MaterialCustomButton(
-                            onPressed: _showSubtitlesDialog,
-                            icon: Icon(
-                              _subtitlesEnabled && _selectedSubtitleTrack.id != 'no'
-                                  ? Icons.subtitles
-                                  : Icons.subtitles_off,
-                              color: _subtitlesEnabled && _selectedSubtitleTrack.id != 'no'
-                                  ? FyrTheme.accentColor
-                                  : Colors.white,
-                            ),
-                          ),
-                          const MaterialFullscreenButton(),
-                        ],
-                      ),
-                      child: Video(
-                        controller: controller,
-                        controls: MaterialVideoControls,
-                        subtitleViewConfiguration: SubtitleViewConfiguration(
-                          visible: _subtitlesEnabled && _selectedSubtitleTrack.id != 'no',
-                          style: TextStyle(
-                            height: 1.3,
-                            fontSize: _subtitleFontSize,
-                            color: Colors.white,
-                            backgroundColor: Colors.black.withOpacity(0.65),
-                            fontWeight: FontWeight.w600,
-                            letterSpacing: 0.5,
-                            shadows: const [
-                              Shadow(blurRadius: 3.0, color: Colors.black, offset: Offset(1.0, 1.0)),
-                            ],
-                          ),
-                          padding: const EdgeInsets.fromLTRB(24.0, 0.0, 24.0, 56.0),
+                      subtitleViewConfiguration: SubtitleViewConfiguration(
+                        visible: _subtitlesEnabled && _selectedSubtitleTrack.id != 'no',
+                        style: TextStyle(
+                          height: 1.3,
+                          fontSize: _subtitleFontSize,
+                          color: Colors.white,
+                          backgroundColor: Colors.black.withOpacity(0.65),
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.5,
+                          shadows: const [
+                            Shadow(blurRadius: 3.0, color: Colors.black, offset: Offset(1.0, 1.0)),
+                          ],
                         ),
+                        padding: const EdgeInsets.fromLTRB(24.0, 0.0, 24.0, 88.0),
                       ),
                     ),
                     if (_currentFileName == null)
@@ -828,6 +796,320 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                         ),
                       ),
                   ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FyrVideoControls extends StatefulWidget {
+  final VideoState videoState;
+  final Player player;
+  final bool subtitlesEnabled;
+  final VoidCallback onOpenSubtitles;
+
+  const _FyrVideoControls({
+    required this.videoState,
+    required this.player,
+    required this.subtitlesEnabled,
+    required this.onOpenSubtitles,
+  });
+
+  @override
+  State<_FyrVideoControls> createState() => _FyrVideoControlsState();
+}
+
+class _FyrVideoControlsState extends State<_FyrVideoControls> {
+  bool _visible = false;
+  bool _hoveringBottomControls = false;
+  bool _seeking = false;
+  double? _dragValue;
+  Timer? _hideTimer;
+
+  late bool _playing = widget.player.state.playing;
+  late Duration _position = widget.player.state.position;
+  late Duration _duration = widget.player.state.duration;
+  late double _volume = widget.player.state.volume;
+  double _lastNonZeroVolume = 100.0;
+
+  final List<StreamSubscription> _subscriptions = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _subscriptions.addAll([
+      widget.player.stream.playing.listen((v) {
+        if (mounted) setState(() => _playing = v);
+      }),
+      widget.player.stream.position.listen((v) {
+        if (mounted && !_seeking) setState(() => _position = v);
+      }),
+      widget.player.stream.duration.listen((v) {
+        if (mounted) setState(() => _duration = v);
+      }),
+      widget.player.stream.volume.listen((v) {
+        if (mounted) {
+          setState(() {
+            _volume = v;
+            if (v > 0) _lastNonZeroVolume = v;
+          });
+        }
+      }),
+    ]);
+  }
+
+  @override
+  void dispose() {
+    _hideTimer?.cancel();
+    for (final s in _subscriptions) {
+      s.cancel();
+    }
+    super.dispose();
+  }
+
+  void _showControlsAndScheduleHide() {
+    if (!_visible) {
+      setState(() => _visible = true);
+    }
+    _hideTimer?.cancel();
+    _hideTimer = Timer(const Duration(milliseconds: 2200), () {
+      if (mounted && !_hoveringBottomControls && !_seeking) {
+        setState(() => _visible = false);
+      }
+    });
+  }
+
+  void _onMouseExitWindow() {
+    _hideTimer?.cancel();
+    if (!_seeking && mounted) {
+      setState(() {
+        _hoveringBottomControls = false;
+        _visible = false;
+      });
+    }
+  }
+
+  String _formatDuration(Duration d) {
+    final totalSeconds = d.inSeconds;
+    if (totalSeconds <= 0) return '0:00';
+    final hours = d.inHours;
+    final minutes = d.inMinutes.remainder(60);
+    final seconds = totalSeconds.remainder(60).toString().padLeft(2, '0');
+    if (hours > 0) {
+      return '$hours:${minutes.toString().padLeft(2, '0')}:$seconds';
+    }
+    return '$minutes:$seconds';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final maxMs = _duration.inMilliseconds.toDouble();
+    final currentMs = (_seeking && _dragValue != null)
+        ? _dragValue!
+        : _position.inMilliseconds.toDouble().clamp(0.0, maxMs > 0 ? maxMs : 1.0);
+
+    const iconShadows = [
+      Shadow(color: Colors.black87, blurRadius: 6, offset: Offset(0, 1)),
+    ];
+
+    return MouseRegion(
+      cursor: _visible ? SystemMouseCursors.basic : SystemMouseCursors.none,
+      onEnter: (_) => _showControlsAndScheduleHide(),
+      onHover: (_) => _showControlsAndScheduleHide(),
+      onExit: (_) => _onMouseExitWindow(),
+      child: Listener(
+        onPointerSignal: (event) {
+          if (event is PointerScrollEvent) {
+            final delta = event.scrollDelta.dy < 0 ? 5.0 : -5.0;
+            widget.player.setVolume((_volume + delta).clamp(0.0, 100.0));
+            _showControlsAndScheduleHide();
+          }
+        },
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            // Video surface tap/double-tap area
+            GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: () {
+                widget.player.playOrPause();
+                _showControlsAndScheduleHide();
+              },
+              onDoubleTap: () {
+                widget.videoState.toggleFullscreen();
+              },
+              child: const SizedBox.expand(),
+            ),
+            // Hover-fading transparent bottom controls with generous padding
+            Align(
+              alignment: Alignment.bottomCenter,
+              child: IgnorePointer(
+                ignoring: !_visible,
+                child: AnimatedOpacity(
+                  opacity: _visible ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeInOut,
+                  child: MouseRegion(
+                    onEnter: (_) {
+                      _hoveringBottomControls = true;
+                      _hideTimer?.cancel();
+                      if (!_visible) setState(() => _visible = true);
+                    },
+                    onHover: (_) {
+                      _hoveringBottomControls = true;
+                      _hideTimer?.cancel();
+                    },
+                    onExit: (_) {
+                      _hoveringBottomControls = false;
+                      _showControlsAndScheduleHide();
+                    },
+                    child: Container(
+                      color: Colors.transparent,
+                      padding: const EdgeInsets.fromLTRB(28.0, 12.0, 28.0, 22.0),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // Scrubber / Seek bar
+                          SliderTheme(
+                            data: SliderTheme.of(context).copyWith(
+                              trackHeight: 4.0,
+                              activeTrackColor: FyrTheme.accentColor,
+                              inactiveTrackColor: Colors.white.withOpacity(0.32),
+                              thumbColor: Colors.white,
+                              overlayColor: FyrTheme.accentColor.withOpacity(0.22),
+                              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7.0),
+                              overlayShape: const RoundSliderOverlayShape(overlayRadius: 14.0),
+                            ),
+                            child: Slider(
+                              value: maxMs > 0 ? currentMs.clamp(0.0, maxMs) : 0.0,
+                              min: 0.0,
+                              max: maxMs > 0 ? maxMs : 1.0,
+                              onChangeStart: (val) {
+                                _hideTimer?.cancel();
+                                setState(() {
+                                  _seeking = true;
+                                  _dragValue = val;
+                                });
+                              },
+                              onChanged: (val) {
+                                setState(() {
+                                  _dragValue = val;
+                                });
+                              },
+                              onChangeEnd: (val) async {
+                                final target = Duration(milliseconds: val.round());
+                                await widget.player.seek(target);
+                                if (mounted) {
+                                  setState(() {
+                                    _position = target;
+                                    _seeking = false;
+                                    _dragValue = null;
+                                  });
+                                  _showControlsAndScheduleHide();
+                                }
+                              },
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          // Play button and controls row
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 6.0),
+                            child: Row(
+                              children: [
+                                IconButton(
+                                  onPressed: () => widget.player.playOrPause(),
+                                  tooltip: _playing ? 'Pause' : 'Play',
+                                  icon: Icon(
+                                    _playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                                    color: Colors.white,
+                                    size: 30,
+                                    shadows: iconShadows,
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                IconButton(
+                                  onPressed: () {
+                                    if (_volume > 0) {
+                                      _lastNonZeroVolume = _volume;
+                                      widget.player.setVolume(0);
+                                    } else {
+                                      widget.player.setVolume(_lastNonZeroVolume > 0 ? _lastNonZeroVolume : 100.0);
+                                    }
+                                  },
+                                  tooltip: _volume == 0 ? 'Unmute' : 'Mute',
+                                  icon: Icon(
+                                    _volume == 0
+                                        ? Icons.volume_off_rounded
+                                        : (_volume < 50 ? Icons.volume_down_rounded : Icons.volume_up_rounded),
+                                    color: Colors.white,
+                                    size: 22,
+                                    shadows: iconShadows,
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: 88,
+                                  child: SliderTheme(
+                                    data: SliderTheme.of(context).copyWith(
+                                      trackHeight: 3.0,
+                                      activeTrackColor: Colors.white,
+                                      inactiveTrackColor: Colors.white.withOpacity(0.3),
+                                      thumbColor: Colors.white,
+                                      thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5.0),
+                                      overlayShape: const RoundSliderOverlayShape(overlayRadius: 10.0),
+                                    ),
+                                    child: Slider(
+                                      value: _volume.clamp(0.0, 100.0),
+                                      min: 0.0,
+                                      max: 100.0,
+                                      onChanged: (v) => widget.player.setVolume(v),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Text(
+                                  '${_formatDuration(Duration(milliseconds: currentMs.round()))} / ${_formatDuration(_duration)}',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                    shadows: iconShadows,
+                                  ),
+                                ),
+                                const Spacer(),
+                                IconButton(
+                                  onPressed: widget.onOpenSubtitles,
+                                  tooltip: 'Subtitles & Captions',
+                                  icon: Icon(
+                                    widget.subtitlesEnabled ? Icons.subtitles : Icons.subtitles_off_outlined,
+                                    color: widget.subtitlesEnabled ? FyrTheme.accentColor : Colors.white,
+                                    size: 22,
+                                    shadows: iconShadows,
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                IconButton(
+                                  onPressed: () => widget.videoState.toggleFullscreen(),
+                                  tooltip: 'Toggle Fullscreen',
+                                  icon: Icon(
+                                    widget.videoState.isFullscreen()
+                                        ? Icons.fullscreen_exit_rounded
+                                        : Icons.fullscreen_rounded,
+                                    color: Colors.white,
+                                    size: 26,
+                                    shadows: iconShadows,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ),

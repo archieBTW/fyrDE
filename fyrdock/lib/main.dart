@@ -98,10 +98,12 @@ class _DockScreenState extends State<DockScreen> {
   List<dynamic> _pinnedApps = [];
   List<Map<String, dynamic>> _openWindows = [];
   Timer? _timer;
+  Timer? _hideDebounce;
   bool _isVisible = true;
   bool _autohide = false; // Static by default
   bool _initializedAutohide = false;
   double _dockWidth = -1.0;
+  double _dockHeight = -1.0;
   bool _isHoveredMain = false;
   String? _previewId;
   String? _previewExec;
@@ -138,8 +140,9 @@ class _DockScreenState extends State<DockScreen> {
               waylandLayerShellPlugin.setLayer(ShellLayer.layerTop);
             } else {
               waylandLayerShellPlugin.setExclusiveZone(0);
-              waylandLayerShellPlugin.setLayer(ShellLayer.layerBottom);
+              waylandLayerShellPlugin.setLayer(ShellLayer.layerTop);
             }
+            _updateWindowWidth();
           }
         }
       } catch (_) {}
@@ -148,6 +151,7 @@ class _DockScreenState extends State<DockScreen> {
         _initializedAutohide = true;
         waylandLayerShellPlugin.setExclusiveZone(72);
         waylandLayerShellPlugin.setLayer(ShellLayer.layerTop);
+        _updateWindowWidth();
       }
     }
   }
@@ -159,12 +163,38 @@ class _DockScreenState extends State<DockScreen> {
         final tree = jsonDecode(treeResult.stdout);
         List<Map<String, dynamic>> windows = [];
         bool hasVisibleWindows = false;
+        double screenX = 0;
+        double screenY = 0;
+        double screenWidth = 1920;
+        double screenHeight = 1080;
+
+        if (tree['rect'] != null) {
+          final w = (tree['rect']['width'] as num?)?.toDouble() ?? 0;
+          final h = (tree['rect']['height'] as num?)?.toDouble() ?? 0;
+          if (w > 0 && h > 0) {
+            screenWidth = w;
+            screenHeight = h;
+          }
+        }
 
         void traverse(
           Map<String, dynamic> node,
           bool isScratch,
           String? currentWorkspace,
         ) {
+          if (node['type'] == 'output' &&
+              node['name'] != '__i3' &&
+              node['rect'] != null) {
+            final w = (node['rect']['width'] as num?)?.toDouble() ?? 0;
+            final h = (node['rect']['height'] as num?)?.toDouble() ?? 0;
+            if (w > 0 && h > 0) {
+              screenX = (node['rect']['x'] as num?)?.toDouble() ?? 0;
+              screenY = (node['rect']['y'] as num?)?.toDouble() ?? 0;
+              screenWidth = w;
+              screenHeight = h;
+            }
+          }
+
           bool currentScratch = isScratch || node['name'] == '__i3_scratch';
           String? ws = node['type'] == 'workspace'
               ? node['name']
@@ -187,7 +217,8 @@ class _DockScreenState extends State<DockScreen> {
                 !appId.contains('fyrhelp') &&
                 !appId.contains('fyremoji') &&
                 !appId.contains('sway_launcher') &&
-                !appId.contains('fyrwindowoverview')) {
+                !appId.contains('fyrwindowoverview') &&
+                !appId.contains('fyrdesktop')) {
               windows.add({
                 'app_id': appId,
                 'name': node['name'],
@@ -199,16 +230,19 @@ class _DockScreenState extends State<DockScreen> {
                 'marks': node['marks'] ?? [],
               });
               if (!currentScratch && node['visible'] == true) {
-                if (node['rect'] != null) {
+                if ((node['fullscreen_mode'] as num? ?? 0) > 0) {
+                  hasVisibleWindows = true;
+                } else if (node['rect'] != null) {
                   double wx = (node['rect']['x'] as num).toDouble();
                   double wy = (node['rect']['y'] as num).toDouble();
                   double ww = (node['rect']['width'] as num).toDouble();
                   double wh = (node['rect']['height'] as num).toDouble();
-                  double dockX = (1920 - _dockWidth) / 2;
-                  double dockY = 1080 - 72;
-                  if (wx < dockX + _dockWidth &&
+                  double effectiveDockWidth = _dockWidth > 0 ? _dockWidth : 400;
+                  double dockX = screenX + (screenWidth - effectiveDockWidth) / 2;
+                  double dockY = screenY + screenHeight - 88;
+                  if (wx < dockX + effectiveDockWidth &&
                       wx + ww > dockX &&
-                      wy < dockY + 72 &&
+                      wy < dockY + 88 &&
                       wy + wh > dockY) {
                     hasVisibleWindows = true;
                   }
@@ -242,6 +276,7 @@ class _DockScreenState extends State<DockScreen> {
   @override
   void dispose() {
     _timer?.cancel();
+    _hideDebounce?.cancel();
     super.dispose();
   }
 
@@ -304,17 +339,21 @@ class _DockScreenState extends State<DockScreen> {
 
     if (width < 100) width = 100;
 
-    if (_dockWidth == width) return;
+    bool shouldShow = !_autohide || _isVisible || _isHoveredMain || _previewId != null;
+    double height = !shouldShow ? 6.0 : (_previewId != null ? 200.0 : 88.0);
+
+    if (_dockWidth == width && _dockHeight == height) return;
     _dockWidth = width;
+    _dockHeight = height;
 
     const channel = MethodChannel('fyrdock/resize');
     try {
       await channel.invokeMethod('setSize', {
         'width': width.toInt(),
-        'height': 200,
+        'height': height.toInt(),
       });
     } catch (_) {}
-    await windowManager.setSize(Size(width, 200));
+    await windowManager.setSize(Size(width, height));
   }
 
   Future<String?> _findIcon(String? iconName) async {
@@ -619,21 +658,56 @@ class _DockScreenState extends State<DockScreen> {
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: MouseRegion(
+        hitTestBehavior: HitTestBehavior.opaque,
         onEnter: (_) {
-          setState(() => _isHoveredMain = true);
+          _hideDebounce?.cancel();
+          if (!_isHoveredMain) {
+            setState(() => _isHoveredMain = true);
+            _updateWindowWidth();
+          }
           waylandLayerShellPlugin.setLayer(ShellLayer.layerTop);
         },
-        onExit: (_) {
-          setState(() => _isHoveredMain = false);
-          if (_autohide) {
-            waylandLayerShellPlugin.setLayer(ShellLayer.layerBottom);
+        onHover: (_) {
+          _hideDebounce?.cancel();
+          if (!_isHoveredMain) {
+            setState(() => _isHoveredMain = true);
+            _updateWindowWidth();
           }
         },
-        child: AnimatedOpacity(
-          opacity: (_isVisible || _isHoveredMain) ? 1.0 : 0.0,
-          duration: const Duration(milliseconds: 150),
-          child: Stack(
-            children: [
+        onExit: (_) {
+          _hideDebounce?.cancel();
+          _hideDebounce = Timer(const Duration(milliseconds: 180), () {
+            if (mounted) {
+              setState(() {
+                _isHoveredMain = false;
+                if (_autohide && !_isVisible) {
+                  _previewId = null;
+                  _previewExec = null;
+                }
+              });
+              _updateWindowWidth();
+            }
+          });
+        },
+        child: Container(
+          width: double.infinity,
+          height: double.infinity,
+          color: const Color(0x01000000),
+          child: ClipRect(
+            child: OverflowBox(
+              minWidth: 0,
+              maxWidth: double.infinity,
+              minHeight: 0,
+              maxHeight: 200,
+              alignment: Alignment.bottomCenter,
+              child: AnimatedOpacity(
+                opacity: (_isVisible || _isHoveredMain || _previewId != null) ? 1.0 : 0.0,
+                duration: const Duration(milliseconds: 150),
+                child: SizedBox(
+                  width: _dockWidth > 0 ? _dockWidth : 800,
+                  height: 200,
+                  child: Stack(
+                    children: [
               Align(
                 alignment: Alignment.bottomCenter,
                 child: Container(
@@ -794,7 +868,11 @@ class _DockScreenState extends State<DockScreen> {
                 ),
               ),
               if (previewWidget != null) previewWidget,
-            ],
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
       ),

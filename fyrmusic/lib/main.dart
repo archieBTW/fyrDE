@@ -285,6 +285,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
   String _sortBy = 'Title';
   String? _selectedArtist;
   String? _selectedAlbum;
+  bool _isSelectionMode = false;
+  final Set<String> _selectedSongPaths = {};
   
   late final Player player = Player();
   Song? _currentSong;
@@ -368,13 +370,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
             TextButton(onPressed: () => Navigator.pop(context), child: Text('Cancel')),
             ElevatedButton(
               onPressed: () async {
+                final cachedArtwork = await _cacheArtworkImage(newArtworkPath);
                 final updatedSong = Song(
                   path: song.path,
                   title: titleController.text,
                   artist: artistController.text,
                   album: albumController.text,
                   genre: song.genre,
-                  artworkPath: newArtworkPath,
+                  artworkPath: cachedArtwork,
                   durationSeconds: song.durationSeconds,
                 );
                 
@@ -396,14 +399,378 @@ class _LibraryScreenState extends State<LibraryScreen> {
     );
   }
 
+  Future<String?> _cacheArtworkImage(String? sourcePath) async {
+    if (sourcePath == null || sourcePath.isEmpty) return null;
+    try {
+      final srcFile = File(sourcePath);
+      if (!srcFile.existsSync()) return sourcePath;
+      final cacheDir = Directory('${Platform.environment['HOME']}/.cache/fyr/music_artwork');
+      if (!cacheDir.existsSync()) cacheDir.createSync(recursive: true);
+      if (p.isWithin(cacheDir.path, sourcePath)) return sourcePath;
+      final ext = p.extension(sourcePath).isNotEmpty ? p.extension(sourcePath) : '.jpg';
+      final destPath = p.join(
+        cacheDir.path,
+        'cover_${DateTime.now().millisecondsSinceEpoch}_${sourcePath.hashCode.abs()}$ext',
+      );
+      await srcFile.copy(destPath);
+      return destPath;
+    } catch (_) {
+      return sourcePath;
+    }
+  }
+
+  void _showBulkEditDialog([List<Song>? preselected]) {
+    final Set<String> targetPaths = {};
+    if (preselected != null && preselected.isNotEmpty) {
+      targetPaths.addAll(preselected.map((s) => s.path));
+    } else if (_selectedSongPaths.isNotEmpty) {
+      targetPaths.addAll(_selectedSongPaths);
+    } else if (_selectedAlbum != null) {
+      targetPaths.addAll(_songs.where((s) => s.album == _selectedAlbum).map((s) => s.path));
+    } else if (_selectedArtist != null) {
+      targetPaths.addAll(_songs.where((s) => s.artist == _selectedArtist).map((s) => s.path));
+    }
+
+    final initialSongs = _songs.where((s) => targetPaths.contains(s.path)).toList();
+    final uniqueAlbums = initialSongs.map((s) => s.album).toSet();
+    final uniqueArtists = initialSongs.map((s) => s.artist).toSet();
+    final uniqueGenres = initialSongs.map((s) => s.genre).where((g) => g.isNotEmpty).toSet();
+    final uniqueArtworks = initialSongs.map((s) => s.artworkPath).where((a) => a != null && a.isNotEmpty).toSet();
+
+    final albumController = TextEditingController(
+      text: uniqueAlbums.length == 1 ? uniqueAlbums.first : '',
+    );
+    final artistController = TextEditingController(
+      text: uniqueArtists.length == 1 ? uniqueArtists.first : '',
+    );
+    final genreController = TextEditingController(
+      text: uniqueGenres.length == 1 ? uniqueGenres.first : '',
+    );
+    String trackFilter = '';
+    String? newArtworkPath = uniqueArtworks.length == 1 ? uniqueArtworks.first : null;
+    bool artworkChanged = false;
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final visibleSongs = _songs.where((s) {
+            if (trackFilter.trim().isEmpty) return true;
+            final q = trackFilter.toLowerCase();
+            return s.title.toLowerCase().contains(q) ||
+                s.album.toLowerCase().contains(q) ||
+                s.artist.toLowerCase().contains(q);
+          }).toList();
+
+          return AlertDialog(
+            title: Row(
+              children: [
+                Icon(Icons.library_music, color: FyrTheme.accentColor),
+                const SizedBox(width: 10),
+                Text(
+                  'Bulk Update Tracks (${targetPaths.length} selected)',
+                  style: TextStyle(color: FyrTheme.textColor, fontWeight: FontWeight.bold, fontSize: 18),
+                ),
+              ],
+            ),
+            backgroundColor: FyrTheme.isDark ? const Color(0xFF1E1E1E) : Colors.white,
+            content: SizedBox(
+              width: 560,
+              height: 520,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Column(
+                        children: [
+                          GestureDetector(
+                            onTap: () async {
+                              final imagePath = await _pickFileOrDirectory(
+                                title: 'Select Album Cover Image',
+                                type: FileType.image,
+                              );
+                              if (imagePath != null) {
+                                setDialogState(() {
+                                  newArtworkPath = imagePath;
+                                  artworkChanged = true;
+                                });
+                              }
+                            },
+                            child: Container(
+                              width: 120,
+                              height: 120,
+                              decoration: BoxDecoration(
+                                color: Colors.black12,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                  color: artworkChanged ? FyrTheme.accentColor : FyrTheme.dividerColor,
+                                  width: artworkChanged ? 2 : 1,
+                                ),
+                                image: newArtworkPath != null && File(newArtworkPath!).existsSync()
+                                    ? DecorationImage(
+                                        image: FileImage(File(newArtworkPath!)),
+                                        fit: BoxFit.cover,
+                                      )
+                                    : null,
+                              ),
+                              child: newArtworkPath == null || !File(newArtworkPath!).existsSync()
+                                  ? Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Icon(Icons.add_photo_alternate_outlined, size: 36, color: FyrTheme.textColorMuted),
+                                        const SizedBox(height: 6),
+                                        Text(
+                                          'Set Cover',
+                                          style: TextStyle(color: FyrTheme.textColorMuted, fontSize: 12),
+                                        ),
+                                      ],
+                                    )
+                                  : Align(
+                                      alignment: Alignment.bottomRight,
+                                      child: Container(
+                                        margin: const EdgeInsets.all(6),
+                                        padding: const EdgeInsets.all(4),
+                                        decoration: BoxDecoration(
+                                          color: Colors.black54,
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: const Icon(Icons.edit, size: 16, color: Colors.white),
+                                      ),
+                                    ),
+                            ),
+                          ),
+                          if (artworkChanged)
+                            TextButton(
+                              onPressed: () {
+                                setDialogState(() {
+                                  newArtworkPath = uniqueArtworks.length == 1 ? uniqueArtworks.first : null;
+                                  artworkChanged = false;
+                                });
+                              },
+                              child: Text('Reset Cover', style: TextStyle(fontSize: 11, color: FyrTheme.textColorMuted)),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(width: 20),
+                      Expanded(
+                        child: Column(
+                          children: [
+                            TextField(
+                              controller: albumController,
+                              decoration: InputDecoration(
+                                labelText: 'Album Name (leave blank to keep existing)',
+                                hintText: uniqueAlbums.length > 1 ? 'Multiple albums (${uniqueAlbums.length})' : null,
+                                labelStyle: TextStyle(color: FyrTheme.textColorMuted, fontSize: 13),
+                              ),
+                              style: TextStyle(color: FyrTheme.textColor),
+                            ),
+                            const SizedBox(height: 8),
+                            TextField(
+                              controller: artistController,
+                              decoration: InputDecoration(
+                                labelText: 'Artist (leave blank to keep existing)',
+                                hintText: uniqueArtists.length > 1 ? 'Multiple artists (${uniqueArtists.length})' : null,
+                                labelStyle: TextStyle(color: FyrTheme.textColorMuted, fontSize: 13),
+                              ),
+                              style: TextStyle(color: FyrTheme.textColor),
+                            ),
+                            const SizedBox(height: 8),
+                            TextField(
+                              controller: genreController,
+                              decoration: InputDecoration(
+                                labelText: 'Genre (leave blank to keep existing)',
+                                labelStyle: TextStyle(color: FyrTheme.textColorMuted, fontSize: 13),
+                              ),
+                              style: TextStyle(color: FyrTheme.textColor),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Text(
+                        'Tracks to Update',
+                        style: TextStyle(color: FyrTheme.textColor, fontWeight: FontWeight.w600, fontSize: 14),
+                      ),
+                      const Spacer(),
+                      TextButton(
+                        onPressed: () {
+                          setDialogState(() {
+                            for (final s in visibleSongs) {
+                              targetPaths.add(s.path);
+                            }
+                          });
+                        },
+                        child: const Text('Select All'),
+                      ),
+                      TextButton(
+                        onPressed: () {
+                          setDialogState(() {
+                            targetPaths.clear();
+                          });
+                        },
+                        child: const Text('Clear'),
+                      ),
+                    ],
+                  ),
+                  SizedBox(
+                    height: 36,
+                    child: TextField(
+                      onChanged: (v) => setDialogState(() => trackFilter = v),
+                      decoration: InputDecoration(
+                        hintText: 'Filter tracks by title, album, or artist...',
+                        hintStyle: TextStyle(color: FyrTheme.textColorMuted, fontSize: 12),
+                        prefixIcon: Icon(Icons.search, size: 18, color: FyrTheme.textColorMuted),
+                        filled: true,
+                        fillColor: FyrTheme.isDark ? Colors.white10 : Colors.black.withOpacity(0.05),
+                        contentPadding: EdgeInsets.zero,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                      style: TextStyle(color: FyrTheme.textColor, fontSize: 13),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        border: Border.all(color: FyrTheme.dividerColor),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: ListView.builder(
+                        itemCount: visibleSongs.length,
+                        itemBuilder: (context, index) {
+                          final s = visibleSongs[index];
+                          final checked = targetPaths.contains(s.path);
+                          return CheckboxListTile(
+                            dense: true,
+                            value: checked,
+                            activeColor: FyrTheme.accentColor,
+                            onChanged: (val) {
+                              setDialogState(() {
+                                if (val == true) {
+                                  targetPaths.add(s.path);
+                                } else {
+                                  targetPaths.remove(s.path);
+                                }
+                              });
+                            },
+                            secondary: s.artworkPath != null && File(s.artworkPath!).existsSync()
+                                ? ClipRRect(
+                                    borderRadius: BorderRadius.circular(4),
+                                    child: Image.file(File(s.artworkPath!), width: 32, height: 32, fit: BoxFit.cover),
+                                  )
+                                : Icon(Icons.music_note, size: 20, color: FyrTheme.textColorMuted),
+                            title: Text(
+                              s.title,
+                              style: TextStyle(color: FyrTheme.textColor, fontSize: 13),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            subtitle: Text(
+                              '${s.artist} • ${s.album}',
+                              style: TextStyle(color: FyrTheme.textColorMuted, fontSize: 11),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: FyrTheme.accentColor,
+                  foregroundColor: FyrTheme.getContrastingColor(FyrTheme.accentColor),
+                ),
+                onPressed: targetPaths.isEmpty
+                    ? null
+                    : () async {
+                        final newAlbum = albumController.text.trim();
+                        final newArtist = artistController.text.trim();
+                        final newGenre = genreController.text.trim();
+                        final cachedArtwork = artworkChanged ? await _cacheArtworkImage(newArtworkPath) : null;
+
+                        final List<Song> updatedSongs = [];
+                        final oldSelectedAlbum = _selectedAlbum;
+
+                        setState(() {
+                          for (int i = 0; i < _songs.length; i++) {
+                            final song = _songs[i];
+                            if (!targetPaths.contains(song.path)) continue;
+
+                            final updated = Song(
+                              path: song.path,
+                              title: song.title,
+                              artist: newArtist.isNotEmpty ? newArtist : song.artist,
+                              album: newAlbum.isNotEmpty ? newAlbum : song.album,
+                              genre: newGenre.isNotEmpty ? newGenre : song.genre,
+                              artworkPath: artworkChanged ? cachedArtwork : song.artworkPath,
+                              durationSeconds: song.durationSeconds,
+                            );
+                            _songs[i] = updated;
+                            if (_currentSong?.path == song.path) {
+                              _currentSong = updated;
+                            }
+                            updatedSongs.add(updated);
+                          }
+                          if (oldSelectedAlbum != null &&
+                              newAlbum.isNotEmpty &&
+                              !_songs.any((s) => s.album == oldSelectedAlbum)) {
+                            _selectedAlbum = newAlbum;
+                          }
+                          _selectedSongPaths.clear();
+                          _isSelectionMode = false;
+                        });
+
+                        await _saveLibrary();
+                        if (context.mounted) {
+                          Navigator.pop(context);
+                          ScaffoldMessenger.of(this.context).showSnackBar(
+                            SnackBar(
+                              content: Text('Updated ${updatedSongs.length} track(s)'),
+                              duration: const Duration(seconds: 2),
+                            ),
+                          );
+                        }
+                        for (final s in updatedSongs) {
+                          await _updateFileMetadata(s);
+                        }
+                      },
+                child: Text('Apply to ${targetPaths.length} Track(s)'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   Future<void> _updateFileMetadata(Song song) async {
     try {
-      final tempPath = '${song.path}.tmp';
+      final ext = p.extension(song.path);
+      final tempPath = '${p.withoutExtension(song.path)}.fyr_tmp$ext';
       final res = await Process.run('ffmpeg', [
         '-i', song.path,
         '-metadata', 'title=${song.title}',
         '-metadata', 'artist=${song.artist}',
         '-metadata', 'album=${song.album}',
+        if (song.genre.isNotEmpty) ...['-metadata', 'genre=${song.genre}'],
         '-codec', 'copy',
         '-y',
         tempPath
@@ -412,6 +779,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
       if (res.exitCode == 0) {
         await File(tempPath).rename(song.path);
       } else {
+        if (File(tempPath).existsSync()) {
+          try {
+            File(tempPath).deleteSync();
+          } catch (_) {}
+        }
         stderr.writeln('FFmpeg error: ${res.stderr}');
       }
     } catch (e) {
@@ -805,9 +1177,20 @@ class _LibraryScreenState extends State<LibraryScreen> {
                     _selectedAlbum = null;
                   }),
                 ),
-                Text(
-                  _selectedArtist ?? _selectedAlbum!,
-                  style: TextStyle(color: FyrTheme.textColor, fontSize: 20, fontWeight: FontWeight.bold),
+                Expanded(
+                  child: Text(
+                    _selectedArtist ?? _selectedAlbum!,
+                    style: TextStyle(color: FyrTheme.textColor, fontSize: 20, fontWeight: FontWeight.bold),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: () => _showBulkEditDialog(filtered),
+                  icon: Icon(Icons.edit_note, color: FyrTheme.accentColor),
+                  label: Text(
+                    _selectedAlbum != null ? 'Bulk Edit Album' : 'Bulk Edit Artist Tracks',
+                    style: TextStyle(color: FyrTheme.accentColor, fontWeight: FontWeight.w600),
+                  ),
                 ),
               ],
             ),
@@ -834,6 +1217,62 @@ class _LibraryScreenState extends State<LibraryScreen> {
                     if (v != null) setState(() => _sortBy = v);
                   },
                 ),
+                const Spacer(),
+                if (_isSelectionMode) ...[
+                  TextButton(
+                    onPressed: () {
+                      setState(() {
+                        for (final s in filtered) {
+                          _selectedSongPaths.add(s.path);
+                        }
+                      });
+                    },
+                    child: const Text('Select All'),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      setState(() {
+                        _selectedSongPaths.clear();
+                        _isSelectionMode = false;
+                      });
+                    },
+                    child: const Text('Cancel Selection'),
+                  ),
+                  const SizedBox(width: 8),
+                  ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: FyrTheme.accentColor,
+                      foregroundColor: FyrTheme.getContrastingColor(FyrTheme.accentColor),
+                    ),
+                    onPressed: () => _showBulkEditDialog(),
+                    icon: const Icon(Icons.library_music, size: 18),
+                    label: Text(
+                      _selectedSongPaths.isEmpty
+                          ? 'Bulk Update...'
+                          : 'Bulk Update (${_selectedSongPaths.length})',
+                    ),
+                  ),
+                ] else ...[
+                  OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: FyrTheme.textColor,
+                      side: BorderSide(color: FyrTheme.dividerColor),
+                    ),
+                    onPressed: () => setState(() => _isSelectionMode = true),
+                    icon: const Icon(Icons.checklist, size: 18),
+                    label: const Text('Select Tracks'),
+                  ),
+                  const SizedBox(width: 8),
+                  ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: FyrTheme.accentColor,
+                      foregroundColor: FyrTheme.getContrastingColor(FyrTheme.accentColor),
+                    ),
+                    onPressed: () => _showBulkEditDialog(),
+                    icon: const Icon(Icons.edit_note, size: 18),
+                    label: const Text('Bulk Update'),
+                  ),
+                ],
               ],
             ),
           ),
@@ -851,20 +1290,72 @@ class _LibraryScreenState extends State<LibraryScreen> {
         itemCount: filtered.length,
         itemBuilder: (context, index) {
           final s = filtered[index];
+          final isSelected = _selectedSongPaths.contains(s.path);
           return GestureDetector(
             onSecondaryTapDown: (details) {
               showMenu(
                 context: context,
                 position: RelativeRect.fromLTRB(details.globalPosition.dx, details.globalPosition.dy, details.globalPosition.dx, details.globalPosition.dy),
                 items: [
-                  PopupMenuItem(child: ListTile(leading: Icon(Icons.edit), title: Text('Edit Track')), onTap: () => Future.delayed(Duration.zero, () => _showEditDialog(s))),
+                  PopupMenuItem(
+                    child: const ListTile(leading: Icon(Icons.edit), title: Text('Edit Track')),
+                    onTap: () => Future.delayed(Duration.zero, () => _showEditDialog(s)),
+                  ),
+                  PopupMenuItem(
+                    child: const ListTile(leading: Icon(Icons.library_music), title: Text('Bulk Update Tracks...')),
+                    onTap: () => Future.delayed(Duration.zero, () {
+                      final targetList = _selectedSongPaths.isNotEmpty
+                          ? _songs.where((song) => _selectedSongPaths.contains(song.path)).toList()
+                          : [s];
+                      _showBulkEditDialog(targetList);
+                    }),
+                  ),
+                  PopupMenuItem(
+                    child: ListTile(
+                      leading: Icon(isSelected ? Icons.remove_circle_outline : Icons.check_circle_outline),
+                      title: Text(isSelected ? 'Deselect Track' : 'Select for Bulk Update'),
+                    ),
+                    onTap: () {
+                      setState(() {
+                        _isSelectionMode = true;
+                        if (isSelected) {
+                          _selectedSongPaths.remove(s.path);
+                        } else {
+                          _selectedSongPaths.add(s.path);
+                        }
+                      });
+                    },
+                  ),
                 ],
               );
             },
             child: ListTile(
-              leading: s.artworkPath != null 
-                ? ClipRRect(borderRadius: BorderRadius.circular(4), child: Image.file(File(s.artworkPath!), width: 40, height: 40, fit: BoxFit.cover))
-                : Icon(Icons.music_note, color: FyrTheme.textColorMuted),
+              selected: isSelected,
+              selectedTileColor: FyrTheme.accentColor.withOpacity(0.12),
+              leading: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (_isSelectionMode) ...[
+                    Checkbox(
+                      value: isSelected,
+                      activeColor: FyrTheme.accentColor,
+                      onChanged: (val) {
+                        setState(() {
+                          if (val == true) {
+                            _selectedSongPaths.add(s.path);
+                          } else {
+                            _selectedSongPaths.remove(s.path);
+                          }
+                        });
+                      },
+                    ),
+                    const SizedBox(width: 4),
+                  ],
+                  s.artworkPath != null && File(s.artworkPath!).existsSync()
+                    ? ClipRRect(borderRadius: BorderRadius.circular(4), child: Image.file(File(s.artworkPath!), width: 40, height: 40, fit: BoxFit.cover))
+                    : Icon(Icons.music_note, color: FyrTheme.textColorMuted),
+                ],
+              ),
               title: Text(s.title, style: TextStyle(color: FyrTheme.textColor)),
               subtitle: Row(
                 children: [
@@ -884,7 +1375,19 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 ],
               ),
               trailing: Text('${s.durationSeconds ~/ 60}:${(s.durationSeconds % 60).toString().padLeft(2, '0')}', style: TextStyle(color: FyrTheme.textColorMuted)),
-              onTap: () => _playSong(s),
+              onTap: () {
+                if (_isSelectionMode) {
+                  setState(() {
+                    if (isSelected) {
+                      _selectedSongPaths.remove(s.path);
+                    } else {
+                      _selectedSongPaths.add(s.path);
+                    }
+                  });
+                } else {
+                  _playSong(s);
+                }
+              },
             ),
           );
         },
@@ -903,26 +1406,61 @@ class _LibraryScreenState extends State<LibraryScreen> {
         itemBuilder: (context, index) {
           final albumName = albums[index];
           final songs = albumMap[albumName]!;
-          final firstWithArt = songs.firstWhere((s) => s.artworkPath != null, orElse: () => songs.first);
+          final firstWithArt = songs.firstWhere((s) => s.artworkPath != null && File(s.artworkPath!).existsSync(), orElse: () => songs.first);
 
           return GestureDetector(
             onTap: () => _showAlbum(albumName),
+            onSecondaryTapDown: (details) {
+              showMenu(
+                context: context,
+                position: RelativeRect.fromLTRB(details.globalPosition.dx, details.globalPosition.dy, details.globalPosition.dx, details.globalPosition.dy),
+                items: [
+                  PopupMenuItem(
+                    child: const ListTile(leading: Icon(Icons.edit_note), title: Text('Bulk Edit Album...')),
+                    onTap: () => Future.delayed(Duration.zero, () => _showBulkEditDialog(songs)),
+                  ),
+                ],
+              );
+            },
             child: Card(
               color: FyrTheme.cardColor,
               clipBehavior: Clip.antiAlias,
-              child: Column(
+              child: Stack(
                 children: [
-                  Expanded(
-                    child: firstWithArt.artworkPath != null
-                      ? Image.file(File(firstWithArt.artworkPath!), fit: BoxFit.cover, width: double.infinity)
-                      : Container(
-                          color: Colors.black12,
-                          child: Center(child: Icon(Icons.album, size: 64, color: FyrTheme.textColorMuted)),
-                        ),
+                  Column(
+                    children: [
+                      Expanded(
+                        child: firstWithArt.artworkPath != null && File(firstWithArt.artworkPath!).existsSync()
+                          ? Image.file(File(firstWithArt.artworkPath!), fit: BoxFit.cover, width: double.infinity)
+                          : Container(
+                              color: Colors.black12,
+                              child: Center(child: Icon(Icons.album, size: 64, color: FyrTheme.textColorMuted)),
+                            ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.all(8.0),
+                        child: Text(albumName, textAlign: TextAlign.center, style: TextStyle(color: FyrTheme.textColor, fontWeight: FontWeight.bold), maxLines: 2, overflow: TextOverflow.ellipsis),
+                      ),
+                    ],
                   ),
-                  Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: Text(albumName, textAlign: TextAlign.center, style: TextStyle(color: FyrTheme.textColor, fontWeight: FontWeight.bold), maxLines: 2, overflow: TextOverflow.ellipsis),
+                  Positioned(
+                    top: 6,
+                    right: 6,
+                    child: Material(
+                      color: Colors.black54,
+                      borderRadius: BorderRadius.circular(16),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(16),
+                        onTap: () => _showBulkEditDialog(songs),
+                        child: const Padding(
+                          padding: EdgeInsets.all(6.0),
+                          child: Tooltip(
+                            message: 'Bulk Edit Album',
+                            child: Icon(Icons.edit, size: 16, color: Colors.white),
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                 ],
               ),

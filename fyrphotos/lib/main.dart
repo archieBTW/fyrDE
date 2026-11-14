@@ -55,6 +55,76 @@ class Photo {
   );
 }
 
+Future<void> setPhotoAsWallpaper(BuildContext context, String imagePath) async {
+  if (imagePath.isEmpty) return;
+  try {
+    await Process.run('swaymsg', ['output', '*', 'bg', imagePath, 'fill']);
+
+    final home = Platform.environment['HOME'] ?? '';
+    if (home.isNotEmpty) {
+      final configFile = File('$home/.config/sway/config');
+      if (await configFile.exists()) {
+        final lines = await configFile.readAsLines();
+        final newLines = lines.map((line) {
+          if (line.startsWith('output * bg')) {
+            return 'output * bg "$imagePath" fill';
+          }
+          return line;
+        }).toList();
+        if (!newLines.any((line) => line.startsWith('output * bg'))) {
+          newLines.insert(0, 'output * bg "$imagePath" fill');
+        }
+        final tempFile = File('${configFile.path}.tmp');
+        await tempFile.writeAsString('${newLines.join('\n')}\n');
+        await tempFile.rename(configFile.path);
+      }
+
+      bool pullColorFromBg = true;
+      final prefsFile = File(
+        '$home/.local/share/fyrsettings/shared_preferences.json',
+      );
+      try {
+        Map<String, dynamic> prefsMap = {};
+        if (await prefsFile.exists()) {
+          prefsMap = jsonDecode(await prefsFile.readAsString());
+          if (prefsMap['flutter.pull_color_from_bg'] is bool) {
+            pullColorFromBg = prefsMap['flutter.pull_color_from_bg'];
+          }
+        } else {
+          await prefsFile.parent.create(recursive: true);
+        }
+        prefsMap['flutter.bg_path'] = imagePath;
+        await prefsFile.writeAsString(jsonEncode(prefsMap));
+      } catch (_) {}
+
+      if (pullColorFromBg) {
+        try {
+          final colorScheme = await ColorScheme.fromImageProvider(
+            provider: FileImage(File(imagePath)),
+          );
+          await FyrTheme.setAccentColor(colorScheme.primary);
+        } catch (_) {}
+      }
+    }
+
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Wallpaper set to ${p.basename(imagePath)}'),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  } catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to set wallpaper: $e')),
+      );
+    }
+  }
+}
+
 class FyrPhotosApp extends StatelessWidget {
   final String? initialFile;
   const FyrPhotosApp({super.key, this.initialFile});
@@ -125,11 +195,39 @@ class SinglePhotoViewer extends StatelessWidget {
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          PhotoView(
-            imageProvider: FileImage(File(filePath)),
-            minScale: PhotoViewComputedScale.contained,
-            maxScale: PhotoViewComputedScale.covered * 2,
-            backgroundDecoration: BoxDecoration(color: Colors.black),
+          GestureDetector(
+            onSecondaryTapDown: (details) async {
+              final value = await showMenu<String>(
+                context: context,
+                position: RelativeRect.fromLTRB(
+                  details.globalPosition.dx,
+                  details.globalPosition.dy,
+                  details.globalPosition.dx,
+                  details.globalPosition.dy,
+                ),
+                items: const [
+                  PopupMenuItem<String>(
+                    value: 'wallpaper',
+                    child: Row(
+                      children: [
+                        Icon(Icons.wallpaper, size: 18),
+                        SizedBox(width: 10),
+                        Text('Set as Wallpaper'),
+                      ],
+                    ),
+                  ),
+                ],
+              );
+              if (value == 'wallpaper' && context.mounted) {
+                await setPhotoAsWallpaper(context, filePath);
+              }
+            },
+            child: PhotoView(
+              imageProvider: FileImage(File(filePath)),
+              minScale: PhotoViewComputedScale.contained,
+              maxScale: PhotoViewComputedScale.covered * 2,
+              backgroundDecoration: BoxDecoration(color: Colors.black),
+            ),
           ),
           Positioned(
             top: 0, left: 0, right: 0,
@@ -154,9 +252,27 @@ class SinglePhotoViewer extends StatelessWidget {
                       else windowManager.maximize();
                     }),
                     const SizedBox(width: 24),
-                    Text(
-                      p.basename(filePath),
-                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    Expanded(
+                      child: Text(
+                        p.basename(filePath),
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: () => setPhotoAsWallpaper(context, filePath),
+                      icon: const Icon(Icons.wallpaper, color: Colors.white, size: 18),
+                      label: const Text(
+                        'Set as Wallpaper',
+                        style: TextStyle(color: Colors.white),
+                      ),
+                      style: TextButton.styleFrom(
+                        backgroundColor: Colors.white.withOpacity(0.15),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -430,8 +546,47 @@ class _LibraryScreenState extends State<LibraryScreen> {
         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 6, crossAxisSpacing: 8, mainAxisSpacing: 8),
         itemCount: photosToShow.length,
         itemBuilder: (context, index) {
+          final photoPath = photosToShow[index].path;
           return GestureDetector(
             onTap: () => _openGallery(index, photosToShow),
+            onSecondaryTapDown: (details) async {
+              final action = await showMenu<String>(
+                context: context,
+                position: RelativeRect.fromLTRB(
+                  details.globalPosition.dx,
+                  details.globalPosition.dy,
+                  details.globalPosition.dx,
+                  details.globalPosition.dy,
+                ),
+                items: const [
+                  PopupMenuItem<String>(
+                    value: 'view',
+                    child: Row(
+                      children: [
+                        Icon(Icons.photo, size: 18),
+                        SizedBox(width: 10),
+                        Text('View Photo'),
+                      ],
+                    ),
+                  ),
+                  PopupMenuItem<String>(
+                    value: 'wallpaper',
+                    child: Row(
+                      children: [
+                        Icon(Icons.wallpaper, size: 18),
+                        SizedBox(width: 10),
+                        Text('Set as Wallpaper'),
+                      ],
+                    ),
+                  ),
+                ],
+              );
+              if (action == 'view') {
+                _openGallery(index, photosToShow);
+              } else if (action == 'wallpaper' && context.mounted) {
+                await setPhotoAsWallpaper(context, photoPath);
+              }
+            },
             child: Container(
               decoration: BoxDecoration(
                 color: Colors.black12,
@@ -439,7 +594,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
               ),
               clipBehavior: Clip.antiAlias,
               child: Image(
-                image: ResizeImage(FileImage(File(photosToShow[index].path)), width: 300),
+                image: ResizeImage(FileImage(File(photoPath)), width: 300),
                 fit: BoxFit.cover,
               ),
             ),
@@ -490,31 +645,87 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 }
 
-class GalleryScreen extends StatelessWidget {
+class GalleryScreen extends StatefulWidget {
   final List<Photo> photos;
   final int initialIndex;
 
   const GalleryScreen({super.key, required this.photos, required this.initialIndex});
 
   @override
+  State<GalleryScreen> createState() => _GalleryScreenState();
+}
+
+class _GalleryScreenState extends State<GalleryScreen> {
+  late int _currentIndex;
+  late PageController _pageController;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentIndex = widget.initialIndex;
+    _pageController = PageController(initialPage: widget.initialIndex);
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final currentPhotoPath = widget.photos.isNotEmpty
+        ? widget.photos[_currentIndex.clamp(0, widget.photos.length - 1)].path
+        : '';
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          PhotoViewGallery.builder(
-            itemCount: photos.length,
-            builder: (context, index) {
-              return PhotoViewGalleryPageOptions(
-                imageProvider: FileImage(File(photos[index].path)),
-                initialScale: PhotoViewComputedScale.contained,
-                minScale: PhotoViewComputedScale.contained,
-                maxScale: PhotoViewComputedScale.covered * 2,
+          GestureDetector(
+            onSecondaryTapDown: (details) async {
+              if (currentPhotoPath.isEmpty) return;
+              final value = await showMenu<String>(
+                context: context,
+                position: RelativeRect.fromLTRB(
+                  details.globalPosition.dx,
+                  details.globalPosition.dy,
+                  details.globalPosition.dx,
+                  details.globalPosition.dy,
+                ),
+                items: const [
+                  PopupMenuItem<String>(
+                    value: 'wallpaper',
+                    child: Row(
+                      children: [
+                        Icon(Icons.wallpaper, size: 18),
+                        SizedBox(width: 10),
+                        Text('Set as Wallpaper'),
+                      ],
+                    ),
+                  ),
+                ],
               );
+              if (value == 'wallpaper' && context.mounted) {
+                await setPhotoAsWallpaper(context, currentPhotoPath);
+              }
             },
-            scrollPhysics: const BouncingScrollPhysics(),
-            backgroundDecoration: BoxDecoration(color: Colors.black),
-            pageController: PageController(initialPage: initialIndex),
+            child: PhotoViewGallery.builder(
+              itemCount: widget.photos.length,
+              onPageChanged: (index) {
+                setState(() => _currentIndex = index);
+              },
+              builder: (context, index) {
+                return PhotoViewGalleryPageOptions(
+                  imageProvider: FileImage(File(widget.photos[index].path)),
+                  initialScale: PhotoViewComputedScale.contained,
+                  minScale: PhotoViewComputedScale.contained,
+                  maxScale: PhotoViewComputedScale.covered * 2,
+                );
+              },
+              scrollPhysics: const BouncingScrollPhysics(),
+              backgroundDecoration: BoxDecoration(color: Colors.black),
+              pageController: _pageController,
+            ),
           ),
           Positioned(
             top: 0, left: 0, right: 0,
@@ -534,7 +745,36 @@ class GalleryScreen extends StatelessWidget {
                       icon: Icon(Icons.arrow_back, color: Colors.white),
                       onPressed: () => Navigator.pop(context),
                     ),
-                    const Spacer(),
+                    const SizedBox(width: 8),
+                    if (currentPhotoPath.isNotEmpty)
+                      Expanded(
+                        child: Text(
+                          p.basename(currentPhotoPath),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      )
+                    else
+                      const Spacer(),
+                    if (currentPhotoPath.isNotEmpty)
+                      TextButton.icon(
+                        onPressed: () => setPhotoAsWallpaper(context, currentPhotoPath),
+                        icon: const Icon(Icons.wallpaper, color: Colors.white, size: 18),
+                        label: const Text(
+                          'Set as Wallpaper',
+                          style: TextStyle(color: Colors.white),
+                        ),
+                        style: TextButton.styleFrom(
+                          backgroundColor: Colors.white.withOpacity(0.15),
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),

@@ -1120,17 +1120,59 @@ class _StartMenuPopupState extends State<StartMenuPopup>
                   _PowerButton(
                     icon: Icons.logout,
                     label: "Logout",
-                    onTap: () => _runCommand('swaymsg', ['exit']),
+                    onTap: () async {
+                      final confirm = await showDialog<bool>(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                          backgroundColor: FyrTheme.bgColor,
+                          title: Text('Log Out', style: TextStyle(color: FyrTheme.textColor)),
+                          content: Text('Are you sure you want to log out of your current session?', style: TextStyle(color: FyrTheme.textColor)),
+                          actions: [
+                            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text('Cancel')),
+                            TextButton(onPressed: () => Navigator.pop(ctx, true), child: Text('Log Out', style: TextStyle(color: FyrTheme.accentColor))),
+                          ],
+                        ),
+                      );
+                      if (confirm == true) _runCommand('swaymsg', ['exit']);
+                    },
                   ),
                   _PowerButton(
                     icon: Icons.restart_alt,
                     label: "Restart",
-                    onTap: () => _runCommand('systemctl', ['reboot']),
+                    onTap: () async {
+                      final confirm = await showDialog<bool>(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                          backgroundColor: FyrTheme.bgColor,
+                          title: Text('Restart Computer', style: TextStyle(color: FyrTheme.textColor)),
+                          content: Text('Are you sure you want to restart your computer?', style: TextStyle(color: FyrTheme.textColor)),
+                          actions: [
+                            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text('Cancel')),
+                            TextButton(onPressed: () => Navigator.pop(ctx, true), child: Text('Restart', style: TextStyle(color: FyrTheme.accentColor))),
+                          ],
+                        ),
+                      );
+                      if (confirm == true) _runCommand('systemctl', ['reboot']);
+                    },
                   ),
                   _PowerButton(
                     icon: Icons.power_settings_new,
                     label: "Shutdown",
-                    onTap: () => _runCommand('systemctl', ['poweroff']),
+                    onTap: () async {
+                      final confirm = await showDialog<bool>(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                          backgroundColor: FyrTheme.bgColor,
+                          title: Text('Shut Down Computer', style: TextStyle(color: FyrTheme.textColor)),
+                          content: Text('Are you sure you want to shut down your computer?', style: TextStyle(color: FyrTheme.textColor)),
+                          actions: [
+                            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text('Cancel')),
+                            TextButton(onPressed: () => Navigator.pop(ctx, true), child: Text('Shut Down', style: TextStyle(color: Colors.redAccent))),
+                          ],
+                        ),
+                      );
+                      if (confirm == true) _runCommand('systemctl', ['poweroff']);
+                    },
                     isDanger: true,
                   ),
                 ],

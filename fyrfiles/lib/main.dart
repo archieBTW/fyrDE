@@ -121,6 +121,9 @@ class _ResizeHandle extends StatelessWidget {
 }
 
 bool isPicker = false;
+bool isSavePicker = false;
+bool isDirectoryPicker = false;
+bool isMultiplePicker = false;
 String? initialDirectoryPath;
 String? initialSelectedPath;
 String? pickerTitle;
@@ -158,18 +161,35 @@ void _parsePickerPath(String raw) {
     final parent = Directory(p.dirname(arg));
     if (parent.existsSync()) {
       initialDirectoryPath = parent.absolute.path;
-      initialSelectedPath = p.canonicalize(arg);
+      initialSelectedPath = p.join(parent.absolute.path, p.basename(arg));
     }
   }
 }
 
 void main(List<String> args) async {
-  if (args.any((a) => a == '--picker' || a.startsWith('--picker=') || a == '--file-selection')) {
+  if (args.any((a) =>
+      a == '--picker' ||
+      a.startsWith('--picker=') ||
+      a == '--file-selection' ||
+      a == '--save' ||
+      a == '--directory')) {
     isPicker = true;
   }
   for (int i = 0; i < args.length; i++) {
     final rawArg = args[i];
     if (rawArg == '--picker' || rawArg == '--file-selection') continue;
+    if (rawArg == '--save' || rawArg == '--getsavefilename') {
+      isSavePicker = true;
+      continue;
+    }
+    if (rawArg == '--directory' || rawArg == '--getexistingdirectory') {
+      isDirectoryPicker = true;
+      continue;
+    }
+    if (rawArg == '--multiple') {
+      isMultiplePicker = true;
+      continue;
+    }
     if (rawArg.startsWith('--picker=')) {
       final pStr = rawArg.substring('--picker='.length).trim();
       if (pStr.isNotEmpty) _parsePickerPath(pStr);
@@ -196,13 +216,20 @@ void main(List<String> args) async {
 
     _parsePickerPath(rawArg.trim());
   }
+  // If invoked as a picker with a specific file path (e.g. from SaveFile portal),
+  // enable save mode unless explicitly in directory picker mode.
+  if (isPicker && !isDirectoryPicker && initialSelectedPath != null) {
+    isSavePicker = true;
+  }
   WidgetsFlutterBinding.ensureInitialized();
   FyrTheme.initialize();
   await windowManager.ensureInitialized();
   WindowOptions windowOptions = WindowOptions(
     size: const Size(800, 600),
     center: true,
-    title: isPicker ? (pickerTitle ?? 'Open File') : 'fyrfiles',
+    title: isPicker
+        ? (pickerTitle ?? (isSavePicker ? 'Save File' : (isDirectoryPicker ? 'Select Folder' : 'Open File')))
+        : 'fyrfiles',
     titleBarStyle: TitleBarStyle.hidden,
   );
   windowManager.waitUntilReadyToShow(windowOptions, () async {
@@ -374,8 +401,59 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
   final ScrollController _scrollController = ScrollController();
   String? previewImagePath;
   final FocusNode _mainFocusNode = FocusNode();
+  late final TextEditingController _saveFileNameController = TextEditingController(
+    text: initialSelectedPath != null
+        ? p.basename(initialSelectedPath!)
+        : (isSavePicker ? 'untitled' : ''),
+  );
   S3Config s3config = S3Config.empty();
   List<TransferProgress> activeTransfers = [];
+
+  Future<void> _confirmPickerSelection() async {
+    String output;
+    if (isSavePicker) {
+      String targetDir = currentDir.path;
+      if (selectedPaths.length == 1) {
+        final single = selectedPaths.first;
+        if (FileSystemEntity.isDirectorySync(single) && p.dirname(single) == currentDir.path) {
+          targetDir = single;
+        }
+      }
+      String fileName = _saveFileNameController.text.trim();
+      if (fileName.isEmpty && initialSelectedPath != null) {
+        fileName = p.basename(initialSelectedPath!);
+      }
+      if (fileName.isEmpty) {
+        fileName = 'download';
+      }
+      output = p.join(targetDir, fileName);
+
+      // Clean up xdg-desktop-portal-termfilechooser dummy help file if user chose a different location
+      if (initialSelectedPath != null && initialSelectedPath != output) {
+        try {
+          final initFile = File(initialSelectedPath!);
+          if (initFile.existsSync() && initFile.lengthSync() < 1024) {
+            final head = initFile.readAsStringSync();
+            if (head.contains('xdg-desktop-portal-termfilechooser')) {
+              initFile.deleteSync();
+            }
+          }
+        } catch (_) {}
+      }
+    } else if (isDirectoryPicker) {
+      if (selectedPaths.length == 1 && FileSystemEntity.isDirectorySync(selectedPaths.first)) {
+        output = selectedPaths.first;
+      } else {
+        output = currentDir.path;
+      }
+    } else {
+      final validSelected = selectedPaths.where((s) => File(s).existsSync() || Directory(s).existsSync()).toList();
+      output = validSelected.isNotEmpty ? validSelected.join('\n') : currentDir.path;
+    }
+    stdout.writeln(output);
+    await stdout.flush();
+    exit(0);
+  }
 
   void _updateSelection() {
     if (dragStart == null || dragCurrent == null) return;
@@ -482,6 +560,88 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
   bool _isArchive(String path) {
     final extensions = ['.zip', '.7z', '.tar', '.gz', '.bz2', '.xz', '.tgz', '.tbz2', '.txz'];
     return extensions.any((ext) => path.toLowerCase().endsWith(ext));
+  }
+
+  bool _isImageFile(String path) {
+    if (FileSystemEntity.isDirectorySync(path)) return false;
+    final lower = path.toLowerCase();
+    return lower.endsWith('.png') ||
+        lower.endsWith('.jpg') ||
+        lower.endsWith('.jpeg') ||
+        lower.endsWith('.webp') ||
+        lower.endsWith('.bmp') ||
+        lower.endsWith('.gif');
+  }
+
+  Future<void> _setAsWallpaper(String imagePath) async {
+    try {
+      await Process.run('swaymsg', ['output', '*', 'bg', imagePath, 'fill']);
+      final home = Platform.environment['HOME'] ?? '';
+      if (home.isNotEmpty) {
+        final configFile = File('$home/.config/sway/config');
+        if (await configFile.exists()) {
+          final lines = await configFile.readAsLines();
+          final newLines = lines.map((line) {
+            if (line.startsWith('output * bg')) {
+              return 'output * bg "$imagePath" fill';
+            }
+            return line;
+          }).toList();
+          if (!newLines.any((line) => line.startsWith('output * bg'))) {
+            newLines.insert(0, 'output * bg "$imagePath" fill');
+          }
+          final tempFile = File('${configFile.path}.tmp');
+          await tempFile.writeAsString('${newLines.join('\n')}\n');
+          await tempFile.rename(configFile.path);
+        }
+
+        bool pullColorFromBg = true;
+        final prefsFile = File(
+          '$home/.local/share/fyrsettings/shared_preferences.json',
+        );
+        try {
+          Map<String, dynamic> prefsMap = {};
+          if (await prefsFile.exists()) {
+            prefsMap = jsonDecode(await prefsFile.readAsString());
+            if (prefsMap['flutter.pull_color_from_bg'] is bool) {
+              pullColorFromBg = prefsMap['flutter.pull_color_from_bg'];
+            }
+          } else {
+            await prefsFile.parent.create(recursive: true);
+          }
+          prefsMap['flutter.bg_path'] = imagePath;
+          await prefsFile.writeAsString(jsonEncode(prefsMap));
+        } catch (_) {}
+
+        if (pullColorFromBg) {
+          try {
+            final colorScheme = await ColorScheme.fromImageProvider(
+              provider: FileImage(File(imagePath)),
+            );
+            await FyrTheme.setAccentColor(colorScheme.primary);
+          } catch (_) {}
+        }
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Wallpaper set to ${p.basename(imagePath)}')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to set wallpaper: $e')),
+        );
+      }
+    }
+  }
+
+  void _openAppearanceSettings() {
+    final home = Platform.environment['HOME'] ?? '';
+    final bin = (home.isNotEmpty && File('$home/.local/bin/fyrsettings').existsSync())
+        ? '$home/.local/bin/fyrsettings'
+        : 'fyrsettings';
+    Process.start(bin, ['--appearance'], mode: ProcessStartMode.detached);
   }
 
   Future<void> _extractArchive(String path) async {
@@ -638,6 +798,7 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
   void dispose() {
     windowManager.removeListener(this);
     _mainFocusNode.dispose();
+    _saveFileNameController.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -1667,6 +1828,9 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
                   selectedPaths.clear();
                   selectedPaths.add(file.path);
                   _lastSelectedIndex = index;
+                  if (isSavePicker && !isDir) {
+                    _saveFileNameController.text = p.basename(file.path);
+                  }
                 }
               });
             };
@@ -1681,9 +1845,17 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
               } else {
                 var filePath = file.path;
                 if (isPicker) {
-                  stdout.writeln(filePath);
-                  await stdout.flush();
-                  exit(0);
+                  if (isSavePicker) {
+                    _saveFileNameController.text = p.basename(filePath);
+                    selectedPaths
+                      ..clear()
+                      ..add(filePath);
+                    await _confirmPickerSelection();
+                  } else {
+                    stdout.writeln(filePath);
+                    await stdout.flush();
+                    exit(0);
+                  }
                 }
                 await _openFileOrLaunch(filePath);
               }
@@ -1791,10 +1963,10 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
         ),
       ) ?? false;
       if (confirm) {
-        await windowManager.destroy();
+        exit(isPicker ? 1 : 0);
       }
     } else {
-      await windowManager.destroy();
+      exit(isPicker ? 1 : 0);
     }
   }
 
@@ -2392,7 +2564,7 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
                       children: [
                         if (pickerTitle != null && pickerTitle!.isNotEmpty)
                           Padding(
-                            padding: const EdgeInsets.only(left: 4.0),
+                            padding: const EdgeInsets.only(left: 4.0, right: 12.0),
                             child: Text(
                               pickerTitle!,
                               style: TextStyle(
@@ -2402,7 +2574,45 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
                               ),
                             ),
                           ),
-                        const Spacer(),
+                        if (isSavePicker) ...[
+                          Text(
+                            'File name:',
+                            style: TextStyle(
+                              color: FyrTheme.textColor.withOpacity(0.75),
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: SizedBox(
+                              height: 36,
+                              child: TextField(
+                                controller: _saveFileNameController,
+                                style: TextStyle(color: FyrTheme.textColor, fontSize: 13),
+                                onSubmitted: (_) => _confirmPickerSelection(),
+                                decoration: InputDecoration(
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                  filled: true,
+                                  fillColor: FyrTheme.surfaceColor,
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                    borderSide: BorderSide(color: FyrTheme.dividerColor),
+                                  ),
+                                  enabledBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                    borderSide: BorderSide(color: FyrTheme.dividerColor),
+                                  ),
+                                  focusedBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                    borderSide: BorderSide(color: FyrTheme.accentColor, width: 1.5),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                        ] else
+                          const Spacer(),
                         TextButton(
                           onPressed: () => exit(1),
                           child: Text(
@@ -2418,15 +2628,8 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
                             backgroundColor: FyrTheme.accentColor,
                             foregroundColor: Colors.white,
                           ),
-                          onPressed: () async {
-                            String output = selectedPaths.isNotEmpty 
-                                ? selectedPaths.join('\n') 
-                                : currentDir.path;
-                            stdout.writeln(output);
-                            await stdout.flush();
-                            exit(0);
-                          },
-                          child: const Text('Select'),
+                          onPressed: _confirmPickerSelection,
+                          child: Text(isSavePicker ? 'Save' : 'Select'),
                         ),
                       ],
                     ),
@@ -2591,6 +2794,17 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
               onTap: () {
                 Navigator.pop(context);
                 _showOpenWithDialog(context, file.path);
+              },
+            ),
+          ),
+        if (_isImageFile(file.path))
+          PopupMenuItem(
+            child: ListTile(
+              leading: const Icon(Icons.wallpaper),
+              title: const Text('Set as Wallpaper'),
+              onTap: () {
+                Navigator.pop(context);
+                _setAsWallpaper(file.path);
               },
             ),
           ),
@@ -2826,6 +3040,16 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
             },
           ),
         ),
+        PopupMenuItem(
+          child: ListTile(
+            leading: const Icon(Icons.palette),
+            title: const Text('Change Wallpaper / Appearance'),
+            onTap: () {
+              Navigator.pop(context);
+              _openAppearanceSettings();
+            },
+          ),
+        ),
       ],
     );
   }
@@ -2952,6 +3176,16 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
             },
           ),
         ),
+        PopupMenuItem(
+          child: ListTile(
+            leading: const Icon(Icons.palette),
+            title: const Text('Change Wallpaper / Appearance'),
+            onTap: () {
+              Navigator.pop(context);
+              _openAppearanceSettings();
+            },
+          ),
+        ),
       ],
     );
   }
@@ -3046,6 +3280,17 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
               onTap: () {
                 Navigator.pop(context);
                 _showOpenWithDialog(context, file.path);
+              },
+            ),
+          ),
+        if (_isImageFile(file.path))
+          PopupMenuItem(
+            child: ListTile(
+              leading: const Icon(Icons.wallpaper),
+              title: const Text('Set as Wallpaper'),
+              onTap: () {
+                Navigator.pop(context);
+                _setAsWallpaper(file.path);
               },
             ),
           ),

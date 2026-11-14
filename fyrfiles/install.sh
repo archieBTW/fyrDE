@@ -42,25 +42,66 @@ sudo update-desktop-database || true
 
 echo "Setting up fyrfiles as default file picker for Sway..."
 
-sudo bash -c "cat > /usr/local/bin/fyr_files_picker <<EOF
+sudo tee /usr/local/bin/fyr_files_picker > /dev/null <<'EOF'
 #!/bin/bash
-multiple=\"\\\$1\"
-directory=\"\\\$2\"
-save=\"\\\$3\"
-path=\"\\\$4\"
-out=\"\\\$5\"
-/usr/local/bin/fyrfiles --picker \"\\\$path\" > \"\\\$out\"
-if [ ! -s \"\\\$out\" ]; then
+multiple="$1"
+directory="$2"
+save="$3"
+path="$4"
+out="$5"
+
+fyrfiles_bin=""
+for candidate in "$HOME/.local/bin/fyrfiles" "$HOME/.local/share/fyrDE/fyrfiles/fyrfiles" "/usr/local/bin/fyrfiles" "/usr/bin/fyrfiles" "/opt/fyrfiles/fyrfiles"; do
+    if [ -x "$candidate" ]; then
+        fyrfiles_bin="$candidate"
+        break
+    fi
+done
+if [ -z "$fyrfiles_bin" ]; then
+    fyrfiles_bin="$(command -v fyrfiles 2>/dev/null)"
+fi
+
+cmd_args=("--picker")
+if [ "$multiple" = "1" ]; then
+    cmd_args+=("--multiple")
+fi
+if [ "$directory" = "1" ]; then
+    cmd_args+=("--directory")
+fi
+if [ "$save" = "1" ]; then
+    cmd_args+=("--save")
+fi
+cmd_args+=("$path")
+
+"$fyrfiles_bin" "${cmd_args[@]}" > "$out"
+
+if [ "$save" = "1" ] && [ -f "$path" ] && grep -q "xdg-desktop-portal-termfilechooser" "$path" 2>/dev/null; then
+    rm -f "$path"
+fi
+
+if [ ! -s "$out" ]; then
     exit 1
 fi
+
+if [ "$save" = "1" ]; then
+    chosen="$(head -n 1 "$out")"
+    if [ -d "$chosen" ] && [ -n "$path" ]; then
+        printf "%s/%s\n" "${chosen%/}" "$(basename "$path")" > "$out"
+    fi
+fi
+
 exit 0
-EOF"
+EOF
 sudo chmod +x /usr/local/bin/fyr_files_picker
+mkdir -p ~/.local/bin
+cp /usr/local/bin/fyr_files_picker ~/.local/bin/fyr_files_picker 2>/dev/null || true
+chmod +x ~/.local/bin/fyr_files_picker 2>/dev/null || true
 
 mkdir -p ~/.config/xdg-desktop-portal-termfilechooser
 cat > ~/.config/xdg-desktop-portal-termfilechooser/config <<EOF
 [filechooser]
-cmd=/usr/local/bin/fyr_files_picker
+cmd=$HOME/.local/bin/fyr_files_picker
+create_help_file=0
 EOF
 
 mkdir -p ~/.config/xdg-desktop-portal

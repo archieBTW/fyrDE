@@ -123,12 +123,12 @@ class _PersonalizationPaneState extends State<PersonalizationPane> {
         final newLines = lines.map((line) {
           if (line.startsWith('output * bg') ||
               line.startsWith('output * bg ')) {
-            return 'output * bg $path fill';
+            return 'output * bg "$path" fill';
           }
           return line;
         }).toList();
         if (!newLines.any((line) => line.startsWith('output * bg'))) {
-          newLines.insert(0, 'output * bg $path fill');
+          newLines.insert(0, 'output * bg "$path" fill');
         }
         final tempFile = File('${configFile.path}.tmp');
         await tempFile.writeAsString('${newLines.join('\n')}\n');
