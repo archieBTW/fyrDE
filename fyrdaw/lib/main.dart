@@ -18,27 +18,36 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:fyrdaw/models/enums.dart';
 import 'package:fyrdaw/models/daw_clip.dart';
 import 'package:fyrdaw/models/daw_effect.dart';
-import 'package:fyrdaw/models/automation_point.dart';
 import 'package:fyrdaw/models/track.dart';
 import 'package:fyrdaw/models/sampler_pad.dart';
 import 'package:fyrdaw/models/midi_note.dart';
 import 'package:fyrdaw/models/midi_mapping.dart';
 import 'package:fyrdaw/models/song_marker.dart';
+import 'package:fyrdaw/models/tempo_marker.dart';
+import 'package:fyrdaw/ui/automation_lane_overlay.dart';
 import 'package:fyrdaw/ui/dial.dart';
 import 'package:fyrdaw/ui/painters.dart';
 import 'package:fyrdaw/ui/meters.dart';
 import 'package:fyrdaw/ui/midi_editor.dart';
 import 'package:fyrdaw/ui/sampler_editor.dart';
+import 'package:fyrdaw/ui/sample_browser_drawer.dart';
 import 'package:fyrdaw/ui/templates_dialog.dart';
 import 'package:fyrdaw/ui/mixer_console.dart';
 import 'package:fyrdaw/ui/effects_rack.dart';
 import 'package:fyrdaw/ui/musical_keyboard_bar.dart';
 import 'package:fyrdaw/ui/session_launcher.dart';
+import 'package:fyrdaw/ui/tempo_signature_lane.dart';
+import 'package:fyrdaw/ui/timeline_loop_bar.dart';
 import 'package:fyrdaw/ui/audio_clip_editor.dart';
 import 'package:fyrdaw/utils/audio_utils.dart';
 import 'package:fyrdaw/utils/bus_metering.dart';
+import 'package:fyrdaw/utils/metronome_synth.dart';
+import 'package:fyrdaw/utils/midi_file_codec.dart';
 import 'package:fyrdaw/utils/mixdown_renderer.dart';
+import 'package:fyrdaw/utils/parametric_eq_dsp.dart';
 import 'package:fyrdaw/utils/pitch_detector.dart';
+import 'package:fyrdaw/utils/plugin_host.dart';
+import 'package:fyrdaw/utils/time_stretch.dart';
 import 'fyr_theme.dart';
 
 part 'ui/daw_main_screen.dart';
@@ -49,6 +58,8 @@ AudioSource? globalSineSound;
 AudioSource? globalPianoSound;
 AudioSource? globalCelloSound;
 AudioSource? globalViolinSound;
+AudioSource? globalMetronomeAccentSound;
+AudioSource? globalMetronomeBeatSound;
 final Map<int, AudioSource> globalInstrumentSounds = {};
 
 AudioSource? getInstrumentAudioSource(Track track) {
@@ -141,7 +152,7 @@ void releaseInstrumentNote(SoundHandle handle, {int releaseMs = 140}) {
 
 Future<Directory> getProjectMediaDirectory() async {
   final docsDir = await getApplicationDocumentsDirectory();
-  final dir = Directory('${docsDir.path}/FyrDAW/Media');
+  final dir = Directory('${docsDir.path}/SoundBooth/Media');
   if (!dir.existsSync()) {
     dir.createSync(recursive: true);
   }
@@ -196,6 +207,18 @@ void main() async {
     globalPianoSound = globalInstrumentSounds[3];
     globalCelloSound = globalInstrumentSounds[4];
     globalViolinSound = globalInstrumentSounds[5];
+
+    // Synthesize punchy metronome click buffers (downbeat accent + regular beat)
+    try {
+      globalMetronomeAccentSound = await SoLoud.instance.loadMem(
+        'sb_metronome_accent.wav',
+        MetronomeSynth.generateClickWav(isDownbeat: true),
+      );
+      globalMetronomeBeatSound = await SoLoud.instance.loadMem(
+        'sb_metronome_beat.wav',
+        MetronomeSynth.generateClickWav(isDownbeat: false),
+      );
+    } catch (_) {}
 
     // Also keep legacy media directory files updated with the realistic samples
     final dir = await getProjectMediaDirectory();
@@ -277,7 +300,7 @@ class _DawAppState extends State<DawApp> {
       builder: (context, child) {
         _applyThemeColors();
         return MaterialApp(
-          title: 'fyrDAW',
+          title: 'Sound Booth',
           debugShowCheckedModeBanner: false,
           theme: isDarkMode
               ? ThemeData.dark().copyWith(

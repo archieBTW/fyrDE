@@ -1,6 +1,6 @@
 {
-    "name": "daw",
-    "short_name": "daw",
+    "name": "Sound Booth",
+    "short_name": "Sound Booth",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

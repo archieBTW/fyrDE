@@ -96,7 +96,7 @@ class _CalendarMenuPopupState extends State<CalendarMenuPopup>
       context: context,
       builder: (context) {
         return AlertDialog(
-          backgroundColor: FyrTheme.bgColor,
+          backgroundColor: FyrTheme.panelBgColor,
           title: Text(
             'Set Location',
             style: TextStyle(color: FyrTheme.textColor),
@@ -147,7 +147,7 @@ class _CalendarMenuPopupState extends State<CalendarMenuPopup>
         width: 380,
         constraints: const BoxConstraints(maxHeight: 800),
         decoration: BoxDecoration(
-          color: FyrTheme.bgColor,
+          color: FyrTheme.panelBgColor,
           borderRadius: BorderRadius.only(
             bottomLeft: Radius.circular(16),
             bottomRight: Radius.circular(16),
@@ -169,7 +169,7 @@ class _CalendarMenuPopupState extends State<CalendarMenuPopup>
                   colorScheme: ColorScheme.dark(
                     primary: FyrTheme.accentColor,
                     onPrimary: Colors.white,
-                    surface: FyrTheme.bgColor,
+                    surface: FyrTheme.panelBgColor,
                     onSurface: FyrTheme.textColor,
                   ),
                 ),

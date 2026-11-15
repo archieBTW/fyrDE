@@ -23,6 +23,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
 
   bool isPlaying = false;
   bool isMetronomeEnabled = false;
+  double metronomeVolume = 0.85;
   bool isRecording = false;
   double? recordingStartPos;
   double playheadPosition = 0.0;
@@ -54,6 +55,13 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   double loopEnd = 400.0;
 
   List<SongMarker> songMarkers = [];
+  List<TempoMarker> tempoMarkers = [];
+  bool _showSampleBrowser = false;
+  List<String> _userSampleFolders = [];
+  String? _browserPreviewPath;
+  SoundHandle? _browserPreviewHandle;
+  AudioSource? _browserPreviewSource;
+  List<double> _cachedFftBins = const [];
   double masterVolume = 1.0;
   bool masterLimiter = true;
   Bus? auxReverbBus;
@@ -130,8 +138,6 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   final ScrollController _timelineScrollController = ScrollController();
   final ScrollController _horizontalScrollController = ScrollController();
   bool _isSyncingScroll = false;
-  int? _draggingAutoPointIndex;
-  String? _draggingAutoTrackId;
 
   List<String> undoStack = [];
   List<String> redoStack = [];
@@ -146,7 +152,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   Future<void> _writeAutoSave() async {
     try {
       final dir = await getApplicationDocumentsDirectory();
-      final dawDir = Directory('${dir.path}/FyrDAW');
+      final dawDir = Directory('${dir.path}/SoundBooth');
       if (!dawDir.existsSync()) dawDir.createSync(recursive: true);
       final file = File('${dawDir.path}/autosave.json');
       await file.writeAsString(_getCurrentStateJson());
@@ -156,7 +162,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   Future<void> _clearAutoSave() async {
     try {
       final dir = await getApplicationDocumentsDirectory();
-      final file = File('${dir.path}/FyrDAW/autosave.json');
+      final file = File('${dir.path}/SoundBooth/autosave.json');
       if (await file.exists()) {
         await file.delete();
       }
@@ -174,7 +180,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
 
   void _checkAutoSave() async {
     final dir = await getApplicationDocumentsDirectory();
-    final file = File('${dir.path}/FyrDAW/autosave.json');
+    final file = File('${dir.path}/SoundBooth/autosave.json');
     if (await file.exists()) {
       showDialog(
         context: context,
@@ -274,6 +280,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         tracks.clear();
         trackClips.clear();
         songMarkers.clear();
+        tempoMarkers.clear();
         selectedTrackIndex = null;
         selectedClip = null;
         multiSelectedClips.clear();
@@ -305,11 +312,13 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       'bpm': bpm,
       'timeSigTop': timeSigTop,
       'timeSigBottom': timeSigBottom,
+      'metronomeVolume': metronomeVolume,
       'masterVolume': masterVolume,
       'masterLimiter': masterLimiter,
       'auxReverbMix': auxReverbMix,
       'auxDelayMix': auxDelayMix,
       'markers': songMarkers.map((m) => m.toJson()).toList(),
+      'tempoMarkers': tempoMarkers.map((m) => m.toJson()).toList(),
       'tracks': tracks.map((t) => t.toJson()).toList(),
       'trackClips': trackClips.map(
         (k, v) => MapEntry(k, v.map((c) => c.toJson()).toList()),
@@ -355,6 +364,8 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       bpm = projectData['bpm'] ?? 120;
       timeSigTop = projectData['timeSigTop'] ?? 4;
       timeSigBottom = projectData['timeSigBottom'] ?? 4;
+      metronomeVolume =
+          (projectData['metronomeVolume'] as num?)?.toDouble() ?? 0.85;
       masterVolume = (projectData['masterVolume'] as num?)?.toDouble() ?? 1.0;
       masterLimiter = projectData['masterLimiter'] ?? true;
       auxReverbMix = (projectData['auxReverbMix'] as num?)?.toDouble() ?? 0.85;
@@ -364,6 +375,12 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       if (projectData['markers'] != null) {
         for (var m in projectData['markers']) {
           songMarkers.add(SongMarker.fromJson(m));
+        }
+      }
+      tempoMarkers.clear();
+      if (projectData['tempoMarkers'] != null) {
+        for (var tm in projectData['tempoMarkers']) {
+          tempoMarkers.add(TempoMarker.fromJson(tm));
         }
       }
 
@@ -1057,6 +1074,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         auxReverbSolo: auxReverbSolo,
         auxDelaySolo: auxDelaySolo,
         masterEffectsChain: masterEffectsChain,
+        tempoMarkers: tempoMarkers,
       );
       if (!ok) {
         if (mounted) {
@@ -1115,7 +1133,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       List<String> args = [
         '--file-selection',
         '--save',
-        '--title=Save fyrDAW Project',
+        '--title=Save Sound Booth Project',
         '--file-filter=*.adaw',
       ];
       final result = await Process.run('zenity', args);
@@ -1169,6 +1187,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         'bpm': bpm,
         'timeSigTop': timeSigTop,
         'timeSigBottom': timeSigBottom,
+        'metronomeVolume': metronomeVolume,
         'masterVolume': masterVolume,
         'masterLimiter': masterLimiter,
         'masterLufsTarget': masterLufsTarget,
@@ -1178,6 +1197,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         'auxReverbMix': auxReverbMix,
         'auxDelayMix': auxDelayMix,
         'markers': songMarkers.map((m) => m.toJson()).toList(),
+        'tempoMarkers': tempoMarkers.map((m) => m.toJson()).toList(),
         'tracks': tracksJson,
         'trackClips': clipsJson,
       };
@@ -1287,6 +1307,8 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           bpm = projectData['bpm'] ?? 120;
           timeSigTop = projectData['timeSigTop'] ?? 4;
           timeSigBottom = projectData['timeSigBottom'] ?? 4;
+          metronomeVolume =
+              (projectData['metronomeVolume'] as num?)?.toDouble() ?? 0.85;
           masterVolume = (projectData['masterVolume'] as num?)?.toDouble() ?? 1.0;
           masterLimiter = projectData['masterLimiter'] ?? true;
           masterLufsTarget =
@@ -1310,6 +1332,12 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           if (projectData['markers'] != null) {
             for (var m in projectData['markers']) {
               songMarkers.add(SongMarker.fromJson(m));
+            }
+          }
+          tempoMarkers.clear();
+          if (projectData['tempoMarkers'] != null) {
+            for (var tm in projectData['tempoMarkers']) {
+              tempoMarkers.add(TempoMarker.fromJson(tm));
             }
           }
 
@@ -1577,6 +1605,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           onlyTrack: t,
           masterVolume: 1.0,
           masterLimiter: false,
+          tempoMarkers: tempoMarkers,
         );
         if (ok) anyExported = true;
       }
@@ -1620,6 +1649,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         onlyTrack: track,
         masterVolume: 1.0,
         masterLimiter: false,
+        tempoMarkers: tempoMarkers,
       );
       if (!ok) {
         if (mounted) {
@@ -1764,6 +1794,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       tracks = res.tracks;
       trackClips = res.trackClips;
       songMarkers = res.markers;
+      tempoMarkers.clear();
       bpm = res.bpm;
       playheadPosition = 0.0;
       selectedTrackIndex = tracks.isNotEmpty ? 0 : null;
@@ -1780,12 +1811,448 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     });
   }
 
+  void _playMetronomeClick(bool isDownbeat) {
+    if (!SoLoud.instance.isInitialized) return;
+    final src = isDownbeat
+        ? (globalMetronomeAccentSound ?? globalSawSound)
+        : (globalMetronomeBeatSound ?? globalSawSound);
+    if (src == null) return;
+    final vol = MetronomeSynth.computeClickVolume(
+      metronomeVolume,
+      isDownbeat: isDownbeat,
+    );
+    if (vol <= 0.005) return;
+    try {
+      final h = SoLoud.instance.play(src, volume: vol);
+      if (src == globalSawSound) {
+        SoLoud.instance.setRelativePlaySpeed(h, isDownbeat ? 4.0 : 2.0);
+        Timer(const Duration(milliseconds: 45), () {
+          if (SoLoud.instance.getIsValidVoiceHandle(h)) {
+            SoLoud.instance.stop(h);
+          }
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _loadUserSampleFolders() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getStringList('sb_sample_folders') ?? [];
+      final metVol = prefs.getDouble('sb_metronome_volume');
+      if (mounted) {
+        setState(() {
+          _userSampleFolders = saved;
+          if (metVol != null) metronomeVolume = metVol.clamp(0.0, 1.5);
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveMetronomeVolumePref(double v) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble('sb_metronome_volume', v);
+    } catch (_) {}
+  }
+
+  Future<void> _addUserSampleFolder() async {
+    try {
+      final res = await Process.run('zenity', [
+        '--file-selection',
+        '--directory',
+        '--title=Select Sample / MIDI Folder',
+      ]);
+      if (res.exitCode != 0) return;
+      final dirPath = res.stdout.toString().trim();
+      if (dirPath.isEmpty || _userSampleFolders.contains(dirPath)) return;
+      final next = [..._userSampleFolders, dirPath];
+      setState(() => _userSampleFolders = next);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList('sb_sample_folders', next);
+    } catch (_) {}
+  }
+
+  Future<void> _removeUserSampleFolder(String folder) async {
+    final next = _userSampleFolders.where((f) => f != folder).toList();
+    setState(() => _userSampleFolders = next);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList('sb_sample_folders', next);
+    } catch (_) {}
+  }
+
+  Future<void> _ensureAudioClipProcessed(AudioClip clip) async {
+    if (!clip.needsTimeStretchProcessing) {
+      if (clip.processedFilePath != null) {
+        clip.processedFilePath = null;
+        clip.processedCacheKey = null;
+        if (SoLoud.instance.isInitialized && File(clip.filePath).existsSync()) {
+          try {
+            if (clip.source != null) SoLoud.instance.disposeSource(clip.source!);
+            clip.source = await SoLoud.instance.loadFile(clip.filePath);
+          } catch (_) {}
+        }
+      }
+      return;
+    }
+    final sig =
+        '${clip.filePath}|${clip.pitchSemitones.toStringAsFixed(2)}|${clip.stretchFactor.toStringAsFixed(3)}|${clip.preservePitch}';
+    if (clip.processedCacheKey == sig &&
+        clip.processedFilePath != null &&
+        File(clip.processedFilePath!).existsSync()) {
+      return;
+    }
+    try {
+      final dir = await getProjectMediaDirectory();
+      final outPath =
+          '${dir.path}/ts_${clip.id.hashCode}_${DateTime.now().millisecondsSinceEpoch}.wav';
+      final ok = await TimeStretchEngine.processWavFile(
+        inputPath: clip.filePath,
+        outputPath: outPath,
+        stretchFactor: clip.stretchFactor,
+        pitchSemitones: clip.pitchSemitones,
+        preservePitch: clip.preservePitch,
+      );
+      if (!ok) return;
+      clip.processedFilePath = outPath;
+      clip.processedCacheKey = sig;
+      if (SoLoud.instance.isInitialized) {
+        if (clip.source != null) {
+          try {
+            SoLoud.instance.disposeSource(clip.source!);
+          } catch (_) {}
+        }
+        clip.source = await SoLoud.instance.loadFile(outPath);
+      }
+      if (mounted) setState(() {});
+    } catch (_) {}
+  }
+
+  Future<void> _toggleBrowserPreview(SampleBrowserItem item) async {
+    try {
+      if (_browserPreviewHandle != null &&
+          SoLoud.instance.isInitialized &&
+          SoLoud.instance.getIsValidVoiceHandle(_browserPreviewHandle!)) {
+        SoLoud.instance.stop(_browserPreviewHandle!);
+      }
+    } catch (_) {}
+    if (_browserPreviewPath == item.path) {
+      setState(() {
+        _browserPreviewPath = null;
+        _browserPreviewHandle = null;
+      });
+      return;
+    }
+    setState(() => _browserPreviewPath = item.path);
+    if (!SoLoud.instance.isInitialized) return;
+    try {
+      if (_browserPreviewSource != null) {
+        SoLoud.instance.disposeSource(_browserPreviewSource!);
+      }
+      _browserPreviewSource = item.isAsset
+          ? await SoLoud.instance.loadAsset(item.path)
+          : await SoLoud.instance.loadFile(item.path);
+      _browserPreviewHandle = SoLoud.instance.play(
+        _browserPreviewSource!,
+        volume: 0.85,
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _addBrowserItemToTrack(
+    SampleBrowserItem item, {
+    Track? targetTrack,
+    double? startPos,
+  }) async {
+    final double insertStart = max(
+      0.0,
+      snapToGrid && startPos != null
+          ? (startPos / snapResolution).round() * snapResolution
+          : (startPos ?? playheadPosition),
+    );
+    if (item.isMidi) {
+      try {
+        final bytes = await File(item.path).readAsBytes();
+        final imported = MidiFileCodec.decodeBytes(bytes, beatWidth: beatWidth);
+        if (imported.notes.isEmpty) return;
+        final double maxEnd = imported.notes
+            .map((n) => n.start + n.length)
+            .fold(beatWidth * timeSigTop, max);
+        Track t;
+        if (targetTrack != null &&
+            (targetTrack.type == TrackType.midi ||
+                targetTrack.type == TrackType.sampler)) {
+          t = targetTrack;
+        } else {
+          t = Track(
+            id: UniqueKey().toString(),
+            name: imported.trackName,
+            type: TrackType.midi,
+            colorValue: kTrackColorPalette[tracks.length % kTrackColorPalette.length]
+                .toARGB32(),
+          );
+          if (globalInstrumentSounds.isNotEmpty) {
+            t.synthSource = globalInstrumentSounds[t.instrumentIndex];
+          }
+          tracks.add(t);
+        }
+        final clip = MidiClip(
+          id: UniqueKey().toString(),
+          name: p.basenameWithoutExtension(item.name),
+          start: insertStart,
+          length: max(beatWidth, maxEnd),
+          color: t.color,
+          notes: imported.notes,
+        );
+        _saveState();
+        setState(() {
+          trackClips.putIfAbsent(t.id, () => []).add(clip);
+          selectedTrackIndex = tracks.indexOf(t);
+          selectedClip = clip;
+          selectedBottomTab = 0;
+        });
+      } catch (_) {}
+      return;
+    }
+
+    try {
+      String resolvedPath = item.path;
+      if (item.isAsset) {
+        final dir = await getProjectMediaDirectory();
+        final dstPath = '${dir.path}/${p.basename(item.path)}';
+        final data = await rootBundle.load(item.path);
+        await File(dstPath).writeAsBytes(data.buffer.asUint8List(), flush: true);
+        resolvedPath = dstPath;
+      }
+      final wav = await decodeWavFile(resolvedPath);
+      final double durUnits = max(beatWidth, (wav?.durationSeconds ?? 2.0) * 100.0);
+      Track t;
+      if (targetTrack != null && targetTrack.type == TrackType.audio) {
+        t = targetTrack;
+      } else {
+        t = Track(
+          id: UniqueKey().toString(),
+          name: p.basenameWithoutExtension(item.name),
+          type: TrackType.audio,
+          colorValue: kTrackColorPalette[tracks.length % kTrackColorPalette.length]
+              .toARGB32(),
+        );
+        tracks.add(t);
+      }
+      AudioSource? src;
+      if (SoLoud.instance.isInitialized) {
+        try {
+          src = await SoLoud.instance.loadFile(resolvedPath);
+        } catch (_) {}
+      }
+      final clip = AudioClip(
+        id: UniqueKey().toString(),
+        name: p.basenameWithoutExtension(item.name),
+        start: insertStart,
+        length: durUnits,
+        color: t.color,
+        filePath: resolvedPath,
+      )..source = src;
+      _saveState();
+      setState(() {
+        trackClips.putIfAbsent(t.id, () => []).add(clip);
+        selectedTrackIndex = tracks.indexOf(t);
+        selectedClip = clip;
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _importMidiFile({Track? targetTrack, double? startPos}) async {
+    try {
+      final result = await Process.run('zenity', [
+        '--file-selection',
+        '--title=Import Standard MIDI File (.mid)',
+        '--file-filter=MIDI Files (*.mid, *.midi) | *.mid *.midi',
+      ]);
+      if (result.exitCode != 0) return;
+      final path = result.stdout.toString().trim();
+      if (path.isEmpty) return;
+      await _addBrowserItemToTrack(
+        SampleBrowserItem(
+          name: p.basename(path),
+          path: path,
+          isAsset: false,
+          isMidi: true,
+          category: 'MIDI',
+        ),
+        targetTrack: targetTrack,
+        startPos: startPos,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('MIDI import failed: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  Future<void> _exportSelectedMidiClip() async {
+    if (selectedClip is! MidiClip) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Select a MIDI clip to export as .mid')),
+      );
+      return;
+    }
+    final mc = selectedClip as MidiClip;
+    try {
+      final result = await Process.run('zenity', [
+        '--file-selection',
+        '--save',
+        '--title=Export MIDI Clip (.mid)',
+        '--file-filter=*.mid',
+      ]);
+      if (result.exitCode != 0) return;
+      String path = result.stdout.toString().trim();
+      if (path.isEmpty) return;
+      if (!path.toLowerCase().endsWith('.mid')) path += '.mid';
+      final bytes = MidiFileCodec.encodeNotes(
+        mc.notes,
+        bpm: bpm.toDouble(),
+        timeSigNum: timeSigTop,
+        timeSigDen: timeSigBottom,
+        beatWidth: beatWidth,
+        trackName: mc.name.isNotEmpty ? mc.name : 'Sound Booth MIDI',
+      );
+      await File(path).writeAsBytes(bytes, flush: true);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Exported MIDI to $path'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('MIDI export failed: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  void _showExternalPluginBrowserDialog(Track fxTrack, VoidCallback syncFx) {
+    final plugins = PluginHost.scanInstalledPlugins();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: panelDark,
+        title: Row(
+          children: [
+            const Icon(Icons.extension, color: Colors.tealAccent, size: 18),
+            const SizedBox(width: 8),
+            Text(
+              'External LV2 / VST3 Plugins (${plugins.length})',
+              style: TextStyle(color: textMain, fontSize: 15),
+            ),
+          ],
+        ),
+        content: SizedBox(
+          width: 440,
+          height: 290,
+          child: plugins.isEmpty
+              ? Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.folder_off, color: textMuted, size: 32),
+                    const SizedBox(height: 10),
+                    Text(
+                      'No external LV2 or VST3 bundles found.',
+                      style: TextStyle(
+                        color: textMain,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Searched paths:\n${PluginHost.searchPaths.join('\n')}',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: textMuted, fontSize: 11),
+                    ),
+                  ],
+                )
+              : ListView.builder(
+                  itemCount: plugins.length,
+                  itemBuilder: (_, idx) {
+                    final pl = plugins[idx];
+                    return ListTile(
+                      dense: true,
+                      leading: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.tealAccent.withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: Colors.tealAccent),
+                        ),
+                        child: Text(
+                          pl.format,
+                          style: const TextStyle(
+                            color: Colors.tealAccent,
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      title: Text(
+                        pl.name,
+                        style: TextStyle(color: textMain, fontSize: 12),
+                      ),
+                      subtitle: Text(
+                        pl.category,
+                        style: TextStyle(color: textMuted, fontSize: 10),
+                      ),
+                      onTap: () {
+                        _saveState();
+                        final params = <String, double>{};
+                        for (final c in pl.controls.take(6)) {
+                          final span = (c.max - c.min).abs();
+                          final norm = span > 1e-6
+                              ? ((c.defaultVal - c.min) / span).clamp(0.0, 1.0)
+                              : 0.5;
+                          params[c.name] = norm;
+                        }
+                        if (params.isEmpty) params['Mix'] = 1.0;
+                        setState(() {
+                          fxTrack.effectsChain.add(
+                            DawEffect(
+                              pl.name,
+                              params,
+                              pluginFormat: pl.format,
+                              pluginUri: pl.id,
+                            ),
+                          );
+                          syncFx();
+                        });
+                        Navigator.pop(ctx);
+                      },
+                    );
+                  },
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Close', style: TextStyle(color: textMuted)),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
     windowManager.addListener(this);
     _audioRecorder = AudioRecorder();
     _initInputDevices();
+    _loadUserSampleFolders();
     _checkAutoSave();
     _initAudioVisualizationAndBuses();
     _headerScrollController.addListener(() {
@@ -1913,6 +2380,9 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           _masterVizSamples = _masterAudioData!.getAudioData(
             alwaysReturnData: false,
           );
+          _cachedFftBins = ParametricEqDsp.computeFftBinsFromSamples(
+            _masterVizSamples,
+          );
         } else if (!activeAudio && _masterVizSamples != null) {
           // Decay spectrum gracefully when stopped
           bool nonZero = false;
@@ -1920,7 +2390,14 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
             _masterVizSamples![i] *= 0.75;
             if (_masterVizSamples![i].abs() > 0.005) nonZero = true;
           }
-          if (!nonZero) _masterVizSamples = null;
+          if (!nonZero) {
+            _masterVizSamples = null;
+            _cachedFftBins = const [];
+          } else {
+            _cachedFftBins = ParametricEqDsp.computeFftBinsFromSamples(
+              _masterVizSamples,
+            );
+          }
         }
       } catch (_) {}
 
@@ -2288,6 +2765,9 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       if (_referenceSource != null) {
         SoLoud.instance.disposeSource(_referenceSource!);
       }
+      if (_browserPreviewSource != null) {
+        SoLoud.instance.disposeSource(_browserPreviewSource!);
+      }
       _masterAudioData?.dispose();
     } catch (_) {}
     try {
@@ -2350,8 +2830,20 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     final hasWaveShaper = activeFx.any(
       (f) => f.name == 'TubeScreamer' || f.name == 'GuitarAmp',
     );
-    final hasSynthFilter =
-        track.type == TrackType.midi && track.synthSettings.filterCutoff < 0.99;
+    final cutoffAuto = atPlayhead != null
+        ? track.getInterpolatedAutomation('Synth Cutoff', atPlayhead)
+        : -1.0;
+    final resoAuto = atPlayhead != null
+        ? track.getInterpolatedAutomation('Synth Reso', atPlayhead)
+        : -1.0;
+    final effCutoff = cutoffAuto >= 0.0
+        ? cutoffAuto.clamp(0.0, 1.0)
+        : track.synthSettings.filterCutoff;
+    final effReso = resoAuto >= 0.0
+        ? resoAuto.clamp(0.0, 1.0)
+        : track.synthSettings.filterResonance;
+    final hasSynthFilter = track.type == TrackType.midi &&
+        (effCutoff < 0.99 || cutoffAuto >= 0.0 || resoAuto >= 0.0);
     final hasBiquad =
         hasSynthFilter ||
         activeFx.any(
@@ -2859,12 +3351,11 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     if (hasSynthFilter &&
         !activeFx.any((f) => f.name == 'TubeScreamer' || f.name == 'GuitarAmp')) {
       try {
-        final s = track.synthSettings;
-        final hz = 120.0 * pow(140.0, s.filterCutoff.clamp(0.0, 1.0)).toDouble();
+        final hz = 120.0 * pow(140.0, effCutoff.clamp(0.0, 1.0)).toDouble();
         filters.biquadFilter.type().value = 0; // Lowpass
         filters.biquadFilter.frequency().value = hz.clamp(100.0, 18000.0);
         filters.biquadFilter.resonance().value =
-            (0.7 + s.filterResonance * 4.5).clamp(0.5, 6.0);
+            (0.7 + effReso * 4.5).clamp(0.5, 6.0);
         filters.biquadFilter.wet().value = 1.0;
       } catch (_) {}
     }
@@ -2942,11 +3433,16 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         .clamp(0.0, 2.5);
     final dlyVol = ((track.delayPreFader ? env : effVol) * track.delaySend)
         .clamp(0.0, 2.5);
-    final speed =
-        (pow(2.0, clip.pitchSemitones / 12.0).toDouble() * clip.stretchFactor)
+    final bool usingCachedWsola =
+        clip.preservePitch && clip.processedFilePath != null;
+    final speed = usingCachedWsola
+        ? 1.0
+        : (pow(2.0, clip.pitchSemitones / 12.0).toDouble() * clip.stretchFactor)
             .clamp(0.25, 4.0);
-    final offsetMs =
+    final rawOffsetMs =
         ((atPlayhead - clip.start + clip.startOffset) * 10.0 * speed).round();
+    final int loopUnitMs = max(1, (clip.originalLength * 10.0).round());
+    final offsetMs = clip.isLooped ? (rawOffsetMs % loopUnitMs) : rawOffsetMs;
 
     clip.currentHandle = track.bus!.play(
       clip.source!,
@@ -2955,6 +3451,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           : effVol,
       pan: track.pan.clamp(-1.0, 1.0),
       paused: true,
+      looping: clip.isLooped,
     );
     try {
       SoLoud.instance.setRelativePlaySpeed(clip.currentHandle!, speed);
@@ -2974,6 +3471,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           volume: revVol,
           pan: track.pan.clamp(-1.0, 1.0),
           paused: true,
+          looping: clip.isLooped,
         );
         SoLoud.instance.setRelativePlaySpeed(clip.reverbSendHandle!, speed);
         if (offsetMs > 0) {
@@ -2993,6 +3491,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           volume: dlyVol,
           pan: track.pan.clamp(-1.0, 1.0),
           paused: true,
+          looping: clip.isLooped,
         );
         SoLoud.instance.setRelativePlaySpeed(clip.delaySendHandle!, speed);
         if (offsetMs > 0) {
@@ -3087,7 +3586,12 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
 
           setState(() {
             double oldPos = playheadPosition;
-            playheadPosition += dtSec * 100.0;
+            final double curBpm = TempoMarker.effectiveBpmAt(
+              playheadPosition,
+              tempoMarkers,
+              bpm.toDouble(),
+            );
+            playheadPosition += dtSec * 100.0 * (curBpm / max(20, bpm));
 
             // Punch-in / Punch-out auto stop when leaving loopEnd
             if (isRecording &&
@@ -3099,32 +3603,23 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
               });
             }
 
-            if (isMetronomeEnabled &&
-                globalSawSound != null &&
-                SoLoud.instance.isInitialized) {
+            final curMeter = TempoMarker.effectiveMeterAt(
+              playheadPosition,
+              tempoMarkers,
+              timeSigTop,
+              timeSigBottom,
+            );
+            if (isMetronomeEnabled && SoLoud.instance.isInitialized) {
               int oldBeat = (oldPos / beatWidth).floor();
               int newBeat = (playheadPosition / beatWidth).floor();
               if (newBeat > oldBeat) {
-                bool isDownbeat = newBeat % timeSigTop == 0;
-                double speed = isDownbeat ? 4.0 : 2.0;
-                double volume = isDownbeat ? 0.3 : 0.1;
-                try {
-                  final h = SoLoud.instance.play(
-                    globalSawSound!,
-                    volume: volume,
-                  );
-                  SoLoud.instance.setRelativePlaySpeed(h, speed);
-                  Timer(const Duration(milliseconds: 50), () {
-                    if (SoLoud.instance.getIsValidVoiceHandle(h)) {
-                      SoLoud.instance.stop(h);
-                    }
-                  });
-                } catch (_) {}
+                bool isDownbeat = newBeat % max(1, curMeter.numerator) == 0;
+                _playMetronomeClick(isDownbeat);
               }
             }
 
             // Quantized next-bar Session Launcher clip promotions
-            final double barLen = beatWidth * timeSigTop;
+            final double barLen = beatWidth * max(1, curMeter.numerator);
             if (barLen > 0 &&
                 (playheadPosition / barLen).floor() > (oldPos / barLen).floor() &&
                 _queuedSessionClipIds.isNotEmpty) {
@@ -3842,20 +4337,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
             setState(() => _countInBeatsLeft = remaining);
 
             void playClick(bool accent) {
-              if (globalSawSound != null && SoLoud.instance.isInitialized) {
-                try {
-                  final h = SoLoud.instance.play(
-                    globalSawSound!,
-                    volume: accent ? 0.35 : 0.14,
-                  );
-                  SoLoud.instance.setRelativePlaySpeed(h, accent ? 4.0 : 2.0);
-                  Timer(const Duration(milliseconds: 55), () {
-                    if (SoLoud.instance.getIsValidVoiceHandle(h)) {
-                      SoLoud.instance.stop(h);
-                    }
-                  });
-                } catch (_) {}
-              }
+              _playMetronomeClick(accent);
             }
 
             playClick(true);
@@ -4875,7 +5357,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                     ),
                     SizedBox(width: 18),
                     Text(
-                      'fyrDAW',
+                      'Sound Booth',
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
@@ -5062,21 +5544,56 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                                   ),
                                 ),
                                 SizedBox(width: 6),
-                                InkWell(
-                                  onTap: () {
-                                    setState(() {
-                                      isMetronomeEnabled = !isMetronomeEnabled;
-                                    });
-                                  },
-                                  child: Icon(
-                                    Icons.notifications_active,
-                                    size: 16,
-                                    color: isMetronomeEnabled
-                                        ? lavenderAccent
-                                        : textMuted,
+                                Tooltip(
+                                  message: 'Toggle Metronome',
+                                  child: InkWell(
+                                    onTap: () {
+                                      setState(() {
+                                        isMetronomeEnabled = !isMetronomeEnabled;
+                                      });
+                                    },
+                                    child: Icon(
+                                      Icons.notifications_active,
+                                      size: 16,
+                                      color: isMetronomeEnabled
+                                          ? lavenderAccent
+                                          : textMuted,
+                                    ),
                                   ),
                                 ),
-                                SizedBox(width: 10),
+                                Tooltip(
+                                  message:
+                                      'Metronome Volume (${(metronomeVolume * 100).round()}%)',
+                                  child: SizedBox(
+                                    width: 58,
+                                    height: 22,
+                                    child: SliderTheme(
+                                      data: SliderTheme.of(context).copyWith(
+                                        trackHeight: 2.5,
+                                        thumbShape: const RoundSliderThumbShape(
+                                          enabledThumbRadius: 5,
+                                        ),
+                                        overlayShape:
+                                            const RoundSliderOverlayShape(
+                                              overlayRadius: 9,
+                                            ),
+                                      ),
+                                      child: Slider(
+                                        key: const Key('metronome_volume_slider'),
+                                        value: metronomeVolume.clamp(0.0, 1.5),
+                                        min: 0.0,
+                                        max: 1.5,
+                                        activeColor: lavenderAccent,
+                                        inactiveColor: borderMain,
+                                        onChanged: (v) {
+                                          setState(() => metronomeVolume = v);
+                                        },
+                                        onChangeEnd: _saveMetronomeVolumePref,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                SizedBox(width: 6),
                                 DropdownButton<int>(
                                   value: timeSigTop,
                                   underline: SizedBox(),
@@ -5194,6 +5711,22 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                       padding: EdgeInsets.all(4),
                     ),
                     IconButton(
+                      key: const Key('toggle_sample_browser'),
+                      icon: Icon(
+                        Icons.library_music,
+                        size: 18,
+                        color: _showSampleBrowser
+                            ? Colors.cyanAccent
+                            : textMuted,
+                      ),
+                      tooltip: 'Toggle Sample & MIDI Browser',
+                      onPressed: () => setState(
+                        () => _showSampleBrowser = !_showSampleBrowser,
+                      ),
+                      constraints: BoxConstraints(minWidth: 32, minHeight: 32),
+                      padding: EdgeInsets.all(4),
+                    ),
+                    IconButton(
                       icon: Icon(
                         Icons.sensors,
                         size: 18,
@@ -5225,6 +5758,8 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                         if (val == 'open') _openProject();
                         if (val == 'save') _saveProject();
                         if (val == 'save_as') _saveProjectAs();
+                        if (val == 'import_midi') _importMidiFile();
+                        if (val == 'export_midi') _exportSelectedMidiClip();
                         if (val == 'export') _exportAudio();
                         if (val == 'export_stems') _exportStems();
                         if (val == 'preferences') _openPreferences();
@@ -5250,6 +5785,15 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                         PopupMenuItem(
                           value: 'save_as',
                           child: Text('Save As...'),
+                        ),
+                        PopupMenuItem(
+                          value: 'import_midi',
+                          child: Text('Import MIDI (.mid)...'),
+                        ),
+                        PopupMenuItem(
+                          value: 'export_midi',
+                          enabled: selectedClip is MidiClip,
+                          child: Text('Export Selected Clip as .mid'),
                         ),
                         PopupMenuItem(
                           value: 'export',
@@ -5389,6 +5933,27 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                   ],
                 ),
               ],
+            ),
+          ),
+          Container(
+            height: 20,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            alignment: Alignment.centerLeft,
+            decoration: BoxDecoration(
+              color: bgDark,
+              border: Border(
+                top: BorderSide(color: borderMain, width: 1),
+                bottom: BorderSide(color: borderMain, width: 1),
+              ),
+            ),
+            child: Text(
+              'TEMPO / SIG',
+              style: TextStyle(
+                color: textFaint,
+                fontSize: 9,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.0,
+              ),
             ),
           ),
           Expanded(
@@ -6105,6 +6670,23 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                               ),
                             ),
                           ),
+                        if (clip is AudioClip && clip.isLooped)
+                          Container(
+                            margin: EdgeInsets.only(left: 4),
+                            padding: EdgeInsets.symmetric(horizontal: 3),
+                            decoration: BoxDecoration(
+                              color: Colors.black54,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                            child: Text(
+                              'LOOP',
+                              style: TextStyle(
+                                color: Colors.amberAccent,
+                                fontSize: 8,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
                         if (clip is AudioClip &&
                             (clip.stretchFactor - 1.0).abs() > 0.02)
                           Container(
@@ -6294,8 +6876,11 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                     onHorizontalDragUpdate: (d) => setState(() {
                       clip.length += (d.delta.dx / _zoomX);
                       if (clip.length < 10) clip.length = 10;
-                      if (clip.length >
-                          clip.originalLength - clip.startOffset) {
+                      final bool allowExtendLoop =
+                          clip is AudioClip && clip.isLooped;
+                      if (!allowExtendLoop &&
+                          clip.length >
+                              clip.originalLength - clip.startOffset) {
                         clip.length = clip.originalLength - clip.startOffset;
                       }
                     }),
@@ -6306,8 +6891,11 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                           (clip.length / snapResolution).round() *
                               snapResolution,
                         );
-                        if (clip.length >
-                            clip.originalLength - clip.startOffset) {
+                        final bool allowExtendLoop =
+                            clip is AudioClip && clip.isLooped;
+                        if (!allowExtendLoop &&
+                            clip.length >
+                                clip.originalLength - clip.startOffset) {
                           clip.length = clip.originalLength - clip.startOffset;
                         }
                       }
@@ -6586,103 +7174,59 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                                   bpm: bpm,
                                   timeSigTop: timeSigTop,
                                   markers: songMarkers,
+                                  tempoMarkers: tempoMarkers,
                                 ),
                                 size: Size(double.infinity, 40),
                               ),
                             ),
-                      if (isLooping)
-                        Positioned(
-                          left: loopStart * _zoomX,
-                          width: (loopEnd - loopStart) * _zoomX,
-                          top: 0,
-                          bottom: 0,
-                          child: IgnorePointer(
-                            child: Container(
-                              color: lavenderAccent.withOpacity(0.2),
-                            ),
-                          ),
-                        ),
-                      Positioned(
-                        left: loopStart * _zoomX,
-                        width: max(10.0, (loopEnd - loopStart) * _zoomX),
-                        top: 0,
-                        height: 6,
-                        child: GestureDetector(
-                          onTap: () => setState(() => isLooping = !isLooping),
-                          child: Container(
-                            color: isLooping
-                                ? lavenderAccent
-                                : Colors.grey.withOpacity(0.5),
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        left: (loopStart * _zoomX) - 5,
-                        top: 0,
-                        width: 10,
-                        height: 10,
-                        child: GestureDetector(
-                          onPanUpdate: (d) => setState(() {
-                            loopStart += (d.delta.dx / _zoomX);
-                            if (loopStart < 0) loopStart = 0;
-                          }),
-                          onPanEnd: (d) => setState(() {
-                            if (snapToGrid) {
-                              loopStart =
-                                  (loopStart / snapResolution).round() *
-                                  snapResolution;
-                            }
-                          }),
-                          child: Container(
-                            color: Colors.transparent,
-                            child: Center(
-                              child: Container(
-                                width: 2,
-                                height: 10,
-                                color: textMain,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        left: (loopEnd * _zoomX) - 5,
-                        top: 0,
-                        width: 10,
-                        height: 10,
-                        child: GestureDetector(
-                          supportedDevices: {
-                            PointerDeviceKind.mouse,
-                            PointerDeviceKind.touch,
-                            PointerDeviceKind.stylus,
-                          },
-                          onPanUpdate: (d) => setState(() {
-                            loopEnd += (d.delta.dx / _zoomX);
-                            if (loopEnd <= loopStart) loopEnd = loopStart + 10;
-                          }),
-                          onPanEnd: (d) => setState(() {
-                            if (snapToGrid) {
-                              loopEnd = max(
-                                loopStart + snapResolution,
-                                (loopEnd / snapResolution).round() *
-                                    snapResolution,
-                              );
-                            }
-                          }),
-                          child: Container(
-                            color: Colors.transparent,
-                            child: Center(
-                              child: Container(
-                                width: 2,
-                                height: 10,
-                                color: textMain,
-                              ),
-                            ),
-                          ),
+                      Positioned.fill(
+                        child: TimelineLoopBar(
+                          loopStart: loopStart,
+                          loopEnd: loopEnd,
+                          isLooping: isLooping,
+                          zoomX: _zoomX,
+                          beatWidth: beatWidth,
+                          snapToGrid: snapToGrid,
+                          snapResolution: snapResolution,
+                          accentColor: lavenderAccent,
+                          handleColor: textMain,
+                          onDragStart: _saveState,
+                          onToggleLoop: () =>
+                              setState(() => isLooping = !isLooping),
+                          onLoopRangeChanged: (newStart, newEnd) =>
+                              setState(() {
+                                loopStart = newStart;
+                                loopEnd = newEnd;
+                              }),
                         ),
                       ),
                     ],
                   ),
+                ),
+                TempoSignatureLane(
+                  baseBpm: bpm.toDouble(),
+                  baseNum: timeSigTop,
+                  baseDen: timeSigBottom,
+                  markers: tempoMarkers,
+                  zoomX: _zoomX,
+                  snapResolution: snapResolution,
+                  snapToGrid: snapToGrid,
+                  onAddOrUpdateMarker: (m) {
+                    _saveState();
+                    setState(() {
+                      tempoMarkers.removeWhere((e) => e.id == m.id);
+                      tempoMarkers.add(m);
+                      tempoMarkers.sort(
+                        (a, b) => a.position.compareTo(b.position),
+                      );
+                    });
+                  },
+                  onDeleteMarker: (id) {
+                    _saveState();
+                    setState(() {
+                      tempoMarkers.removeWhere((e) => e.id == id);
+                    });
+                  },
                 ),
                 Expanded(
                   child: Stack(
@@ -6696,7 +7240,20 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                           if (!_isTrackVisibleInArrange(track)) {
                             return const SizedBox.shrink();
                           }
-                          return GestureDetector(
+                          return Builder(
+                            builder: (laneCtx) => DragTarget<SampleBrowserItem>(
+                              onAcceptWithDetails: (details) {
+                                final box = laneCtx.findRenderObject() as RenderBox?;
+                                final localX = box != null
+                                    ? box.globalToLocal(details.offset).dx
+                                    : playheadPosition * _zoomX;
+                                _addBrowserItemToTrack(
+                                  details.data,
+                                  targetTrack: track,
+                                  startPos: (localX / _zoomX).clamp(0.0, 2000.0),
+                                );
+                              },
+                              builder: (ctx, cand, rej) => GestureDetector(
                             onTapDown: (d) => setState(() {
                               selectedClip = null;
                               multiSelectedClips.clear();
@@ -6835,161 +7392,23 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                                     ),
                                   if (track.showAutomation)
                                     Positioned.fill(
-                                      child: GestureDetector(
-                                        onTapDown: (d) {
-                                          double time =
-                                              d.localPosition.dx / _zoomX;
-                                          double val =
-                                              1.0 -
-                                              (d.localPosition.dy / 140.0);
-                                          var list =
-                                              track.automation[track
-                                                  .currentAutomationParam] ??
-                                              [];
-                                          for (var p in list) {
-                                            double px = p.time * _zoomX;
-                                            double py = (1.0 - p.value) * 140.0;
-                                            double dist = sqrt(
-                                              pow(px - d.localPosition.dx, 2) +
-                                                  pow(
-                                                    py - d.localPosition.dy,
-                                                    2,
-                                                  ),
-                                            );
-                                            if (dist < 30.0) return;
-                                          }
-                                          _saveState();
-                                          setState(() {
-                                            if (!track.automation.containsKey(
-                                              track.currentAutomationParam,
-                                            )) {
-                                              track.automation[track
-                                                      .currentAutomationParam] =
-                                                  [];
-                                            }
-                                            track
-                                                .automation[track
-                                                    .currentAutomationParam]!
-                                                .add(
-                                                  AutomationPoint(
-                                                    time,
-                                                    val.clamp(0.0, 1.0),
-                                                  ),
-                                                );
-                                            track
-                                                .automation[track
-                                                    .currentAutomationParam]!
-                                                .sort(
-                                                  (a, b) =>
-                                                      a.time.compareTo(b.time),
-                                                );
-                                          });
-                                        },
-                                        onPanStart: (d) {
-                                          var list =
-                                              track.automation[track
-                                                  .currentAutomationParam] ??
-                                              [];
-                                          int closest = -1;
-                                          double minDist = 30.0;
-                                          for (
-                                            int i = 0;
-                                            i < list.length;
-                                            i++
-                                          ) {
-                                            double px = list[i].time * _zoomX;
-                                            double py =
-                                                (1.0 - list[i].value) * 140.0;
-                                            double dist = sqrt(
-                                              pow(px - d.localPosition.dx, 2) +
-                                                  pow(
-                                                    py - d.localPosition.dy,
-                                                    2,
-                                                  ),
-                                            );
-                                            if (dist < minDist) {
-                                              minDist = dist;
-                                              closest = i;
-                                            }
-                                          }
-                                          if (closest != -1) {
-                                            _saveState();
-                                            setState(() {
-                                              _draggingAutoPointIndex = closest;
-                                              _draggingAutoTrackId = track.id;
-                                            });
-                                          }
-                                        },
-                                        onPanUpdate: (d) {
-                                          if (_draggingAutoTrackId ==
-                                                  track.id &&
-                                              _draggingAutoPointIndex != null) {
-                                            setState(() {
-                                              var list =
-                                                  track.automation[track
-                                                      .currentAutomationParam]!;
-                                              double newTime =
-                                                  list[_draggingAutoPointIndex!]
-                                                      .time +
-                                                  (d.delta.dx / _zoomX);
-                                              double minTime =
-                                                  _draggingAutoPointIndex! > 0
-                                                  ? list[_draggingAutoPointIndex! -
-                                                                1]
-                                                            .time +
-                                                        0.1
-                                                  : 0.0;
-                                              double maxTime =
-                                                  _draggingAutoPointIndex! <
-                                                      list.length - 1
-                                                  ? list[_draggingAutoPointIndex! +
-                                                                1]
-                                                            .time -
-                                                        0.1
-                                                  : 2000.0;
-                                              list[_draggingAutoPointIndex!]
-                                                  .time = newTime.clamp(
-                                                minTime,
-                                                maxTime,
-                                              );
-
-                                              double newVal =
-                                                  list[_draggingAutoPointIndex!]
-                                                      .value -
-                                                  (d.delta.dy / 140.0);
-                                              list[_draggingAutoPointIndex!]
-                                                  .value = newVal.clamp(
-                                                0.0,
-                                                1.0,
-                                              );
-                                            });
-                                          }
-                                        },
-                                        onPanEnd: (d) => setState(() {
-                                          _draggingAutoPointIndex = null;
-                                          _draggingAutoTrackId = null;
-                                        }),
-                                        child: Container(
-                                          color: Colors.cyanAccent.withAlpha(
-                                            20,
-                                          ),
-                                          child: CustomPaint(
-                                            painter: AutomationPainter(
-                                              points:
-                                                  track.automation[track
-                                                      .currentAutomationParam] ??
-                                                  [],
-                                              zoomX: _zoomX,
-                                            ),
-                                          ),
-                                        ),
+                                      child: AutomationLaneOverlay(
+                                        track: track,
+                                        laneHeight: 140.0,
+                                        zoomX: _zoomX,
+                                        snapResolution: snapResolution,
+                                        snapToGrid: snapToGrid,
+                                        onSaveState: _saveState,
+                                        onChanged: () => setState(() {}),
                                       ),
                                     ),
                                 ],
                               ),
                             ),
-                          );
-                        },
+                          ),
+                        ),
+                      );
+                    },
                       ),
                       Positioned(
                         left: playheadPosition * _zoomX - 10,
@@ -7520,6 +7939,8 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                 onPaste: _paste,
                 onInstrumentDialogRequested: () => _showInstrumentDialog(t!),
                 onMidiInputDialogRequested: () => _showMidiInputDialog(t!),
+                onImportMidi: () => _importMidiFile(targetTrack: t),
+                onExportMidi: _exportSelectedMidiClip,
               );
             },
           );
@@ -7774,6 +8195,9 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           onApplyPreset: (presetName) =>
               _applyEffectChainPreset(fxTrack, presetName),
           onAddEffectPressed: _showAddEffectDialog,
+          fftSpectrum: _cachedFftBins,
+          onAddExternalPluginPressed: () =>
+              _showExternalPluginBrowserDialog(fxTrack, syncFx),
         );
       case 3:
         if (selectedTrackIndex != null) {
@@ -7826,6 +8250,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           onPlayheadChanged: (pos) => setState(() => playheadPosition = pos),
           onChangeStart: _saveState,
           onClipChanged: () {
+            _ensureAudioClipProcessed(activeAudioClip);
             if (_isSoloudReady && activeAudioClip.currentHandle != null) {
               try {
                 final tr = audioOwnerTrack;
@@ -8040,7 +8465,24 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                         });
                       },
                     )
-                  : Row(children: [_buildTrackHeaders(), _buildTimeline()]),
+                  : Row(
+                      children: [
+                        if (_showSampleBrowser)
+                          SampleBrowserDrawer(
+                            userFolders: _userSampleFolders,
+                            previewingPath: _browserPreviewPath,
+                            onAddFolderPressed: _addUserSampleFolder,
+                            onRemoveFolder: _removeUserSampleFolder,
+                            onTogglePreview: _toggleBrowserPreview,
+                            onAddToProject: (item) =>
+                                _addBrowserItemToTrack(item),
+                            onClose: () =>
+                                setState(() => _showSampleBrowser = false),
+                          ),
+                        _buildTrackHeaders(),
+                        _buildTimeline(),
+                      ],
+                    ),
             ),
             if (isMusicalTypingEnabled)
               MusicalKeyboardBar(

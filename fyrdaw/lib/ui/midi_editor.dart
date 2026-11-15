@@ -63,6 +63,8 @@ class MidiEditorWidget extends StatefulWidget {
   final VoidCallback onMidiInputDialogRequested;
   final VoidCallback? onSynthSettingsChanged;
   final List<AudioClip> grooveAudioClips;
+  final VoidCallback? onImportMidi;
+  final VoidCallback? onExportMidi;
 
   const MidiEditorWidget({
     super.key,
@@ -89,6 +91,8 @@ class MidiEditorWidget extends StatefulWidget {
     required this.onMidiInputDialogRequested,
     this.onSynthSettingsChanged,
     this.grooveAudioClips = const [],
+    this.onImportMidi,
+    this.onExportMidi,
   });
 
   @override
@@ -877,6 +881,24 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                       'Groove',
                       style: TextStyle(color: Colors.cyanAccent, fontSize: 12),
                     ),
+                  ),
+                ),
+              if (widget.onImportMidi != null)
+                TextButton.icon(
+                  onPressed: widget.onImportMidi,
+                  icon: Icon(Icons.file_open, size: 13, color: textMuted),
+                  label: Text(
+                    'Import .mid',
+                    style: TextStyle(color: textMuted, fontSize: 11),
+                  ),
+                ),
+              if (widget.onExportMidi != null)
+                TextButton.icon(
+                  onPressed: widget.onExportMidi,
+                  icon: Icon(Icons.download, size: 13, color: textMuted),
+                  label: Text(
+                    'Export .mid',
+                    style: TextStyle(color: textMuted, fontSize: 11),
                   ),
                 ),
               SizedBox(width: 8),

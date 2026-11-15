@@ -156,7 +156,7 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
             Container(
               height: 56,
               width: double.infinity,
-              decoration: BoxDecoration(color: FyrTheme.bgColor),
+              decoration: BoxDecoration(color: FyrTheme.panelBgColor),
               child: Stack(
                 children: [
                   Align(
@@ -205,9 +205,17 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                       children: [
                         GestureDetector(
                           onTap: () async {
-                            await Process.run('swaymsg', [
-                              '[app_id="fyroverview"] scratchpad show, resize set ${SystemState.screenWidth} ${SystemState.screenHeight}, border none, move absolute position 0 0',
-                            ]);
+                            final home = Platform.environment['HOME'] ?? '';
+                            final script = '$home/.config/fyr/overview_toggle.sh';
+                            if (File(script).existsSync()) {
+                              await Process.run(script, ['workspace']);
+                            } else {
+                              await Process.start(
+                                '/opt/fyroverview/fyroverview',
+                                ['--show'],
+                                mode: ProcessStartMode.detached,
+                              );
+                            }
                           },
                           behavior: HitTestBehavior.opaque,
                           child: Container(

@@ -1,0 +1,15 @@
+name: fyr_core
+description: Shared theme, Sway conf.d persistence, and event-driven Sway IPC helpers for fyrDE applications.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter

@@ -175,11 +175,13 @@ class _TouchpadPaneState extends State<TouchpadPane> {
     String? detectedName;
 
     try {
-      final configFile = File(_swayConfigPath);
-      if (await configFile.exists()) {
-        loaded = TouchpadSettingsConfig.fromSwayConfigContent(
-          await configFile.readAsString(),
-        );
+      final rawConfig = await SwayConfD.readDropInOrLegacyBlock(
+        '30-touchpad.conf',
+        startMarker: TouchpadSettingsConfig.startMarker,
+        endMarker: TouchpadSettingsConfig.endMarker,
+      );
+      if (rawConfig != null) {
+        loaded = TouchpadSettingsConfig.fromSwayConfigContent(rawConfig);
       }
     } catch (_) {}
 
@@ -248,15 +250,15 @@ class _TouchpadPaneState extends State<TouchpadPane> {
     } catch (_) {}
 
     try {
-      final configFile = File(_swayConfigPath);
-      if (await configFile.exists()) {
-        final content = await configFile.readAsString();
-        final updated = TouchpadSettingsConfig.upsertSwayConfigContent(
-          content,
-          next,
-        );
-        await configFile.writeAsString(updated);
-      }
+      await SwayConfD.removeLegacyMarkerBlock(
+        TouchpadSettingsConfig.startMarker,
+        TouchpadSettingsConfig.endMarker,
+      );
+      await SwayConfD.writeDropIn(
+        '30-touchpad.conf',
+        next.toSwayConfigLines().join('\n'),
+        reload: false,
+      );
     } catch (_) {}
   }
 

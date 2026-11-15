@@ -3,6 +3,7 @@ import 'package:fyrdaw/main.dart';
 import 'package:fyrdaw/models/automation_point.dart';
 import 'package:fyrdaw/models/midi_note.dart';
 import 'package:fyrdaw/models/song_marker.dart';
+import 'package:fyrdaw/models/tempo_marker.dart';
 
 class AutomationPainter extends CustomPainter {
   final List<AutomationPoint> points;
@@ -55,12 +56,14 @@ class RulerPainter extends CustomPainter {
   final int bpm;
   final int timeSigTop;
   final List<SongMarker> markers;
+  final List<TempoMarker> tempoMarkers;
 
   RulerPainter({
     required this.zoomX,
     required this.bpm,
     required this.timeSigTop,
     this.markers = const [],
+    this.tempoMarkers = const [],
   });
 
   @override
@@ -75,23 +78,44 @@ class RulerPainter extends CustomPainter {
 
     double beatW = 100.0 * 60.0 / bpm * zoomX;
     if (beatW >= 5) {
-      for (double i = 0; i < size.width; i += beatW) {
-        int beatNum = (i / beatW).round();
-        bool isMeasure = beatNum % timeSigTop == 0;
+      int beatNum = 0;
+      int measure = 1;
+      int beatInMeasure = 0;
+      double posPx = 0.0;
+      while (posPx < size.width) {
+        final double timelinePos = posPx / zoomX;
+        final meter = TempoMarker.effectiveMeterAt(
+          timelinePos,
+          tempoMarkers,
+          timeSigTop,
+          4,
+        );
+        final int activeTop = meter.numerator;
+        final double localBpm = TempoMarker.effectiveBpmAt(
+          timelinePos,
+          tempoMarkers,
+          bpm.toDouble(),
+        );
+        final double localBeatW = (100.0 * 60.0 / localBpm * zoomX).clamp(4.0, 2000.0);
+        final bool isMeasure = beatInMeasure == 0;
         canvas.drawLine(
-          Offset(i, isMeasure ? 24 : 32),
-          Offset(i, 40),
+          Offset(posPx, isMeasure ? 24 : 32),
+          Offset(posPx, 40),
           isMeasure ? thickPaint : thinPaint,
         );
         if (isMeasure) {
-          int measure = beatNum ~/ timeSigTop + 1;
           textPainter.text = TextSpan(
             text: '$measure',
             style: TextStyle(color: textMuted, fontSize: 10),
           );
           textPainter.layout();
-          textPainter.paint(canvas, Offset(i + 2, 20));
+          textPainter.paint(canvas, Offset(posPx + 2, 20));
+          measure++;
         }
+        beatNum++;
+        beatInMeasure = (beatInMeasure + 1) % activeTop;
+        posPx += localBeatW;
+        if (beatNum > 5000) break;
       }
     }
 

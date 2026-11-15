@@ -1,8 +1,8 @@
-# fyrDAW
+# Sound Booth
 
 A desktop Digital Audio Workstation built in **Flutter** and **C++/SoLoud DSP** for Linux — featuring multi-track audio & MIDI recording, **31 built-in multi-sampled instruments**, a **16-pad chop sampler** with bundled studio/808/boombap drum kits, a close-up **Audio Clip Editor**, reorderable stompbox & mastering FX, color-synced **Group Bus** routing & live **dBFS metering**, real-time **Arpeggiator & Groove** tools, an Ableton-style **Session Clip Launcher**, hardware **MIDI Learn**, **Reference Track LUFS A/B**, and offline WAV / FLAC / MP3 / Stem export.
 
-![fyrDAW Arrangement Timeline, Piano Roll & Musical Typing](screenshots/timeline_midi_arp.png)
+![Sound Booth Arrangement Timeline, Piano Roll & Musical Typing](screenshots/timeline_midi_arp.png)
 
 ---
 
@@ -52,7 +52,7 @@ Start fast from **Settings (`⚙`) -> `New from Template...`**:
 - **Punch-In (`PUNCH`)**: Jumps playhead inside the loop brace and punches in/out automatically.
 - **Tempo & Meter**: Type BPM directly or click **Tap** for tap-tempo; toggle the Metronome bell icon and change time signature (`3/4` to `7/4`).
 - **Tools (Right)**: Undo/Redo, Zoom In/Out, Snap to Grid, Auto-Follow Playhead, **QWERTY Musical Typing Keyboard**, **Session View / Timeline Toggle**, **MIDI Learn Mode**, live Master FFT Spectrum, and Settings (`New`, `Templates`, `Open`, `Save`, `Save As`, `Export Mixdown`, `Export Stems`, `Preferences`).
-- **Timeline Overview Minimap & Song Markers**: Click/drag the top `OVERVIEW` strip to scrub long arrangements, right-click the ruler to add labeled **Song Markers** (`Intro`, `Verse 1`, `Chorus`, `Drop`), or drag the top loop bar ends to toggle/resize loop regions.
+- **Timeline Overview Minimap, Loop Bar & Song Markers**: Click/drag the top `OVERVIEW` strip to scrub long arrangements, right-click the ruler to add labeled **Song Markers** (`Intro`, `Verse 1`, `Chorus`, `Drop`), click the top loop bar to toggle looping, drag its left/right edge handles to resize, or drag the bar body to relocate the entire loop region.
 
 ---
 
@@ -181,7 +181,7 @@ Toggle **`Switch to Session Clip Launcher`** (grid icon in the top bar) to switc
 ## 9. Saving Projects (.adaw) & Exporting Mixdowns / Stems
 
 - **Save / Open (`.adaw`)**: `Ctrl+S` / Settings -> `Save As...` creates a portable `.adaw` ZIP archive bundling `project.json` (tracks, Group Buses, clips, automation, Master FX chain, MIDI CC mappings, LUFS target) alongside all referenced WAV audio files.
-- **Crash Auto-Save Recovery**: Changes auto-save periodically in the background; on relaunch after an unexpected exit, fyrDAW prompts to **Recover** or **Discard** unsaved work.
+- **Crash Auto-Save Recovery**: Changes auto-save periodically in the background; on relaunch after an unexpected exit, Sound Booth prompts to **Recover** or **Discard** unsaved work.
 - **Export Mixdown (`WAV` / `FLAC` / `MP3`)**: Settings -> `Export Mixdown` runs the offline `MixdownRenderer` (Group Bus summing, Pre/Post sends, Arp expansion, Overlap crossfades, Sidechain compression, Synth filters, Stompbox FX, Master FX chain & Limiter) to 16-bit 44.1 kHz stereo **WAV**, or transcodes via `ffmpeg` to lossless **FLAC** / **320 kbps MP3**.
 - **Export Stems**: Settings -> `Export Stems` renders every track individually as its own WAV file into your chosen folder.
 
@@ -226,7 +226,7 @@ Ensure you have [Flutter](https://flutter.dev/docs/get-started/install/linux) co
    Output bundle is generated in `build/linux/x64/release/bundle/`.
 
 ### Desktop Installer
-The `installer/` directory contains `install.sh`, which detects your package manager (`pacman`, `apt`, etc.), installs runtime dependencies (`alsa-lib`, `ffmpeg`, `zenity`, `fmedia`), copies the bundle to `/opt/fyrDAW`, and registers a desktop launcher entry:
+The `installer/` directory contains `install.sh`, which detects your package manager (`pacman`, `apt`, etc.), installs runtime dependencies (`alsa-lib`, `ffmpeg`, `zenity`, `fmedia`), copies the bundle to `/opt/fyrdaw`, and registers a desktop launcher entry (`Sound Booth`):
 
 ```bash
 cd installer

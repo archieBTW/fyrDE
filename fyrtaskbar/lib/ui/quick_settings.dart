@@ -482,7 +482,7 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
       context: context,
       builder: (context) {
         return AlertDialog(
-          backgroundColor: FyrTheme.bgColor,
+          backgroundColor: FyrTheme.panelBgColor,
           title: Text(
             'Connect to $ssid',
             style: TextStyle(color: FyrTheme.textColor),
@@ -538,7 +538,7 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
       child: Container(
         width: 472,
         decoration: BoxDecoration(
-          color: FyrTheme.bgColor,
+          color: FyrTheme.panelBgColor,
           borderRadius: BorderRadius.only(bottomLeft: Radius.circular(16)),
           border: Border.all(color: FyrTheme.cardColor),
         ),

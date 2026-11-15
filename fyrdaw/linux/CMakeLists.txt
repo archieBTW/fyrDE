@@ -126,3 +126,14 @@ if(NOT CMAKE_BUILD_TYPE MATCHES "Debug")
   install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
     COMPONENT Runtime)
 endif()
+
+# Optional native LV2 host helper built when liblilv-0 is installed
+pkg_check_modules(LILV lilv-0)
+if(LILV_FOUND)
+  enable_language(C)
+  add_library(soundbooth_lv2 SHARED "${CMAKE_CURRENT_SOURCE_DIR}/lv2_host/soundbooth_lv2.c")
+  target_include_directories(soundbooth_lv2 PRIVATE ${LILV_INCLUDE_DIRS})
+  target_link_libraries(soundbooth_lv2 PRIVATE ${LILV_LIBRARIES} m)
+  install(TARGETS soundbooth_lv2 LIBRARY DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    COMPONENT Runtime)
+endif()

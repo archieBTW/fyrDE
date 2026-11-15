@@ -7,6 +7,7 @@ import 'package:fyrdaw/models/enums.dart';
 import 'package:fyrdaw/models/track.dart';
 import 'package:fyrdaw/ui/dial.dart';
 import 'package:fyrdaw/ui/meters.dart';
+import 'package:fyrdaw/ui/parametric_eq_widget.dart';
 import 'package:fyrdaw/ui/tuner_gate_panel.dart';
 import 'package:fyrdaw/utils/pitch_detector.dart';
 
@@ -20,6 +21,7 @@ class EffectsRackView extends StatelessWidget {
   final InputDevice? selectedInputDevice;
   final double trackLevel;
   final double sidechainGr;
+  final List<double> fftSpectrum;
   final PitchDetectionResult? detectedPitch;
   final bool tunerEnabled;
   final bool isMasterRack;
@@ -35,6 +37,7 @@ class EffectsRackView extends StatelessWidget {
   final void Function(DawEffect fx, String? sourceTrackId) onSidechainChanged;
   final void Function(String presetName) onApplyPreset;
   final VoidCallback onAddEffectPressed;
+  final VoidCallback? onAddExternalPluginPressed;
 
   const EffectsRackView({
     super.key,
@@ -44,6 +47,7 @@ class EffectsRackView extends StatelessWidget {
     required this.selectedInputDevice,
     required this.trackLevel,
     required this.sidechainGr,
+    this.fftSpectrum = const [],
     required this.detectedPitch,
     required this.tunerEnabled,
     this.isMasterRack = false,
@@ -59,6 +63,7 @@ class EffectsRackView extends StatelessWidget {
     required this.onSidechainChanged,
     required this.onApplyPreset,
     required this.onAddEffectPressed,
+    this.onAddExternalPluginPressed,
   });
 
   Color _pedalColor(String name) {
@@ -104,100 +109,110 @@ class EffectsRackView extends StatelessWidget {
             ],
           ),
           content: SizedBox(
-            width: 380,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                PedalVisualizerWidget(
-                  effect: fx,
-                  activityLevel: trackLevel,
-                  gainReduction: fx.name == 'Compressor' ? sidechainGr : 0.0,
-                  height: 92,
-                  onParamChanged: fx.name == 'EQ'
-                      ? (k, v) {
-                          onParamChanged(fx, k, v);
-                          setModalState(() {});
-                        }
-                      : null,
-                ),
-                const SizedBox(height: 12),
-                if (fx.name == 'EQ')
-                  Text(
-                    'Tip: Drag directly on the curve above to shape Low / Mid / High',
-                    style: TextStyle(color: textMuted, fontSize: 11),
-                  ),
-                if (fx.name == 'Compressor') ...[
-                  Row(
-                    children: [
-                      Text(
-                        'Sidechain Duck Source:',
-                        style: TextStyle(color: textMuted, fontSize: 12),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: DropdownButton<String?>(
-                          value: allTracks.any((t) => t.id == fx.sidechainTrackId)
-                              ? fx.sidechainTrackId
-                              : null,
-                          isExpanded: true,
-                          dropdownColor: bgDark,
-                          style: TextStyle(color: textMain, fontSize: 12),
-                          items: [
-                            const DropdownMenuItem<String?>(
-                              value: null,
-                              child: Text('None (Internal)'),
-                            ),
-                            ...allTracks
-                                .where((t) => t.id != track.id)
-                                .map(
-                                  (t) => DropdownMenuItem<String?>(
-                                    value: t.id,
-                                    child: Text(t.name),
-                                  ),
-                                ),
-                          ],
-                          onChanged: (v) {
-                            onSidechainChanged(fx, v);
-                            setModalState(() {});
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                ],
-                Wrap(
-                  spacing: 18,
-                  runSpacing: 12,
-                  alignment: WrapAlignment.center,
-                  children: fx.parameters.keys.map((k) {
-                    return Column(
-                      mainAxisSize: MainAxisSize.min,
+            width: fx.name == 'EQ' ? 500 : 380,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (fx.name == 'EQ') ...[
+                    ParametricEqWidget(
+                      effect: fx,
+                      fftSpectrum: fftSpectrum,
+                      height: 195,
+                      onParamChanged: (k, v) {
+                        onParamChanged(fx, k, v);
+                        setModalState(() {});
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Drag colored nodes for Frequency/Gain, adjust Q below, double-click node to reset',
+                      style: TextStyle(color: textMuted, fontSize: 10),
+                    ),
+                  ] else ...[
+                    PedalVisualizerWidget(
+                      effect: fx,
+                      activityLevel: trackLevel,
+                      gainReduction: fx.name == 'Compressor' ? sidechainGr : 0.0,
+                      height: 92,
+                      onParamChanged: null,
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  if (fx.name == 'Compressor') ...[
+                    Row(
                       children: [
-                        PanDial(
-                          onChangeStart: onSaveState,
-                          size: 32,
-                          pan: fx.parameters[k]! * 2 - 1.0,
-                          onChanged: (v) {
-                            onParamChanged(
-                              fx,
-                              k,
-                              ((v + 1.0) / 2.0).clamp(0.0, 1.0),
-                            );
-                            setModalState(() {});
-                          },
-                        ),
-                        const SizedBox(height: 4),
-                        Text(k, style: TextStyle(color: textMain, fontSize: 11)),
                         Text(
-                          '${((fx.parameters[k] ?? 0.5) * 100).round()}%',
-                          style: TextStyle(color: textMuted, fontSize: 10),
+                          'Sidechain Duck Source:',
+                          style: TextStyle(color: textMuted, fontSize: 12),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: DropdownButton<String?>(
+                            value: allTracks.any((t) => t.id == fx.sidechainTrackId)
+                                ? fx.sidechainTrackId
+                                : null,
+                            isExpanded: true,
+                            dropdownColor: bgDark,
+                            style: TextStyle(color: textMain, fontSize: 12),
+                            items: [
+                              const DropdownMenuItem<String?>(
+                                value: null,
+                                child: Text('None (Internal)'),
+                              ),
+                              ...allTracks
+                                  .where((t) => t.id != track.id)
+                                  .map(
+                                    (t) => DropdownMenuItem<String?>(
+                                      value: t.id,
+                                      child: Text(t.name),
+                                    ),
+                                  ),
+                            ],
+                            onChanged: (v) {
+                              onSidechainChanged(fx, v);
+                              setModalState(() {});
+                            },
+                          ),
                         ),
                       ],
-                    );
-                  }).toList(),
-                ),
-              ],
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                  if (fx.name != 'EQ')
+                    Wrap(
+                      spacing: 18,
+                      runSpacing: 12,
+                      alignment: WrapAlignment.center,
+                      children: fx.parameters.keys.map((k) {
+                        return Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            PanDial(
+                              onChangeStart: onSaveState,
+                              size: 32,
+                              pan: (fx.parameters[k] ?? 0.5) * 2 - 1.0,
+                              onChanged: (v) {
+                                onParamChanged(
+                                  fx,
+                                  k,
+                                  ((v + 1.0) / 2.0).clamp(0.0, 1.0),
+                                );
+                                setModalState(() {});
+                              },
+                            ),
+                            const SizedBox(height: 4),
+                            Text(k, style: TextStyle(color: textMain, fontSize: 11)),
+                            Text(
+                              '${((fx.parameters[k] ?? 0.5) * 100).round()}%',
+                              style: TextStyle(color: textMuted, fontSize: 10),
+                            ),
+                          ],
+                        );
+                      }).toList(),
+                    ),
+                ],
+              ),
             ),
           ),
           actions: [
@@ -339,14 +354,44 @@ class EffectsRackView extends StatelessWidget {
                                     ),
                                     const SizedBox(width: 6),
                                     Expanded(
-                                      child: Text(
-                                        fx.name,
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 11,
-                                          color: Colors.white,
-                                        ),
-                                        overflow: TextOverflow.ellipsis,
+                                      child: Row(
+                                        children: [
+                                          if (fx.pluginFormat != null)
+                                            Container(
+                                              margin: const EdgeInsets.only(right: 4),
+                                              padding: const EdgeInsets.symmetric(
+                                                horizontal: 3,
+                                                vertical: 1,
+                                              ),
+                                              decoration: BoxDecoration(
+                                                color: Colors.tealAccent.withValues(alpha: 0.2),
+                                                borderRadius: BorderRadius.circular(3),
+                                                border: Border.all(
+                                                  color: Colors.tealAccent,
+                                                  width: 0.6,
+                                                ),
+                                              ),
+                                              child: Text(
+                                                fx.pluginFormat!,
+                                                style: const TextStyle(
+                                                  color: Colors.tealAccent,
+                                                  fontSize: 7,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                            ),
+                                          Expanded(
+                                            child: Text(
+                                              fx.name,
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 11,
+                                                color: Colors.white,
+                                              ),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
                                     GestureDetector(
@@ -436,13 +481,17 @@ class EffectsRackView extends StatelessWidget {
                                   runAlignment: WrapAlignment.center,
                                   spacing: 8,
                                   runSpacing: 4,
-                                  children: fx.parameters.keys.map((k) {
+                                  children: (fx.name == 'EQ'
+                                          ? const ['Low', 'Mid', 'High']
+                                          : fx.parameters.keys.take(4).toList())
+                                      .where((k) => fx.parameters.containsKey(k))
+                                      .map((k) {
                                     return Column(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
                                         PanDial(
                                           onChangeStart: onSaveState,
-                                          pan: fx.parameters[k]! * 2 - 1.0,
+                                          pan: fx.parameters[k]!.clamp(0.0, 1.0) * 2 - 1.0,
                                           onChanged: (v) => onParamChanged(
                                             fx,
                                             k,
@@ -456,6 +505,7 @@ class EffectsRackView extends StatelessWidget {
                                             fontSize: 8,
                                             color: Colors.white,
                                           ),
+                                          overflow: TextOverflow.ellipsis,
                                         ),
                                       ],
                                     );
@@ -646,7 +696,7 @@ class EffectsRackView extends StatelessWidget {
                         ),
                         child: Container(
                           width: 120,
-                          height: 118,
+                          height: onAddExternalPluginPressed != null ? 86 : 118,
                           decoration: BoxDecoration(
                             color: textFaint.withValues(alpha: 0.1),
                             borderRadius: BorderRadius.circular(8),
@@ -654,12 +704,13 @@ class EffectsRackView extends StatelessWidget {
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Icon(Icons.add, color: textMuted, size: 28),
-                              const SizedBox(height: 6),
+                              Icon(Icons.add, color: textMuted, size: 24),
+                              const SizedBox(height: 4),
                               Text(
                                 'Add Effect',
                                 style: TextStyle(
                                   color: textMuted,
+                                  fontSize: 11,
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
@@ -669,6 +720,51 @@ class EffectsRackView extends StatelessWidget {
                       ),
                     ),
                   ),
+                  if (onAddExternalPluginPressed != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6, right: 16),
+                      child: InkWell(
+                        key: const Key('add_external_plugin_btn'),
+                        onTap: onAddExternalPluginPressed,
+                        child: Container(
+                          width: 120,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 5,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF0F766E).withValues(alpha: 0.25),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(
+                              color: Colors.tealAccent.withValues(alpha: 0.65),
+                            ),
+                          ),
+                          child: const FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.extension,
+                                  size: 12,
+                                  color: Colors.tealAccent,
+                                ),
+                                SizedBox(width: 4),
+                                Text(
+                                  'LV2 / VST3',
+                                  style: TextStyle(
+                                    color: Colors.tealAccent,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ],

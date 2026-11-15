@@ -847,6 +847,28 @@ class _AudioClipEditorWidgetState extends State<AudioClipEditorWidget> {
                           label: 'Long Fade Out',
                           onPressed: () => _applyFadePreset(0.02, 0.75),
                         ),
+                        const SizedBox(width: 10),
+                        _actionChip(
+                          icon: Icons.music_note_outlined,
+                          label: clip.preservePitch ? 'Pitch Lock: ON' : 'Pitch Lock: OFF',
+                          accentColor: clip.preservePitch ? Colors.cyanAccent : null,
+                          onPressed: () {
+                            widget.onChangeStart();
+                            setState(() => clip.preservePitch = !clip.preservePitch);
+                            widget.onClipChanged();
+                          },
+                        ),
+                        const SizedBox(width: 6),
+                        _actionChip(
+                          icon: Icons.repeat,
+                          label: clip.isLooped ? 'Loop: ON' : 'Loop: OFF',
+                          accentColor: clip.isLooped ? Colors.amberAccent : null,
+                          onPressed: () {
+                            widget.onChangeStart();
+                            setState(() => clip.isLooped = !clip.isLooped);
+                            widget.onClipChanged();
+                          },
+                        ),
                       ],
                     ),
                   ],

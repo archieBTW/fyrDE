@@ -4,6 +4,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:fyrtaskbar/services/app_service.dart';
+import 'package:fyrtaskbar/services/osd_service.dart';
 import 'package:fyrtaskbar/state/system_state.dart';
 import 'package:fyrtaskbar/ui/taskbar_screen.dart';
 import 'package:window_manager/window_manager.dart';
@@ -18,6 +19,7 @@ void main(List<String> args) async {
   await windowManager.ensureInitialized();
   if (!isDesktopLayer) {
     SystemState.init();
+    await OsdService.init();
 
     FyrTheme.accentColorNotifier.addListener(() {
       AppService.cachedApps = null;
@@ -89,6 +91,12 @@ void main(List<String> args) async {
       screenHeight,
     );
     if (isSupported) {
+      try {
+        await const MethodChannel('fyrtaskbar/resize').invokeMethod(
+          'setNamespace',
+          'fyrdesktop',
+        );
+      } catch (_) {}
       await waylandLayerShellPlugin.setLayer(ShellLayer.layerBottom);
       await waylandLayerShellPlugin.setAnchor(ShellEdge.edgeTop, true);
       await waylandLayerShellPlugin.setAnchor(ShellEdge.edgeBottom, true);
@@ -130,6 +138,12 @@ void main(List<String> args) async {
 
   bool isSupported = await waylandLayerShellPlugin.initialize(screenWidth, 56);
   if (isSupported) {
+    try {
+      await const MethodChannel('fyrtaskbar/resize').invokeMethod(
+        'setNamespace',
+        'fyrtaskbar',
+      );
+    } catch (_) {}
     await waylandLayerShellPlugin.setLayer(ShellLayer.layerTop);
     await waylandLayerShellPlugin.setAnchor(ShellEdge.edgeTop, true);
     await waylandLayerShellPlugin.setAnchor(ShellEdge.edgeLeft, true);
@@ -329,7 +343,7 @@ class _DesktopBackgroundScreenState extends State<DesktopBackgroundScreen> {
                     width: menuWidth,
                     padding: const EdgeInsets.all(6),
                     decoration: BoxDecoration(
-                      color: FyrTheme.bgColor.withOpacity(0.95),
+                      color: FyrTheme.panelBgColor.withOpacity(0.95),
                       borderRadius: BorderRadius.circular(14),
                       border: Border.all(
                         color: FyrTheme.cardColor,

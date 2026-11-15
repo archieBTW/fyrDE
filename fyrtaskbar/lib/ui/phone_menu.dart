@@ -48,7 +48,7 @@ class _PhoneMenuPopupState extends State<PhoneMenuPopup>
       child: Container(
         width: 300,
         decoration: BoxDecoration(
-          color: FyrTheme.bgColor,
+          color: FyrTheme.panelBgColor,
           borderRadius: const BorderRadius.only(
             bottomLeft: Radius.circular(16),
             bottomRight: Radius.circular(16),

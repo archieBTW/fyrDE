@@ -6,8 +6,12 @@ import 'package:fyrdaw/models/daw_clip.dart';
 import 'package:fyrdaw/models/daw_effect.dart';
 import 'package:fyrdaw/models/enums.dart';
 import 'package:fyrdaw/models/sampler_pad.dart';
+import 'package:fyrdaw/models/tempo_marker.dart';
 import 'package:fyrdaw/models/track.dart';
 import 'package:fyrdaw/utils/audio_utils.dart';
+import 'package:fyrdaw/utils/parametric_eq_dsp.dart';
+import 'package:fyrdaw/utils/plugin_host.dart';
+import 'package:fyrdaw/utils/time_stretch.dart';
 import 'package:fyrdaw/wav_writer.dart';
 
 class MixdownRenderer {
@@ -22,7 +26,7 @@ class MixdownRenderer {
     required Map<String, List<DawClip>> trackClips,
     required String outWavPath,
     required int bpm,
-    double beatWidth = 100.0,
+    double? beatWidth,
     Track? onlyTrack,
     double masterVolume = 1.0,
     bool masterLimiter = true,
@@ -31,6 +35,7 @@ class MixdownRenderer {
     bool auxReverbSolo = false,
     bool auxDelaySolo = false,
     List<DawEffect> masterEffectsChain = const [],
+    List<TempoMarker> tempoMarkers = const [],
   }) async {
     final targetTracks = onlyTrack != null ? [onlyTrack] : tracks;
     final groupTracksMap = <String, Track>{
@@ -58,9 +63,21 @@ class MixdownRenderer {
 
     if (maxTimelinePos <= 0.0) return false;
 
+    final double resolvedBeatWidth = beatWidth ?? (100.0 * 60.0 / bpm);
+
+    double timelineToSec(double units) {
+      if (tempoMarkers.isEmpty) return units / unitsPerSecond;
+      return TempoMarker.timelineToSeconds(
+        units,
+        markers: tempoMarkers,
+        baseBpm: bpm.toDouble(),
+        beatWidth: resolvedBeatWidth,
+      );
+    }
+
     // Add 1.5s tail for reverb/delay/release tails
     final int totalFrames =
-        ((maxTimelinePos / unitsPerSecond) * sampleRate).ceil() +
+        (timelineToSec(maxTimelinePos) * sampleRate).ceil() +
         (sampleRate * 1.5).round();
     if (totalFrames <= 0) return false;
 
@@ -88,7 +105,6 @@ class MixdownRenderer {
       return decoded;
     }
 
-    final double beatWidth = 100.0 * 60.0 / bpm;
     bool anyAudioRendered = false;
 
     final Map<String, Float64List> trackDryL = {};
@@ -132,14 +148,51 @@ class MixdownRenderer {
               ((xfadeOutUnits / unitsPerSecond) * sampleRate).round();
 
           final int clipStartFrame =
-              ((clip.start / unitsPerSecond) * sampleRate).round();
-          final int clipLenFrames =
-              ((clip.length / unitsPerSecond) * sampleRate).round();
+              (timelineToSec(clip.start) * sampleRate).round();
+          final int clipLenFrames = max(
+            1,
+            ((timelineToSec(clip.start + clip.length) -
+                        timelineToSec(clip.start)) *
+                    sampleRate)
+                .round(),
+          );
+
+          // Apply independent pitch-preserved time stretching / semitone shifting
+          List<double> srcLeft = wav.left;
+          List<double> srcRight = wav.right;
+          double rateRatio = wav.sampleRate / sampleRate;
+          if (clip.preservePitch &&
+              (clip.pitchSemitones.abs() > 0.01 ||
+                  (clip.stretchFactor - 1.0).abs() > 0.005)) {
+            final stretched = TimeStretchEngine.processStereo(
+              left: wav.left,
+              right: wav.right,
+              sampleRate: wav.sampleRate,
+              stretchFactor: clip.stretchFactor,
+              pitchSemitones: clip.pitchSemitones,
+              preservePitch: true,
+            );
+            srcLeft = stretched.left;
+            srcRight = stretched.right;
+          } else {
+            rateRatio =
+                (wav.sampleRate / sampleRate) *
+                pow(2.0, clip.pitchSemitones / 12.0) *
+                clip.stretchFactor.clamp(0.25, 4.0);
+          }
+
+          final int srcFrameCount = srcLeft.length;
+          if (srcFrameCount == 0) continue;
           final double srcStartSec = clip.startOffset / unitsPerSecond;
-          final double rateRatio =
-              (wav.sampleRate / sampleRate) *
-              pow(2.0, clip.pitchSemitones / 12.0) *
-              clip.stretchFactor.clamp(0.25, 4.0);
+          final int loopSpanFrames = max(
+            1,
+            ((clip.originalLength /
+                        max(0.25, clip.stretchFactor) /
+                        unitsPerSecond) *
+                    wav.sampleRate)
+                .round()
+                .clamp(1, srcFrameCount),
+          );
           final int fadeInFrames =
               ((clip.fadeIn / unitsPerSecond) * sampleRate).round();
           final int fadeOutFrames =
@@ -149,11 +202,13 @@ class MixdownRenderer {
             final int dst = clipStartFrame + i;
             if (dst < 0 || dst >= totalFrames) continue;
 
-            final double srcPos =
-                (srcStartSec * wav.sampleRate) + (i * rateRatio);
+            double srcPos = (srcStartSec * wav.sampleRate) + (i * rateRatio);
+            if (clip.isLooped && loopSpanFrames > 8 && srcPos >= loopSpanFrames) {
+              srcPos = srcPos % loopSpanFrames;
+            }
             final int s0 = srcPos.floor();
-            if (s0 < 0 || s0 >= wav.frameCount) continue;
-            final int s1 = (s0 + 1).clamp(0, wav.frameCount - 1);
+            if (s0 < 0 || s0 >= srcFrameCount) continue;
+            final int s1 = (s0 + 1).clamp(0, srcFrameCount - 1);
             final double frac = srcPos - s0;
 
             double env = clip.gain.clamp(0.0, 2.5);
@@ -172,9 +227,9 @@ class MixdownRenderer {
             }
 
             final l =
-                (wav.left[s0] * (1.0 - frac) + wav.left[s1] * frac) * env;
+                (srcLeft[s0] * (1.0 - frac) + srcLeft[s1] * frac) * env;
             final r =
-                (wav.right[s0] * (1.0 - frac) + wav.right[s1] * frac) * env;
+                (srcRight[s0] * (1.0 - frac) + srcRight[s1] * frac) * env;
             trackL[dst] += l;
             trackR[dst] += r;
           }
@@ -210,7 +265,7 @@ class MixdownRenderer {
               final double absStartUnits =
                   clip.start + (note.start - clip.startOffset);
               final int noteStartFrame =
-                  ((absStartUnits / unitsPerSecond) * sampleRate).round();
+                  (timelineToSec(absStartUnits) * sampleRate).round();
 
               // Respect pad choke group if another pad in same group triggers later
               int? chokeStopFrame;
@@ -300,7 +355,7 @@ class MixdownRenderer {
                 ((synth.decaySec * sampleRate).round()).clamp(32, sampleRate * 2);
 
             final synthNotes = track.arpSettings.enabled
-                ? track.arpSettings.expandNotes(clip.notes, beatWidth)
+                ? track.arpSettings.expandNotes(clip.notes, resolvedBeatWidth)
                 : clip.notes;
             for (final note in synthNotes) {
               if (note.start < clip.startOffset ||
@@ -310,9 +365,9 @@ class MixdownRenderer {
               final double absStartUnits =
                   clip.start + (note.start - clip.startOffset);
               final int noteStartFrame =
-                  ((absStartUnits / unitsPerSecond) * sampleRate).round();
+                  (timelineToSec(absStartUnits) * sampleRate).round();
               final double noteDurSec =
-                  max(0.05, (note.length / beatWidth) * (60.0 / bpm));
+                  max(0.05, (note.length / resolvedBeatWidth) * (60.0 / bpm));
               final int holdFrames = (noteDurSec * sampleRate).round();
               final int totalNoteFrames = holdFrames + releaseFrames;
               final double semitoneOffset =
@@ -560,22 +615,25 @@ class MixdownRenderer {
   }) {
     for (final fx in chain) {
       if (fx.isBypassed) continue;
-      if (fx.name == 'TubeScreamer' || fx.name == 'GuitarAmp') {
-        final drive = fx.parameters['Drive'] ?? 0.6;
-        final level = fx.parameters['Level'] ?? 0.5;
-        final preGain = 1.0 + drive * 8.0;
-        final outGain = 0.35 + level * 1.1;
-        for (int i = 0; i < left.length; i++) {
-          left[i] = _tanhApprox(left[i] * preGain) * outGain;
-          right[i] = _tanhApprox(right[i] * preGain) * outGain;
-        }
-      } else if (fx.name == 'EQ' || fx.name == 'BassBoost') {
-        final lowGain = fx.name == 'BassBoost'
-            ? 1.0 + (fx.parameters['Boost'] ?? 0.5) * 1.4
-            : 0.4 + (fx.parameters['Low'] ?? 0.5) * 1.2;
-        final highGain = fx.name == 'BassBoost'
-            ? 1.0
-            : 0.4 + (fx.parameters['High'] ?? 0.5) * 1.2;
+      if (fx.pluginFormat == 'LV2' && fx.pluginUri != null) {
+        PluginHost.processLv2StereoInPlace(
+          pluginUri: fx.pluginUri!,
+          left: left,
+          right: right,
+          parameters: fx.parameters,
+          sampleRate: sampleRate.toDouble(),
+        );
+        continue;
+      }
+      if (fx.name == 'EQ') {
+        ParametricEqDsp.processStereoInPlace(
+          left: left,
+          right: right,
+          params: fx.parameters,
+          sampleRate: sampleRate.toDouble(),
+        );
+      } else if (fx.name == 'BassBoost') {
+        final lowGain = 1.0 + (fx.parameters['Boost'] ?? 0.5) * 1.4;
         double lpL = 0.0, lpR = 0.0;
         const alpha = 0.06;
         for (int i = 0; i < left.length; i++) {
@@ -583,8 +641,17 @@ class MixdownRenderer {
           lpR += alpha * (right[i] - lpR);
           final hpL = left[i] - lpL;
           final hpR = right[i] - lpR;
-          left[i] = lpL * lowGain + hpL * highGain;
-          right[i] = lpR * lowGain + hpR * highGain;
+          left[i] = lpL * lowGain + hpL;
+          right[i] = lpR * lowGain + hpR;
+        }
+      } else if (fx.name == 'TubeScreamer' || fx.name == 'GuitarAmp') {
+        final drive = fx.parameters['Drive'] ?? 0.6;
+        final level = fx.parameters['Level'] ?? 0.5;
+        final preGain = 1.0 + drive * 8.0;
+        final outGain = 0.35 + level * 1.1;
+        for (int i = 0; i < left.length; i++) {
+          left[i] = _tanhApprox(left[i] * preGain) * outGain;
+          right[i] = _tanhApprox(right[i] * preGain) * outGain;
         }
       } else if (fx.name == 'Compressor') {
         final scBuf = fx.sidechainTrackId != null

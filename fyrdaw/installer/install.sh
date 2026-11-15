@@ -13,7 +13,7 @@ fi
 # CONFIGURATION
 # Adjust these variables to match your files
 # ==========================================
-APP_NAME="FyrDAW"
+APP_NAME="Sound Booth"
 APP_EXEC="fyrdaw"  # Change this to the exact name of your Linux executable
 ICON_NAME="icon.png"     # Change this to the exact name of your icon file
 OPT_DIR="/opt/fyrdaw"

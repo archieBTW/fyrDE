@@ -1,9 +1,11 @@
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fyrdaw/main.dart';
+import 'package:fyrdaw/models/automation_point.dart';
 import 'package:fyrdaw/models/daw_clip.dart';
 import 'package:fyrdaw/models/daw_effect.dart';
 import 'package:fyrdaw/models/enums.dart';
@@ -11,7 +13,9 @@ import 'package:fyrdaw/models/midi_mapping.dart';
 import 'package:fyrdaw/models/midi_note.dart';
 import 'package:fyrdaw/models/sampler_pad.dart';
 import 'package:fyrdaw/models/song_marker.dart';
+import 'package:fyrdaw/models/tempo_marker.dart';
 import 'package:fyrdaw/models/track.dart';
+import 'package:fyrdaw/ui/automation_lane_overlay.dart';
 import 'package:fyrdaw/ui/dial.dart';
 import 'package:fyrdaw/ui/audio_clip_editor.dart';
 import 'package:fyrdaw/ui/effects_rack.dart';
@@ -19,15 +23,24 @@ import 'package:fyrdaw/ui/meters.dart';
 import 'package:fyrdaw/ui/midi_editor.dart';
 import 'package:fyrdaw/ui/mixer_console.dart';
 import 'package:fyrdaw/ui/musical_keyboard_bar.dart';
+import 'package:fyrdaw/ui/parametric_eq_widget.dart';
+import 'package:fyrdaw/ui/sample_browser_drawer.dart';
 import 'package:fyrdaw/ui/sampler_editor.dart';
 import 'package:fyrdaw/ui/session_launcher.dart';
 import 'package:fyrdaw/ui/step_sequencer.dart';
 import 'package:fyrdaw/ui/synth_rack_panel.dart';
+import 'package:fyrdaw/ui/tempo_signature_lane.dart';
+import 'package:fyrdaw/ui/timeline_loop_bar.dart';
 import 'package:fyrdaw/utils/bus_metering.dart';
 import 'package:fyrdaw/ui/tuner_gate_panel.dart';
 import 'package:fyrdaw/utils/audio_utils.dart';
+import 'package:fyrdaw/utils/metronome_synth.dart';
+import 'package:fyrdaw/utils/midi_file_codec.dart';
 import 'package:fyrdaw/utils/mixdown_renderer.dart';
+import 'package:fyrdaw/utils/parametric_eq_dsp.dart';
 import 'package:fyrdaw/utils/pitch_detector.dart';
+import 'package:fyrdaw/utils/plugin_host.dart';
+import 'package:fyrdaw/utils/time_stretch.dart';
 import 'package:fyrdaw/wav_writer.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -1554,5 +1567,519 @@ void main() {
         expect(mixerSliders, contains(kTrackColorPalette[1]));
       },
     );
+  });
+
+  group('Sound Booth rebrand & TimelineLoopBar', () {
+    testWidgets('DawApp displays Sound Booth branding instead of fyrDAW', (
+      WidgetTester tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      await tester.pumpWidget(const DawApp());
+      await tester.pumpAndSettle();
+
+      expect(find.text('Sound Booth'), findsOneWidget);
+      expect(find.text('fyrDAW'), findsNothing);
+    });
+
+    testWidgets(
+      'TimelineLoopBar supports dragging body to move, resizing both edges (including loopStart == 0), and tapping to toggle',
+      (WidgetTester tester) async {
+        double loopStart = 0.0;
+        double loopEnd = 200.0;
+        bool isLooping = false;
+        int dragStartCount = 0;
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 800,
+                height: 40,
+                child: StatefulBuilder(
+                  builder: (context, setState) {
+                    return Stack(
+                      children: [
+                        Positioned.fill(
+                          child: TimelineLoopBar(
+                            loopStart: loopStart,
+                            loopEnd: loopEnd,
+                            isLooping: isLooping,
+                            zoomX: 1.0,
+                            beatWidth: 50.0,
+                            snapToGrid: true,
+                            snapResolution: 25.0,
+                            accentColor: Colors.amber,
+                            handleColor: Colors.white,
+                            onDragStart: () => dragStartCount++,
+                            onToggleLoop: () =>
+                                setState(() => isLooping = !isLooping),
+                            onLoopRangeChanged: (newStart, newEnd) {
+                              setState(() {
+                                loopStart = newStart;
+                                loopEnd = newEnd;
+                              });
+                            },
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+        );
+
+        // Tap body toggles loop state
+        await tester.tap(find.byKey(const Key('loop_bar_body')));
+        await tester.pump();
+        expect(isLooping, isTrue);
+
+        // Drag body right by 100px moves both loopStart and loopEnd, preserving length
+        await tester.drag(
+          find.byKey(const Key('loop_bar_body')),
+          const Offset(100, 0),
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump();
+        expect(dragStartCount, greaterThanOrEqualTo(1));
+        expect(loopStart, closeTo(100.0, 0.01));
+        expect(loopEnd, closeTo(300.0, 0.01));
+
+        // Drag right handle right by 50px resizes loopEnd while keeping loopStart fixed
+        await tester.drag(
+          find.byKey(const Key('loop_handle_right')),
+          const Offset(50, 0),
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump();
+        expect(loopStart, closeTo(100.0, 0.01));
+        expect(loopEnd, closeTo(350.0, 0.01));
+
+        // Drag body left past 0.0 to clamp loopStart at 0.0, then test left handle at x == 0
+        await tester.drag(
+          find.byKey(const Key('loop_bar_body')),
+          const Offset(-150, 0),
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump();
+        expect(loopStart, closeTo(0.0, 0.01));
+        expect(loopEnd, closeTo(250.0, 0.01));
+
+        await tester.drag(
+          find.byKey(const Key('loop_handle_left')),
+          const Offset(50, 0),
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump();
+        expect(loopStart, closeTo(50.0, 0.01));
+        expect(loopEnd, closeTo(250.0, 0.01));
+      },
+    );
+  });
+
+  group('Metronome, Sections 2 & 3 Producer Upgrade', () {
+    test('MetronomeSynth builds valid stereo WAV clicks and volume scaling', () {
+      final accentWav = MetronomeSynth.generateClickWav(isDownbeat: true);
+      final beatWav = MetronomeSynth.generateClickWav(isDownbeat: false);
+      expect(accentWav.length, greaterThan(44));
+      expect(beatWav.length, equals(accentWav.length));
+      expect(String.fromCharCodes(accentWav.sublist(0, 4)), 'RIFF');
+      expect(String.fromCharCodes(accentWav.sublist(8, 12)), 'WAVE');
+      expect(
+        MetronomeSynth.computeClickVolume(1.2, isDownbeat: true),
+        closeTo(1.2, 1e-6),
+      );
+      expect(
+        MetronomeSynth.computeClickVolume(1.2, isDownbeat: false),
+        closeTo(1.2 * 0.68, 1e-6),
+      );
+      expect(MetronomeSynth.computeClickVolume(2.0, isDownbeat: true), 1.5);
+    });
+
+    test('TimeStretchEngine decouples duration and pitch when preservePitch is true', () {
+      const sr = 44100;
+      const n = 22050; // 0.5 s at 440 Hz
+      final inL = Float64List(n);
+      final inR = Float64List(n);
+      for (int i = 0; i < n; i++) {
+        final s = sin(2.0 * pi * 440.0 * i / sr) * 0.5;
+        inL[i] = s;
+        inR[i] = s;
+      }
+
+      // Double speed (halves length) with zero semitone shift
+      final stretched = TimeStretchEngine.processStereo(
+        left: inL,
+        right: inR,
+        sampleRate: sr,
+        stretchFactor: 2.0,
+        pitchSemitones: 0.0,
+        preservePitch: true,
+      );
+      expect(stretched.left.length, closeTo(n ~/ 2, 10));
+
+      // +12 semitones without stretching preserves frame count
+      final pitched = TimeStretchEngine.processStereo(
+        left: inL,
+        right: inR,
+        sampleRate: sr,
+        stretchFactor: 1.0,
+        pitchSemitones: 12.0,
+        preservePitch: true,
+      );
+      expect(pitched.left.length, n);
+      final det = detectPitchHz(
+        Float64List.sublistView(pitched.left, 2000, 6096),
+        sr,
+      );
+      expect(det, isNotNull);
+      expect(det!.frequencyHz, closeTo(880.0, 40.0));
+    });
+
+    test('ParametricEqDsp biquad curve, filtering, and FFT magnitude bins work accurately', () {
+      final boostParams = {
+        'lowGain': 0.0,
+        'lowMidFreq': 500.0,
+        'lowMidGain': 12.0, // +12 dB boost around lo-mid
+        'lowMidQ': 1.2,
+        'highMidGain': 0.0,
+        'highGain': -12.0, // -12 dB high cut
+      };
+      final stages = ParametricEqDsp.buildStages(boostParams, sampleRate: 44100);
+      expect(stages.length, 4);
+
+      final flatDb = ParametricEqDsp.responseDbAt(
+        {'Low': 0.5, 'Mid': 0.5, 'High': 0.5},
+        500.0,
+      );
+      expect(flatDb.abs(), lessThan(0.5));
+
+      final highCutDb = ParametricEqDsp.responseDbAt(
+        boostParams,
+        14000.0,
+        prebuiltStages: stages,
+      );
+      expect(highCutDb, lessThan(-6.0));
+
+      final l = Float64List.fromList(List.generate(1024, (i) => sin(2 * pi * 12000 * i / 44100) * 0.5));
+      final r = Float64List.fromList(l);
+      ParametricEqDsp.processStereoInPlace(left: l, right: r, params: boostParams, sampleRate: 44100);
+      final outRms = sqrt(l.fold<double>(0.0, (a, b) => a + b * b) / l.length);
+      expect(outRms, lessThan(0.25));
+
+      final fBins = ParametricEqDsp.computeFftBinsFromSamples(
+        Float32List.fromList(List.generate(128, (i) => sin(2 * pi * 8 * i / 128))),
+        numBins: 32,
+      );
+      expect(fBins.length, 32);
+      expect(fBins.reduce(max), greaterThan(0.5));
+    });
+
+    testWidgets('ParametricEqWidget renders interactive EQ bands and triggers updates', (tester) async {
+      final eq = DawEffect('EQ', {'Low': 0.5, 'Mid': 0.5, 'High': 0.5});
+      String? lastKey;
+      double? lastVal;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 520,
+              height: 300,
+              child: ParametricEqWidget(
+                effect: eq,
+                fftSpectrum: const [0.1, 0.3, 0.7, 0.4, 0.2],
+                onParamChanged: (k, v) {
+                  lastKey = k;
+                  lastVal = v;
+                  eq.parameters[k] = v;
+                },
+              ),
+            ),
+          ),
+        ),
+      );
+      expect(find.text('Lo-Mid'), findsOneWidget);
+      await tester.drag(
+        find.byKey(const Key('parametric_eq_canvas')),
+        const Offset(30, -25),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(lastKey, isNotNull);
+      expect(lastVal, isNotNull);
+    });
+
+    test('AutomationPoint curve serialization and Track curved interpolation', () {
+      final pt = AutomationPoint(100.0, 0.8, curve: 0.75);
+      final rt = AutomationPoint.fromJson(pt.toJson());
+      expect(rt.curve, closeTo(0.75, 1e-6));
+
+      final track = Track(id: 'tr_auto', name: 'Synth', type: TrackType.midi);
+      expect(track.availableAutomationParams, contains('Synth Cutoff'));
+      expect(track.availableAutomationParams, contains('Synth Reso'));
+
+      track.automation['Volume'] = [
+        AutomationPoint(0.0, 0.0, curve: 0.8),
+        AutomationPoint(100.0, 1.0, curve: 0.0),
+      ];
+      final curvedMid = track.getInterpolatedAutomation('Volume', 50.0);
+      expect(curvedMid, greaterThan(0.55)); // Positive curve bows upward
+
+      track.automation['Volume']![0].curve = -0.8;
+      final negMid = track.getInterpolatedAutomation('Volume', 50.0);
+      expect(negMid, lessThan(0.45)); // Negative curve scoops downward
+    });
+
+    testWidgets('AutomationLaneOverlay adds points on tap', (tester) async {
+      final track = Track(id: 't1', name: 'Lead', type: TrackType.midi)
+        ..showAutomation = true
+        ..currentAutomationParam = 'Synth Cutoff';
+      int saves = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 400,
+              height: 140,
+              child: AutomationLaneOverlay(
+                track: track,
+                laneHeight: 140,
+                zoomX: 1.0,
+                snapResolution: 25,
+                snapToGrid: false,
+                onSaveState: () => saves++,
+                onChanged: () {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tapAt(const Offset(120, 60));
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(saves, 1);
+      expect(track.automation['Synth Cutoff'], hasLength(1));
+    });
+
+    test('DawEffect preserves pluginFormat & pluginUri, and PluginHost scans safely', () {
+      final lv2 = DawEffect(
+        'Calf Vintage Delay',
+        {'Dry/Wet': 0.4},
+        pluginFormat: 'LV2',
+        pluginUri: 'http://calf.sourceforge.net/plugins/VintageDelay',
+      );
+      expect(lv2.isExternalPlugin, isTrue);
+      final rt = DawEffect.fromJson(lv2.toJson());
+      expect(rt.pluginFormat, 'LV2');
+      expect(rt.pluginUri, 'http://calf.sourceforge.net/plugins/VintageDelay');
+
+      final plugins = PluginHost.scanInstalledPlugins();
+      expect(plugins, isA<List<ExternalPluginInfo>>());
+    });
+
+    test('MidiFileCodec encodes and decodes SMF notes faithfully', () {
+      final srcNotes = [
+        MidiNote(pitch: 60, start: 0.0, length: 50.0, velocity: 100),
+        MidiNote(pitch: 64, start: 50.0, length: 50.0, velocity: 90),
+        MidiNote(pitch: 67, start: 100.0, length: 100.0, velocity: 110),
+      ];
+      final encoded = MidiFileCodec.encodeNotes(
+        srcNotes,
+        bpm: 128.0,
+        timeSigNum: 3,
+        timeSigDen: 4,
+        beatWidth: 50.0,
+        trackName: 'Piano Idea',
+      );
+      final decoded = MidiFileCodec.decodeBytes(encoded, beatWidth: 50.0);
+      expect(decoded.trackName, 'Piano Idea');
+      expect(decoded.detectedBpm, closeTo(128.0, 0.2));
+      expect(decoded.timeSigNum, 3);
+      expect(decoded.timeSigDen, 4);
+      expect(decoded.notes.length, 3);
+      expect(decoded.notes[0].pitch, 60);
+      expect(decoded.notes[2].pitch, 67);
+      expect(decoded.notes[2].start, closeTo(100.0, 1.0));
+      expect(decoded.notes[2].length, closeTo(100.0, 1.0));
+    });
+
+    test('TempoMarker handles step, ramp, meter lookup, and timelineToSeconds integration', () {
+      final m1 = TempoMarker(id: 'm1', position: 0.0, bpm: 100.0, numerator: 4, denominator: 4, isRamp: true);
+      final m2 = TempoMarker(id: 'm2', position: 200.0, bpm: 140.0, numerator: 3, denominator: 4);
+      final markers = [m1, m2];
+
+      expect(TempoMarker.effectiveBpmAt(100.0, markers, 120.0), closeTo(120.0, 1e-6));
+      expect(TempoMarker.effectiveBpmAt(250.0, markers, 120.0), closeTo(140.0, 1e-6));
+      expect(TempoMarker.effectiveMeterAt(250.0, markers, 4, 4).numerator, 3);
+
+      final sec = TempoMarker.timelineToSeconds(
+        200.0,
+        markers: [TempoMarker(id: 'fast', position: 0.0, bpm: 240.0)],
+        baseBpm: 120.0,
+        beatWidth: 50.0,
+      );
+      // 4 beats at 240 BPM = 1.0 second
+      expect(sec, closeTo(1.0, 0.02));
+    });
+
+    testWidgets('TempoSignatureLane renders markers and opens editor on double-tap', (tester) async {
+      TempoMarker? added;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 500,
+              height: 40,
+              child: TempoSignatureLane(
+                baseBpm: 120.0,
+                baseNum: 4,
+                baseDen: 4,
+                markers: [TempoMarker(id: 'm1', position: 80.0, bpm: 95.0, numerator: 3, denominator: 4)],
+                zoomX: 1.0,
+                snapResolution: 25.0,
+                snapToGrid: false,
+                onAddOrUpdateMarker: (m) => added = m,
+                onDeleteMarker: (_) {},
+              ),
+            ),
+          ),
+        ),
+      );
+      expect(find.text('95 · 3/4'), findsOneWidget);
+      await tester.tap(find.text('95 · 3/4'));
+      await tester.pump(const Duration(milliseconds: 350));
+      await tester.pumpAndSettle();
+      expect(find.text('Edit Tempo / Meter Change'), findsOneWidget);
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(added?.bpm, closeTo(95.0, 0.1));
+    });
+
+    test('AudioClip preserves preservePitch and isLooped in JSON round-trip', () {
+      final clip = AudioClip(
+        id: 'ac1',
+        name: 'Guitar Loop',
+        start: 0.0,
+        length: 400.0,
+        color: Colors.teal,
+        filePath: '/tmp/guitar.wav',
+        pitchSemitones: 3.0,
+        stretchFactor: 1.25,
+        preservePitch: false,
+        isLooped: true,
+      );
+      final rt = DawClip.fromJson(clip.toJson()) as AudioClip;
+      expect(rt.preservePitch, isFalse);
+      expect(rt.isLooped, isTrue);
+      expect(rt.pitchSemitones, 3.0);
+      expect(rt.stretchFactor, 1.25);
+    });
+
+    testWidgets('SampleBrowserDrawer lists bundled samples and supports search filter', (tester) async {
+      SampleBrowserItem? triggered;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SampleBrowserDrawer(
+              userFolders: const [],
+              previewingPath: null,
+              onAddFolderPressed: () {},
+              onRemoveFolder: (_) {},
+              onTogglePreview: (_) {},
+              onAddToProject: (item) => triggered = item,
+              onClose: () {},
+            ),
+          ),
+        ),
+      );
+      expect(find.text('Sample & MIDI Browser'), findsOneWidget);
+      expect(find.text('kick_studio.wav'), findsOneWidget);
+      await tester.enterText(find.byType(TextField), 'snare');
+      await tester.pump();
+      expect(find.text('snare_studio.wav'), findsOneWidget);
+      expect(find.text('kick_studio.wav'), findsNothing);
+      await tester.tap(find.text('+Add').first);
+      await tester.pump();
+      expect(triggered?.name, 'snare_studio.wav');
+    });
+
+    testWidgets('DawApp renders Metronome volume slider and Sample Browser toggle without overflow', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      tester.view.physicalSize = const Size(1440, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() => tester.view.resetPhysicalSize());
+
+      await tester.pumpWidget(const MaterialApp(home: DawApp()));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(find.byKey(const Key('metronome_volume_slider')), findsOneWidget);
+      expect(find.byKey(const Key('toggle_sample_browser')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('toggle_sample_browser')));
+      await tester.pumpAndSettle();
+      expect(find.text('Sample & MIDI Browser'), findsOneWidget);
+    });
+
+    test('MixdownRenderer honors TempoMarker, 4-band EQ, preservePitch & isLooped AudioClip', () async {
+      final tmpDir = await Directory.systemTemp.createTemp('sb_v23_test_');
+      try {
+        final inWavPath = '${tmpDir.path}/tone.wav';
+        final outWavPath = '${tmpDir.path}/mix.wav';
+
+        // Write a 0.25s 440Hz stereo WAV
+        const sr = 44100;
+        const frames = sr ~/ 4;
+        final writer = WavWriter(inWavPath, sampleRate: sr, channels: 2);
+        final pcm = Int16List(frames * 2);
+        for (int i = 0; i < frames; i++) {
+          final v = (sin(2 * pi * 440.0 * i / sr) * 0.4 * 32767).round();
+          pcm[i * 2] = v;
+          pcm[i * 2 + 1] = v;
+        }
+        writer.write(ByteData.view(pcm.buffer).buffer.asUint8List());
+        writer.close();
+
+        final track = Track(id: 'a1', name: 'Stretched Loop', type: TrackType.audio)
+          ..effectsChain = [
+            DawEffect('EQ', {
+              'lowGain': 0.5,
+              'lowMidFreq': 0.5,
+              'lowMidGain': 0.75,
+              'highMidGain': 0.5,
+              'highGain': 0.4,
+            }),
+          ];
+        final clip = AudioClip(
+          id: 'c1',
+          name: 'Loop',
+          start: 0.0,
+          length: 100.0,
+          originalLength: 25.0,
+          color: Colors.amber,
+          filePath: inWavPath,
+          pitchSemitones: 5.0,
+          stretchFactor: 1.2,
+          preservePitch: true,
+          isLooped: true,
+        );
+
+        final ok = await MixdownRenderer.renderToWav(
+          tracks: [track],
+          trackClips: {track.id: [clip]},
+          outWavPath: outWavPath,
+          bpm: 120,
+          tempoMarkers: [TempoMarker(id: 't0', position: 0.0, bpm: 150.0)],
+        );
+        expect(ok, isTrue);
+        final decoded = await decodeWavFile(outWavPath);
+        expect(decoded, isNotNull);
+        expect(decoded!.frameCount, greaterThan(44100));
+        final peak = decoded.left.fold<double>(0.0, (m, s) => max(m, s.abs()));
+        expect(peak, greaterThan(0.05));
+      } finally {
+        await tmpDir.delete(recursive: true);
+      }
+    });
   });
 }

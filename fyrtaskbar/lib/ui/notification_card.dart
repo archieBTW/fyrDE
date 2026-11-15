@@ -31,7 +31,7 @@ class NotificationCard extends StatelessWidget {
       child: Container(
         width: 320,
         decoration: BoxDecoration(
-          color: FyrTheme.bgColor.withOpacity(0.9),
+          color: FyrTheme.panelBgColor.withOpacity(0.9),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: FyrTheme.cardColor),
           boxShadow: [

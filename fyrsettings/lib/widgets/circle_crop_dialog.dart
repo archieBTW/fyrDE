@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:vector_math/vector_math_64.dart' show Vector3;
 import '../fyr_theme.dart';
 
 class CropRect {
@@ -22,6 +21,10 @@ class CircleCropDialog extends StatefulWidget {
 }
 
 class _CircleCropDialogState extends State<CircleCropDialog> {
+  static const double _minScale = 0.1;
+  static const double _maxScale = 5.0;
+  static const double _zoomStep = 1.25;
+
   final TransformationController _controller = TransformationController();
   Size? _imageSize;
   bool _loading = true;
@@ -30,6 +33,30 @@ class _CircleCropDialogState extends State<CircleCropDialog> {
   void initState() {
     super.initState();
     _loadImageSize();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _zoomBy(double factor, Size viewportSize) {
+    final current = _controller.value;
+    final currentScale = current.storage[0].abs();
+    if (currentScale <= 0) return;
+    final targetScale = (currentScale * factor).clamp(_minScale, _maxScale);
+    final ratio = targetScale / currentScale;
+    final cx = viewportSize.width / 2;
+    final cy = viewportSize.height / 2;
+    final adjustment = Matrix4.translationValues(cx, cy, 0.0) *
+        Matrix4.diagonal3Values(ratio, ratio, 1.0) *
+        Matrix4.translationValues(-cx, -cy, 0.0);
+    _controller.value = adjustment * current;
+  }
+
+  void _resetZoom() {
+    _controller.value = Matrix4.identity();
   }
 
   Future<void> _loadImageSize() async {
@@ -70,8 +97,8 @@ class _CircleCropDialogState extends State<CircleCropDialog> {
                 child: InteractiveViewer(
                   transformationController: _controller,
                   boundaryMargin: EdgeInsets.all(viewportSize.width),
-                  minScale: 0.1,
-                  maxScale: 5.0,
+                  minScale: _minScale,
+                  maxScale: _maxScale,
                   child: Center(
                     child: Image.file(
                       File(widget.imagePath),
@@ -85,7 +112,7 @@ class _CircleCropDialogState extends State<CircleCropDialog> {
               IgnorePointer(
                 child: ColorFiltered(
                   colorFilter: ColorFilter.mode(
-                    Colors.black.withOpacity(0.7),
+                    Colors.black.withValues(alpha: 0.7),
                     BlendMode.srcOut,
                   ),
                   child: Stack(
@@ -180,8 +207,14 @@ class _CircleCropDialogState extends State<CircleCropDialog> {
                           double cropTop = circleCenterY - cropSize / 2;
                           
                           final inverted = Matrix4.inverted(matrix);
-                          final p1 = inverted.transform3(Vector3(cropLeft, cropTop, 0));
-                          final p2 = inverted.transform3(Vector3(cropLeft + cropSize, cropTop + cropSize, 0));
+                          final p1 = MatrixUtils.transformPoint(
+                            inverted,
+                            Offset(cropLeft, cropTop),
+                          );
+                          final p2 = MatrixUtils.transformPoint(
+                            inverted,
+                            Offset(cropLeft + cropSize, cropTop + cropSize),
+                          );
                           
                           double childCenterX = viewportSize.width / 2;
                           double childCenterY = viewportSize.height / 2;
@@ -189,10 +222,10 @@ class _CircleCropDialogState extends State<CircleCropDialog> {
                           double imgLeftInChild = childCenterX - displayedW / 2;
                           double imgTopInChild = childCenterY - displayedH / 2;
                           
-                          double cropX = (p1.x - imgLeftInChild) / fitScale;
-                          double cropY = (p1.y - imgTopInChild) / fitScale;
-                          double cropW = (p2.x - p1.x) / fitScale;
-                          double cropH = (p2.y - p1.y) / fitScale;
+                          double cropX = (p1.dx - imgLeftInChild) / fitScale;
+                          double cropY = (p1.dy - imgTopInChild) / fitScale;
+                          double cropW = (p2.dx - p1.dx) / fitScale;
+                          double cropH = (p2.dy - p1.dy) / fitScale;
                           
                           Navigator.pop(context, CropRect(
                             x: cropX.round(),
@@ -215,23 +248,100 @@ class _CircleCropDialogState extends State<CircleCropDialog> {
                 ),
               ),
 
-              // Helper text
+              // Zoom Controls & Helper text
               Positioned(
-                bottom: 40,
+                bottom: 24,
                 left: 0,
                 right: 0,
-                child: Center(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.black54,
-                      borderRadius: BorderRadius.circular(20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ValueListenableBuilder<Matrix4>(
+                      valueListenable: _controller,
+                      builder: (context, matrix, _) {
+                        final scale = matrix.storage[0].abs();
+                        final zoomPercent = (scale * 100).round();
+                        return Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.black87,
+                            borderRadius: BorderRadius.circular(24),
+                            border: Border.all(
+                              color: Colors.white24,
+                              width: 1,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                key: const Key('crop_zoom_out'),
+                                tooltip: 'Zoom Out',
+                                icon: const Icon(
+                                  Icons.zoom_out,
+                                  color: Colors.white,
+                                ),
+                                onPressed: scale > _minScale + 0.001
+                                    ? () => _zoomBy(
+                                        1.0 / _zoomStep,
+                                        viewportSize,
+                                      )
+                                    : null,
+                              ),
+                              InkWell(
+                                key: const Key('crop_zoom_reset'),
+                                borderRadius: BorderRadius.circular(12),
+                                onTap: _resetZoom,
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 6,
+                                  ),
+                                  child: Text(
+                                    '$zoomPercent%',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              IconButton(
+                                key: const Key('crop_zoom_in'),
+                                tooltip: 'Zoom In',
+                                icon: const Icon(
+                                  Icons.zoom_in,
+                                  color: Colors.white,
+                                ),
+                                onPressed: scale < _maxScale - 0.001
+                                    ? () => _zoomBy(_zoomStep, viewportSize)
+                                    : null,
+                              ),
+                            ],
+                          ),
+                        );
+                      },
                     ),
-                    child: const Text(
-                      'Pinch to zoom • Drag to move',
-                      style: TextStyle(color: Colors.white70, fontSize: 14),
+                    const SizedBox(height: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: const Text(
+                        'Use +/- or scroll to zoom • Drag to move',
+                        style: TextStyle(color: Colors.white70, fontSize: 13),
+                      ),
                     ),
-                  ),
+                  ],
                 ),
               ),
             ],

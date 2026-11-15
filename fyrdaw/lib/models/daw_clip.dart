@@ -46,6 +46,8 @@ abstract class DawClip {
         gain: (json['gain'] as num?)?.toDouble() ?? 1.0,
         pitchSemitones: (json['pitchSemitones'] as num?)?.toDouble() ?? 0.0,
         stretchFactor: (json['stretchFactor'] as num?)?.toDouble() ?? 1.0,
+        preservePitch: json['preservePitch'] ?? true,
+        isLooped: json['isLooped'] ?? false,
         reversed: json['reversed'] ?? false,
         originalFilePath: json['originalFilePath'],
         takes: json['takes'] != null
@@ -116,6 +118,10 @@ class AudioClip extends DawClip {
   double gain;
   double pitchSemitones;
   double stretchFactor;
+  bool preservePitch;
+  bool isLooped;
+  String? processedFilePath;
+  String? processedCacheKey;
   List<AudioTake> takes;
   int activeTakeIndex;
 
@@ -136,6 +142,8 @@ class AudioClip extends DawClip {
     this.gain = 1.0,
     this.pitchSemitones = 0.0,
     this.stretchFactor = 1.0,
+    this.preservePitch = true,
+    this.isLooped = false,
     this.reversed = false,
     this.originalFilePath,
     List<AudioTake>? takes,
@@ -143,6 +151,21 @@ class AudioClip extends DawClip {
   }) : takes = takes ?? [] {
     _extractWaveform();
   }
+
+  /// Effective source file for live playback: returns pitch-preserved /
+  /// stretched cache file if up to date, otherwise raw [filePath].
+  String get playbackFilePath =>
+      (processedFilePath != null &&
+          processedCacheKey == _currentProcessingSignature)
+      ? processedFilePath!
+      : filePath;
+
+  String get _currentProcessingSignature =>
+      '$filePath|${pitchSemitones.toStringAsFixed(2)}|${stretchFactor.toStringAsFixed(3)}|$preservePitch';
+
+  bool get needsTimeStretchProcessing =>
+      preservePitch &&
+      (pitchSemitones.abs() > 0.01 || (stretchFactor - 1.0).abs() > 0.005);
 
   bool reversed = false;
   String? originalFilePath;
@@ -193,6 +216,8 @@ class AudioClip extends DawClip {
     'gain': gain,
     'pitchSemitones': pitchSemitones,
     'stretchFactor': stretchFactor,
+    'preservePitch': preservePitch,
+    'isLooped': isLooped,
     'reversed': reversed,
     'originalFilePath': originalFilePath,
     'takes': takes.map((t) => t.toJson()).toList(),

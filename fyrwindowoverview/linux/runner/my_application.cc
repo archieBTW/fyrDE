@@ -9,13 +9,21 @@
 #endif
 
 #include "flutter/generated_plugin_registrant.h"
+#include "../../../packages/fyr_core/linux/layer_overlay_helper.h"
 
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
+  fyr_core::LayerOverlayState* overlay_state;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
+
+static void first_frame_cb(MyApplication* self, FlView* view) {
+  if (self->overlay_state && !self->overlay_state->config.start_hidden) {
+    fyr_core::ShowLayerOverlay(self->overlay_state);
+  }
+}
 
 // Implements GApplication::activate.
 static void my_application_activate(GApplication* application) {
@@ -23,63 +31,39 @@ static void my_application_activate(GApplication* application) {
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
 
-  // --- ENABLE TRANSPARENCY & REMOVE DECORATIONS ---
-  gtk_widget_set_app_paintable(GTK_WIDGET(window), TRUE);
-  GdkScreen *screen = gtk_widget_get_screen(GTK_WIDGET(window));
-  GdkVisual *visual = gdk_screen_get_rgba_visual(screen);
-  if (visual != NULL) {
-      gtk_widget_set_visual(GTK_WIDGET(window), visual);
-  }
-  gtk_window_set_decorated(window, FALSE);
+  gtk_window_set_title(window, "fyrwindowoverview");
 
-  // --- FORCE GTK WINDOW TRANSPARENCY VIA CSS ---
-  GtkCssProvider* css = gtk_css_provider_new();
-  gtk_css_provider_load_from_data(css, "window, decoration { background: transparent; }", -1, nullptr);
-  gtk_style_context_add_provider_for_screen(screen, GTK_STYLE_PROVIDER(css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-  // ------------------------------------------------
-
-  gboolean use_header_bar = TRUE;
-#ifdef G_OS_UNIX
-  gboolean is_wayland = FALSE;
-  GdkDisplay* display = gdk_display_get_default();
-  if (GDK_IS_WAYLAND_DISPLAY(display)) {
-    is_wayland = TRUE;
-  }
-  if (is_wayland) {
-    use_header_bar = FALSE;
-  }
-#endif
-  if (use_header_bar) {
-    GtkHeaderBar* header_bar = GTK_HEADER_BAR(gtk_header_bar_new());
-    gtk_widget_show(GTK_WIDGET(header_bar));
-    gtk_header_bar_set_title(header_bar, "fyrwindowoverview");
-    gtk_header_bar_set_show_close_button(header_bar, TRUE);
-    gtk_window_set_titlebar(window, GTK_WIDGET(header_bar));
-  } else {
-    gtk_window_set_title(window, "fyrwindowoverview");
-  }
-
-  gtk_window_set_default_size(window, 1280, 720);
-  gtk_window_fullscreen(window);
+  fyr_core::LayerOverlayConfig cfg;
+  cfg.layer_namespace = "fyrwindowoverview";
+  cfg.fullscreen = true;
+  cfg.start_hidden = !fyr_core::ShouldStartShown(self->dart_entrypoint_arguments);
+  cfg.hide_on_focus_out = false;
+  fyr_core::ConfigureLayerOverlayWindow(window, cfg);
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();
   fl_dart_project_set_dart_entrypoint_arguments(
       project, self->dart_entrypoint_arguments);
 
   FlView* view = fl_view_new(project);
-  
-  // --- MAKE FLUTTER VIEW BACKGROUND TRANSPARENT ---
   GdkRGBA bg_color = {0.0, 0.0, 0.0, 0.0};
   fl_view_set_background_color(view, &bg_color);
-  // ------------------------------------------------
-  
+
   gtk_widget_show(GTK_WIDGET(view));
   gtk_container_add(GTK_CONTAINER(window), GTK_WIDGET(view));
 
-  fl_register_plugins(FL_PLUGIN_REGISTRY(view));
+  if (!self->overlay_state) {
+    self->overlay_state = new fyr_core::LayerOverlayState();
+  }
+  fyr_core::AttachLayerOverlayChannel(self->overlay_state, window, view, cfg);
 
-  gtk_widget_grab_focus(GTK_WIDGET(view));
-  gtk_widget_show(GTK_WIDGET(window));
+  g_signal_connect_swapped(view, "first-frame", G_CALLBACK(first_frame_cb), self);
+  gtk_widget_realize(GTK_WIDGET(window));
+  gtk_widget_realize(GTK_WIDGET(view));
+
+  fl_register_plugins(FL_PLUGIN_REGISTRY(view));
+  if (!cfg.start_hidden) {
+    fyr_core::ShowLayerOverlay(self->overlay_state);
+  }
 }
 
 // Implements GApplication::local_command_line.
@@ -91,6 +75,12 @@ static gboolean my_application_local_command_line(GApplication* application,
   // Clear any existing arguments before assigning new ones
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
   self->dart_entrypoint_arguments = g_strdupv(*arguments + 1);
+
+  if (fyr_core::ShouldStartShown(self->dart_entrypoint_arguments) &&
+      fyr_core::ForwardToExistingOverlay("fyrwindowoverview", "show")) {
+    *exit_status = 0;
+    return TRUE;
+  }
 
   g_autoptr(GError) error = nullptr;
   if (!g_application_register(application, nullptr, &error)) {
@@ -118,6 +108,8 @@ static void my_application_shutdown(GApplication* application) {
 // Implements GObject::dispose.
 static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
+  delete self->overlay_state;
+  self->overlay_state = nullptr;
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
   G_OBJECT_CLASS(my_application_parent_class)->dispose(object);
 }

@@ -202,6 +202,9 @@ class Track {
 
   List<String> get availableAutomationParams {
     final params = <String>['Volume', 'Pan', 'Reverb Send', 'Delay Send'];
+    if (type == TrackType.midi) {
+      params.addAll(['Synth Cutoff', 'Synth Reso']);
+    }
     for (final fx in effectsChain) {
       for (final key in fx.parameters.keys) {
         params.add('${fx.name}_$key');
@@ -234,10 +237,18 @@ class Track {
     if (currentPos <= list.first.time) return list.first.value;
     if (currentPos >= list.last.time) return list.last.value;
     for (int i = 0; i < list.length - 1; i++) {
-      if (currentPos >= list[i].time && currentPos <= list[i + 1].time) {
-        double t =
-            (currentPos - list[i].time) / (list[i + 1].time - list[i].time);
-        return list[i].value + t * (list[i + 1].value - list[i].value);
+      final a = list[i];
+      final b = list[i + 1];
+      if (currentPos >= a.time && currentPos <= b.time) {
+        final span = b.time - a.time;
+        if (span <= 1e-6) return b.value;
+        double t = ((currentPos - a.time) / span).clamp(0.0, 1.0);
+        if (a.curve.abs() > 0.001) {
+          // Smooth tension exponent: curve in [-1..1] maps power in [3.5..0.28]
+          final exponent = pow(3.5, -a.curve.clamp(-1.0, 1.0)).toDouble();
+          t = pow(t, exponent).toDouble();
+        }
+        return a.value + t * (b.value - a.value);
       }
     }
     return -1.0;

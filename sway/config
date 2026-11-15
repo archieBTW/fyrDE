@@ -10,6 +10,8 @@ for_window [app_id="fyrtaskbar"] floating enable
 for_window [app_id="fyrtaskbar"] border none
 for_window [app_id="fyrtaskbar"] move position 0 0
 for_window [app_id="fyrtaskbar"] sticky enable
+layer_effects "fyrtaskbar" blur enable; blur_ignore_transparent enable
+layer_effects "fyrdock" blur enable; blur_ignore_transparent enable
 
 
 # -------------------------------------------------------------
@@ -28,7 +30,7 @@ gaps inner 20
 gaps outer 20
 corner_radius 12
 blur enable
-#blur_passes 3
+blur_passes 3
 shadows enable
 shadow_blur_radius 30 
 shadow_color #00000080
@@ -43,12 +45,14 @@ animation_duration_ms 300
 bindsym $mod+q exec ~/.config/fyr/close_window.sh
 bindsym Mod1+Tab exec $HOME/.config/fyr/alttab.py
 bindsym Mod1+Shift+Tab focus prev
-bindsym XF86AudioRaiseVolume exec wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+
-bindsym XF86AudioLowerVolume exec wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-
-bindsym XF86AudioMute exec wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle
-bindsym XF86AudioMicMute exec wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle
-bindsym XF86MonBrightnessUp exec brightnessctl set +5%
-bindsym XF86MonBrightnessDown exec brightnessctl set 5%-
+bindsym XF86AudioRaiseVolume exec ~/.config/fyr/osd.sh vol-up
+bindsym XF86AudioLowerVolume exec ~/.config/fyr/osd.sh vol-down
+bindsym XF86AudioMute exec ~/.config/fyr/osd.sh vol-mute
+bindsym XF86AudioMicMute exec ~/.config/fyr/osd.sh mic-mute
+bindsym XF86MonBrightnessUp exec ~/.config/fyr/osd.sh bright-up
+bindsym XF86MonBrightnessDown exec ~/.config/fyr/osd.sh bright-down
+
+layer_effects "fyrosd" blur enable; corner_radius 18
 bindsym Print exec sh -c 'mkdir -p ~/Pictures/screenshots && f=~/Pictures/screenshots/$(date +"%Y-%m-%d_%H-%M-%S").png && grim "$f" && wl-copy -t image/png < "$f"'
 bindsym $mod+Print exec ~/.config/fyr/toggle_recording.sh
 bindsym $mod+t exec fyrterm
@@ -127,8 +131,7 @@ bar {
 # ==========================================
 # Fyrsearch Sway Configuration
 # ==========================================
-for_window [app_id="(?i).*fyrsearch.*"] floating enable, border none, move scratchpad
-for_window [class="(?i).*fyrsearch.*"] floating enable, border none, move scratchpad
+layer_effects "fyrsearch" blur enable
 bindsym $mod+space exec ~/.config/fyr/launcher_toggle.sh
 
 
@@ -138,8 +141,8 @@ bindsym $mod+space exec ~/.config/fyr/launcher_toggle.sh
 exec /opt/fyroverview/fyroverview
 exec /opt/fyrwindowoverview/fyrwindowoverview
 
-for_window [app_id="fyroverview"] floating enable, border none, blur enable, move scratchpad
-for_window [app_id="fyrwindowoverview"] floating enable, border none, blur enable, move scratchpad
+layer_effects "fyroverview" blur enable
+layer_effects "fyrwindowoverview" blur enable
 
 # Super + Tab and Super + W
 bindsym $mod+Tab exec ~/.config/fyr/overview_toggle.sh
@@ -164,27 +167,15 @@ bindsym $mod+Ctrl exec ~/.config/fyr/help_toggle.sh
 # Fyremoji Sway Configuration
 # ==========================================
 exec /opt/fyremoji/fyremoji
-for_window [app_id="fyremoji"] floating enable, border none, resize set width 400 px height 250 px, move scratchpad
+layer_effects "fyremoji" blur enable; corner_radius 16
 bindsym $mod+period exec ~/.config/fyr/emoji_toggle.sh
 
 
-# PRIMARY OUTPUT SETTINGS
-assign [app_id="fyrtaskbar"] output DP-5
-assign [app_id="fyrdock"] output DP-5
-# END PRIMARY OUTPUT SETTINGS
 include ~/.config/sway/floating.conf
 # Keep Fyr overlay/panel surfaces borderless and native Flutter CSD apps free of duplicate SSD titlebars
 for_window [app_id="^(fyrtaskbar|fyrdock|fyrdesktop|fyrsearch|launcher|fyroverview|fyrwindowoverview|fyrhelp|fyremoji)$"] border none
 for_window [app_id="^(com\.fyr\.browser|(com\.example\.)?(fyrapi|fyrav|fyrbrowser|fyrcalculator|fyrcalender|fyrcamera|fyrclock|fyrcode|fyrdaw|fyrfiles|fyrjournal|fyrmusic|fyrphone|fyrphotos|fyrsettings|fyrstore|fyrterm|fyrtext|fyrtorrent|fyrvideo|fyrvirt))$"] border pixel 4
-# TOUCHPAD SETTINGS
-input "type:touchpad" {
-    tap enabled
-    tap_button_map lrm
-    drag enabled
-    dwt enabled
-    natural_scroll disabled
-}
-# END TOUCHPAD SETTINGS
-# DISPLAY OUTPUT SETTINGS
-output eDP-1 resolution 1920x1080 position 0 0
-# END DISPLAY OUTPUT SETTINGS
+
+# User-managed settings (preserved across updates)
+include ~/.config/sway/conf.d/*.conf
+
