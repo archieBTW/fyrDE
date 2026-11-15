@@ -6,6 +6,7 @@ import 'package:fyrdaw/models/daw_effect.dart';
 import 'package:fyrdaw/models/automation_point.dart';
 import 'package:fyrdaw/models/midi_note.dart';
 import 'package:fyrdaw/models/sampler_pad.dart';
+import 'package:fyrdaw/utils/bus_metering.dart';
 
 const List<Color> kTrackColorPalette = [
   Color(0xFFB57EDC), // Lavender
@@ -222,8 +223,7 @@ class Track {
     }
     try {
       if (SoLoud.instance.isInitialized) {
-        bus = Bus();
-        bus!.playOnEngine();
+        bus = ensureActiveBus(bus);
       }
     } catch (_) {}
   }
@@ -327,8 +327,7 @@ class Track {
     }
     try {
       if (SoLoud.instance.isInitialized) {
-        t.bus = Bus();
-        t.bus!.playOnEngine();
+        t.bus = ensureActiveBus(t.bus);
       }
     } catch (_) {}
     return t;

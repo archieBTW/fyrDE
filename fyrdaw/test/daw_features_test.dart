@@ -13,6 +13,7 @@ import 'package:fyrdaw/models/sampler_pad.dart';
 import 'package:fyrdaw/models/song_marker.dart';
 import 'package:fyrdaw/models/track.dart';
 import 'package:fyrdaw/ui/dial.dart';
+import 'package:fyrdaw/ui/audio_clip_editor.dart';
 import 'package:fyrdaw/ui/effects_rack.dart';
 import 'package:fyrdaw/ui/meters.dart';
 import 'package:fyrdaw/ui/midi_editor.dart';
@@ -22,6 +23,7 @@ import 'package:fyrdaw/ui/sampler_editor.dart';
 import 'package:fyrdaw/ui/session_launcher.dart';
 import 'package:fyrdaw/ui/step_sequencer.dart';
 import 'package:fyrdaw/ui/synth_rack_panel.dart';
+import 'package:fyrdaw/utils/bus_metering.dart';
 import 'package:fyrdaw/ui/tuner_gate_panel.dart';
 import 'package:fyrdaw/utils/audio_utils.dart';
 import 'package:fyrdaw/utils/mixdown_renderer.dart';
@@ -1306,5 +1308,251 @@ void main() {
       final remaining = await SavedSamplerKitStore.loadAll();
       expect(remaining, isEmpty);
     });
+  });
+
+  group('Clip Double-Click & Close-Up Audio Clip Editor', () {
+    testWidgets('AudioClipEditorWidget trims, fades, resets, and splits at cursor', (tester) async {
+      final clip = AudioClip(
+        id: 'ac_edit_1',
+        name: 'Vocal Take',
+        start: 100.0,
+        length: 400.0,
+        color: Colors.teal,
+        filePath: 'assets/samples/piano_c4.wav',
+      )..waveformData = [0.2, 0.7, 0.9, 0.5, 0.8, 0.4];
+
+      double? splitRequestedAt;
+      int changeCount = 0;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 1100,
+              height: 420,
+              child: AudioClipEditorWidget(
+                clip: clip,
+                bpm: 120,
+                beatWidth: 100.0,
+                snapToGrid: false,
+                snapResolution: 25.0,
+                playheadPosition: 260.0,
+                onPlayheadChanged: (_) {},
+                onChangeStart: () {},
+                onClipChanged: () => changeCount++,
+                onSplitClip: (pos) => splitRequestedAt = pos,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('Vocal Take'), findsOneWidget);
+      expect(find.text('Split at Cursor'), findsOneWidget);
+
+      // Default cursor syncs to playhead inside clip (260.0 = offset 160.0)
+      await tester.tap(find.text('Split at Cursor'));
+      await tester.pump();
+      expect(splitRequestedAt, closeTo(260.0, 1e-6));
+
+      // Apply 250ms Swell fade preset
+      await tester.tap(find.text('250ms Swell'));
+      await tester.pump();
+      expect(clip.fadeIn, closeTo(25.0, 1e-6));
+      expect(clip.fadeOut, closeTo(25.0, 1e-6));
+
+      // Trim Out at cursor (160.0), then Reset Trim back to 400.0
+      await tester.tap(find.text('Trim Out'));
+      await tester.pump();
+      expect(clip.length, closeTo(160.0, 1e-6));
+
+      await tester.tap(find.text('Reset Trim'));
+      await tester.pump();
+      expect(clip.start, closeTo(100.0, 1e-6));
+      expect(clip.startOffset, closeTo(0.0, 1e-6));
+      expect(clip.length, closeTo(400.0, 1e-6));
+      expect(changeCount, greaterThanOrEqualTo(3));
+    });
+
+    testWidgets('Double clicking Sampler/MIDI segment opens MidiEditorWidget, and Audio tracks expose Audio Editor tab', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      tester.view.physicalSize = const Size(1600, 960);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+
+      await tester.pumpWidget(const DawApp());
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // Add Sampler track -> opens Sampler tab by default, creates 'Beat 1' on timeline.
+      await tester.tap(find.byIcon(Icons.add).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add Sampler Track'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SamplerEditorWidget), findsOneWidget);
+      expect(find.byType(MidiEditorWidget), findsNothing);
+
+      // Double-click 'Beat 1' segment on the timeline to open the MIDI editor for it.
+      final samplerPos = tester.getCenter(find.text('Beat 1').first);
+      await tester.tapAt(samplerPos);
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.tapAt(samplerPos);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(MidiEditorWidget), findsOneWidget);
+
+      // Add MIDI track, switch away to Mixer, then double-click 'Pattern 1' -> opens MidiEditorWidget.
+      await tester.tap(find.byIcon(Icons.add).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add MIDI Track'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Mixer'));
+      await tester.pumpAndSettle();
+      expect(find.byType(MidiEditorWidget), findsNothing);
+
+      final midiPos = tester.getCenter(find.text('Pattern 1').first);
+      await tester.tapAt(midiPos);
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.tapAt(midiPos);
+      await tester.pumpAndSettle();
+      expect(find.byType(MidiEditorWidget), findsOneWidget);
+
+      // Add Audio track and confirm Audio Editor tab is present and renders cleanly.
+      await tester.tap(find.byIcon(Icons.add).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add Audio Track'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Audio Editor'), findsOneWidget);
+      await tester.tap(find.text('Audio Editor'));
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('Select or double-click an audio segment'),
+        findsOneWidget,
+      );
+    });
+  });
+
+  group('Bus Metering & Mixer Color Consistency', () {
+    test('linearAmpToDbMeter and formatMeterDb map linear amplitudes to dBFS', () {
+      expect(linearAmpToDbMeter(0.0), 0.0);
+      expect(linearAmpToDbMeter(-0.1), 0.0);
+      expect(linearAmpToDbMeter(1.0), 1.0);
+      expect(linearAmpToDbMeter(2.0), 1.0);
+
+      // -6.02 dBFS (~0.5 amplitude) maps to ~0.8746 on [-48, 0] dB scale
+      final halfDb = linearAmpToDbMeter(0.5);
+      expect(halfDb, closeTo(0.8746, 0.005));
+      expect(formatMeterDb(halfDb), '-6.0dB');
+      expect(formatMeterDb(0.0), '-∞');
+      expect(formatMeterDb(1.0), '0.0dB');
+    });
+
+    testWidgets(
+      'MixerConsoleView renders track color accents and per-track peak dB readouts',
+      (tester) async {
+        final track1 = Track(
+          id: 't1',
+          name: 'Lead Synth',
+          type: TrackType.midi,
+          colorValue: kTrackColorPalette[1].toARGB32(),
+        );
+        final groupBus = Track(
+          id: 'g1',
+          name: 'Drum Bus',
+          type: TrackType.group,
+          colorValue: kTrackColorPalette[2].toARGB32(),
+        );
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 900,
+                height: 360,
+                child: MixerConsoleView(
+                  tracks: [track1, groupBus],
+                  trackLevels: {'t1': (0.75, 0.70), 'g1': (0.0, 0.0)},
+                  trackPeaks: {
+                    't1': (linearAmpToDbMeter(0.5), 0.72),
+                    'g1': (0.0, 0.0),
+                  },
+                  auxReverbMix: 0.3,
+                  auxDelayMix: 0.2,
+                  auxRevLevel: const (0.0, 0.0),
+                  auxDlyLevel: const (0.0, 0.0),
+                  masterVolume: 0.85,
+                  masterLimiter: true,
+                  masterLevel: const (0.8, 0.8),
+                  masterPeak: const (0.9, 0.9),
+                  masterVizSamples: null,
+                  masterLufs: -14.0,
+                  stereoCorrelation: 1.0,
+                  onSaveState: () {},
+                  onTrackVolumeChanged: (_, _) {},
+                  onTrackPanChanged: (_, _) {},
+                  onTrackRevSendChanged: (_, _) {},
+                  onTrackDlySendChanged: (_, _) {},
+                  onToggleMute: (_) {},
+                  onToggleSolo: (_) {},
+                  onAuxReverbMixChanged: (_) {},
+                  onAuxDelayMixChanged: (_) {},
+                  onMasterVolumeChanged: (_) {},
+                  onToggleMasterLimiter: () {},
+                ),
+              ),
+            ),
+          ),
+        );
+
+        expect(find.text('-6.0dB'), findsOneWidget);
+        expect(find.text('-∞'), findsOneWidget);
+
+        // Verify track faders match their Track.color (not hardcoded lavenderAccent)
+        final sliders = tester
+            .widgetList<Slider>(find.byType(Slider))
+            .where((s) => s.activeColor == track1.color)
+            .toList();
+        expect(sliders, isNotEmpty);
+
+        // Verify Group BUS badge text uses the group track's color
+        final busBadge = tester.widget<Text>(find.text('BUS'));
+        expect(busBadge.style?.color, groupBus.color);
+      },
+    );
+
+    testWidgets(
+      'New tracks on Mixer match timeline track colors',
+      (tester) async {
+        tester.view.physicalSize = const Size(1600, 960);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+
+        await tester.pumpWidget(const DawApp());
+        await tester.pump(const Duration(milliseconds: 100));
+
+        // Track 0 -> palette[0], Track 1 -> palette[1]
+        await tester.tap(find.byIcon(Icons.add).first);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Add MIDI Track'));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byIcon(Icons.add).first);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Add Sampler Track'));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.text('Mixer'));
+        await tester.pumpAndSettle();
+
+        // Mixer fader slider activeColors match each track's palette color
+        final mixerSliders = tester
+            .widgetList<Slider>(find.byType(Slider))
+            .map((s) => s.activeColor)
+            .toList();
+        expect(mixerSliders, contains(kTrackColorPalette[0]));
+        expect(mixerSliders, contains(kTrackColorPalette[1]));
+      },
+    );
   });
 }

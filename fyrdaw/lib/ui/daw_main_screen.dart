@@ -761,6 +761,9 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           .where((p) => p.midiNote == note)
           .firstOrNull;
       if (pad != null) {
+        if (_isSoloudReady) {
+          track.bus = ensureActiveBus(track.bus);
+        }
         pad.play(
           velocity.toDouble(),
           track.bus,
@@ -1515,10 +1518,13 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         String path = result.stdout.toString().trim();
         if (path.isEmpty) return;
 
+        final trackColor =
+            kTrackColorPalette[tracks.length % kTrackColorPalette.length];
         final newTrack = Track(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
           name: path.split('/').last,
           type: TrackType.audio,
+          colorValue: trackColor.toARGB32(),
         );
 
         final src = await SoLoud.instance.loadFile(path);
@@ -1526,7 +1532,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         final clip = AudioClip(
           start: playheadPosition,
           length: lengthSecs.inMilliseconds * 100.0 / 1000.0,
-          color: lavenderAccent,
+          color: newTrack.color,
           filePath: path,
           id: UniqueKey().toString(),
         );
@@ -1858,15 +1864,13 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         SoLoud.instance.setVisualizationEnabled(true);
         _masterAudioData = AudioData(GetSamplesKind.linear);
 
-        auxReverbBus = Bus(name: 'AuxReverb');
-        auxReverbBus!.playOnEngine();
+        auxReverbBus = ensureActiveBus(auxReverbBus, name: 'AuxReverb');
         auxReverbBus!.filters.freeverbFilter.activate();
         auxReverbBus!.filters.freeverbFilter.wet().value = 1.0;
         auxReverbBus!.filters.freeverbFilter.roomSize().value = 0.78;
         auxReverbBus!.filters.freeverbFilter.damp().value = 0.32;
 
-        auxDelayBus = Bus(name: 'AuxDelay');
-        auxDelayBus!.playOnEngine();
+        auxDelayBus = ensureActiveBus(auxDelayBus, name: 'AuxDelay');
         auxDelayBus!.filters.echoFilter.activate();
         auxDelayBus!.filters.echoFilter.wet().value = 1.0;
         auxDelayBus!.filters.echoFilter.delay().value = 0.34;
@@ -1881,6 +1885,15 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     }
     if (!soloudAvailable) return;
 
+    bool busHasActiveVoices(Bus? b) {
+      if (b == null) return false;
+      try {
+        return b.getActiveVoiceCount() > 0;
+      } catch (_) {
+        return false;
+      }
+    }
+
     _meterTimer = Timer.periodic(const Duration(milliseconds: 33), (_) {
       try {
         if (!mounted || !SoLoud.instance.isInitialized) return;
@@ -1889,7 +1902,9 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       }
       final bool activeAudio =
           isPlaying ||
-          tracks.any((t) => t.isMonitoring) ||
+          tracks.any((t) => t.isMonitoring || busHasActiveVoices(t.bus)) ||
+          busHasActiveVoices(auxReverbBus) ||
+          busHasActiveVoices(auxDelayBus) ||
           _activeMidiNotes.isNotEmpty;
 
       try {
@@ -1914,22 +1929,92 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       double peakDecay(double prev, double cur) =>
           cur > prev ? cur : (prev - 0.012).clamp(0.0, 1.0);
 
+      bool anyMeterActive = activeAudio || _masterVizSamples != null;
+      final Map<String, (double, double)> rawTrackAmps = {};
+
+      // Measure individual non-group tracks first so Group buses can aggregate them.
       for (final t in tracks) {
-        double l = 0.0;
-        double r = 0.0;
-        if (t.bus != null && activeAudio && !t.isMuted) {
+        if (t.type == TrackType.group) continue;
+        double rawL = 0.0;
+        double rawR = 0.0;
+        if (t.bus != null &&
+            !t.isMuted &&
+            (activeAudio || busHasActiveVoices(t.bus))) {
           try {
-            l = (t.bus!.getChannelVolume(0) * 1.4).clamp(0.0, 1.0);
-            r = (t.bus!.getChannelVolume(1) * 1.4).clamp(0.0, 1.0);
+            enableBusVisualization(t.bus!);
+            rawL = t.bus!.getChannelVolume(0);
+            rawR = t.bus!.getChannelVolume(1);
           } catch (_) {}
         }
+        rawTrackAmps[t.id] = (rawL, rawR);
+
+        final double l = linearAmpToDbMeter(rawL);
+        final double r = linearAmpToDbMeter(rawR);
         final prev = _trackLevels[t.id] ?? (0.0, 0.0);
         final nextL = decay(prev.$1, l);
         final nextR = decay(prev.$2, r);
         _trackLevels[t.id] = (nextL, nextR);
 
         final prevP = _trackPeaks[t.id] ?? (0.0, 0.0);
-        _trackPeaks[t.id] = (peakDecay(prevP.$1, nextL), peakDecay(prevP.$2, nextR));
+        final nextPL = peakDecay(prevP.$1, nextL);
+        final nextPR = peakDecay(prevP.$2, nextR);
+        _trackPeaks[t.id] = (nextPL, nextPR);
+
+        if (prev.$1 > 0.001 ||
+            prev.$2 > 0.001 ||
+            prevP.$1 > 0.001 ||
+            prevP.$2 > 0.001 ||
+            nextL > 0.001 ||
+            nextR > 0.001) {
+          anyMeterActive = true;
+        }
+      }
+
+      // Group bus tracks aggregate amplitudes from their unmuted member tracks.
+      for (final g in tracks) {
+        if (g.type != TrackType.group) continue;
+        double rawL = 0.0;
+        double rawR = 0.0;
+        if (!g.isMuted) {
+          if (g.bus != null && (activeAudio || busHasActiveVoices(g.bus))) {
+            try {
+              enableBusVisualization(g.bus!);
+              rawL += g.bus!.getChannelVolume(0);
+              rawR += g.bus!.getChannelVolume(1);
+            } catch (_) {}
+          }
+          for (final child in tracks) {
+            if (child.groupTrackId == g.id &&
+                child.type != TrackType.group &&
+                !child.isMuted) {
+              final childRaw = rawTrackAmps[child.id];
+              if (childRaw != null) {
+                rawL += childRaw.$1 * g.volume;
+                rawR += childRaw.$2 * g.volume;
+              }
+            }
+          }
+        }
+        final double l = linearAmpToDbMeter(rawL);
+        final double r = linearAmpToDbMeter(rawR);
+        final prev = _trackLevels[g.id] ?? (0.0, 0.0);
+        final nextL = decay(prev.$1, l);
+        final nextR = decay(prev.$2, r);
+        _trackLevels[g.id] = (nextL, nextR);
+
+        final prevP = _trackPeaks[g.id] ?? (0.0, 0.0);
+        final nextPL = peakDecay(prevP.$1, nextL);
+        final nextPR = peakDecay(prevP.$2, nextR);
+        _trackPeaks[g.id] = (nextPL, nextPR);
+
+        if (prev.$1 > 0.001 ||
+            prev.$2 > 0.001 ||
+            prevP.$1 > 0.001 ||
+            prevP.$2 > 0.001 ||
+            nextL > 0.001 ||
+            nextR > 0.001) {
+          anyMeterActive = true;
+        }
       }
 
       double mL = 0.0, mR = 0.0;
@@ -1937,26 +2022,45 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       double dlyL = 0.0, dlyR = 0.0;
       try {
         if (activeAudio) {
-          mL = (SoLoud.instance.getApproximateVolume(0) * 1.35).clamp(0.0, 1.0);
-          mR = (SoLoud.instance.getApproximateVolume(1) * 1.35).clamp(0.0, 1.0);
+          mL = linearAmpToDbMeter(SoLoud.instance.getApproximateVolume(0));
+          mR = linearAmpToDbMeter(SoLoud.instance.getApproximateVolume(1));
           if (auxReverbBus != null) {
-            revL = (auxReverbBus!.getChannelVolume(0) * 1.5).clamp(0.0, 1.0);
-            revR = (auxReverbBus!.getChannelVolume(1) * 1.5).clamp(0.0, 1.0);
+            enableBusVisualization(auxReverbBus!);
+            revL = linearAmpToDbMeter(auxReverbBus!.getChannelVolume(0));
+            revR = linearAmpToDbMeter(auxReverbBus!.getChannelVolume(1));
           }
           if (auxDelayBus != null) {
-            dlyL = (auxDelayBus!.getChannelVolume(0) * 1.5).clamp(0.0, 1.0);
-            dlyR = (auxDelayBus!.getChannelVolume(1) * 1.5).clamp(0.0, 1.0);
+            enableBusVisualization(auxDelayBus!);
+            dlyL = linearAmpToDbMeter(auxDelayBus!.getChannelVolume(0));
+            dlyR = linearAmpToDbMeter(auxDelayBus!.getChannelVolume(1));
           }
         }
       } catch (_) {}
 
+      final prevMaster = _masterLevel;
+      final prevMasterPeak = _masterPeak;
       _masterLevel = (decay(_masterLevel.$1, mL), decay(_masterLevel.$2, mR));
       _masterPeak = (
         peakDecay(_masterPeak.$1, _masterLevel.$1),
         peakDecay(_masterPeak.$2, _masterLevel.$2),
       );
+      final prevRev = _auxRevLevel;
+      final prevDly = _auxDlyLevel;
       _auxRevLevel = (decay(_auxRevLevel.$1, revL), decay(_auxRevLevel.$2, revR));
       _auxDlyLevel = (decay(_auxDlyLevel.$1, dlyL), decay(_auxDlyLevel.$2, dlyR));
+
+      if (prevMaster.$1 > 0.001 ||
+          prevMaster.$2 > 0.001 ||
+          prevMasterPeak.$1 > 0.001 ||
+          prevMasterPeak.$2 > 0.001 ||
+          _masterLevel.$1 > 0.001 ||
+          _masterLevel.$2 > 0.001 ||
+          prevRev.$1 > 0.001 ||
+          prevRev.$2 > 0.001 ||
+          prevDly.$1 > 0.001 ||
+          prevDly.$2 > 0.001) {
+        anyMeterActive = true;
+      }
 
       _masterLufs = activeAudio
           ? estimateLufsFromWaveform(_masterVizSamples)
@@ -2015,7 +2119,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         }
       }
 
-      if (activeAudio || _masterLevel.$1 > 0.01 || _masterPeak.$1 > 0.01) {
+      if (anyMeterActive) {
         setState(() {});
       }
     });
@@ -2229,7 +2333,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
 
   void _updateTrackFilters(Track track, {double? atPlayhead}) {
     if (!_isSoloudReady) return;
-    track.bus ??= Bus()..playOnEngine();
+    track.bus = ensureActiveBus(track.bus);
     final filters = track.bus!.filters;
     final activeFx = track.effectsChain.where((f) => !f.isBypassed).toList();
 
@@ -2830,7 +2934,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
 
   void _playAudioClipWithSends(Track track, AudioClip clip, double atPlayhead) {
     if (clip.source == null || !SoLoud.instance.isInitialized) return;
-    track.bus ??= Bus()..playOnEngine();
+    track.bus = ensureActiveBus(track.bus);
     final env = _computeClipEnvelope(clip, atPlayhead, track: track);
     final trackEffVol = _effectiveTrackVolume(track);
     final effVol = (trackEffVol * env).clamp(0.0, 2.5);
@@ -2955,7 +3059,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         bool anySolo = tracks.any((t) => t.isSolo);
         for (var track in tracks) {
           if (track.type == TrackType.group) continue;
-          track.bus ??= Bus()..playOnEngine();
+          track.bus = ensureActiveBus(track.bus);
           _updateTrackFilters(track, atPlayhead: playheadPosition);
           if (!_isTrackAudible(track, anySolo)) continue;
 
@@ -3343,7 +3447,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     for (final t in tracks) {
       if (t.type != TrackType.audio) continue;
       if (t.isMonitoring) {
-        t.bus ??= Bus()..playOnEngine();
+        t.bus = ensureActiveBus(t.bus);
         if (t.monitorSource == null) {
           try {
             t.monitorSource = SoLoud.instance.setBufferStream(
@@ -3520,7 +3624,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
             (t.isMuted || (anySolo && !t.isSolo)) ? 0.0 : t.volume;
         if (t.monitorHandle == null ||
             !SoLoud.instance.getIsValidVoiceHandle(t.monitorHandle!)) {
-          t.bus ??= Bus()..playOnEngine();
+          t.bus = ensureActiveBus(t.bus);
           t.monitorHandle = t.bus!.play(
             src,
             volume: effVol,
@@ -3647,11 +3751,11 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           }
 
           List<AudioClip> newClips = [];
-          for (var _ in armedTracks) {
+          for (final armedTrack in armedTracks) {
             final clip = AudioClip(
               start: recordingStartPos!,
               length: length,
-              color: lavenderAccent,
+              color: armedTrack.color,
               filePath: _currentRecordPath!,
               id: UniqueKey().toString(),
             );
@@ -3890,7 +3994,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       colorValue: trackColor.toARGB32(),
     );
     if (_isSoloudReady) {
-      newTrack.bus ??= Bus()..playOnEngine();
+      newTrack.bus = ensureActiveBus(newTrack.bus);
     }
 
     if (type == TrackType.midi) {
@@ -4415,70 +4519,87 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         if (selectedClip == clip) selectedClip = null;
       });
     } else if (result == 'split') {
-      double splitPoint = playheadPosition;
-      if (splitPoint > clip.start && splitPoint < clip.start + clip.length) {
-        double newLen1 = splitPoint - clip.start;
-        double newLen2 = clip.length - newLen1;
-        DawClip newClip;
-        if (clip is AudioClip) {
-          newClip = AudioClip(
-            id: UniqueKey().toString(),
-            start: splitPoint,
-            length: newLen2,
-            color: clip.color,
-            filePath: clip.filePath,
-            originalLength: clip.originalLength,
-            startOffset: clip.startOffset + newLen1,
-          );
-          if (clip.source != null) {
-            (newClip as AudioClip).source = clip.source;
-          }
-        } else {
-          newClip = MidiClip(
-            id: UniqueKey().toString(),
-            start: splitPoint,
-            length: newLen2,
-            color: clip.color,
-            notes: [],
-            originalLength: clip.originalLength,
-            startOffset: clip.startOffset + newLen1,
-          );
-          for (var n in List.from((clip as MidiClip).notes)) {
-            if (n.start >= clip.startOffset + newLen1) {
-              (newClip as MidiClip).notes.add(n);
-              clip.notes.remove(n);
-            }
-          }
-        }
-        _saveState();
-        setState(() {
-          clip.length = newLen1;
-          trackClips[trackId]?.add(newClip);
-        });
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Playhead must be intersecting the clip to split it',
-              ),
+      final ok = _splitClipAtTimelinePos(trackId, clip, playheadPosition);
+      if (!ok && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Playhead must be intersecting the clip to split it',
             ),
-          );
-        }
+          ),
+        );
       }
     } else if (result == 'reverse' && clip is AudioClip) {
       _saveState();
       await clip.toggleReverse();
       setState(() {});
     } else if (result == 'color_blue') {
-      setState(() => clip.color = Colors.blueAccent);
+      _applyTrackColorById(trackId, Colors.blueAccent);
     } else if (result == 'color_red') {
-      setState(() => clip.color = Colors.redAccent);
+      _applyTrackColorById(trackId, Colors.redAccent);
     } else if (result == 'color_green') {
-      setState(() => clip.color = Colors.green);
+      _applyTrackColorById(trackId, Colors.green);
     } else if (result == 'color_purple') {
-      setState(() => clip.color = lavenderAccent);
+      _applyTrackColorById(trackId, kTrackColorPalette[0]);
     }
+  }
+
+  /// Splits [clip] on [trackId] at [splitPoint] in timeline units.
+  /// Returns true if the split succeeded.
+  bool _splitClipAtTimelinePos(String trackId, DawClip clip, double splitPoint) {
+    if (splitPoint <= clip.start || splitPoint >= clip.start + clip.length) {
+      return false;
+    }
+    final double newLen1 = splitPoint - clip.start;
+    final double newLen2 = clip.length - newLen1;
+    DawClip newClip;
+    if (clip is AudioClip) {
+      newClip = AudioClip(
+        id: UniqueKey().toString(),
+        name: clip.name,
+        start: splitPoint,
+        length: newLen2,
+        color: clip.color,
+        filePath: clip.filePath,
+        originalLength: clip.originalLength,
+        startOffset: clip.startOffset + newLen1,
+        fadeIn: 0.0,
+        fadeOut: clip.fadeOut,
+        gain: clip.gain,
+        pitchSemitones: clip.pitchSemitones,
+        stretchFactor: clip.stretchFactor,
+        reversed: clip.reversed,
+        originalFilePath: clip.originalFilePath,
+      );
+      clip.fadeOut = 0.0;
+      clip.fadeIn = clip.fadeIn.clamp(0.0, newLen1);
+      if (clip.source != null) {
+        (newClip as AudioClip).source = clip.source;
+      }
+    } else {
+      newClip = MidiClip(
+        id: UniqueKey().toString(),
+        name: clip.name,
+        start: splitPoint,
+        length: newLen2,
+        color: clip.color,
+        notes: [],
+        originalLength: clip.originalLength,
+        startOffset: clip.startOffset + newLen1,
+      );
+      for (var n in List.from((clip as MidiClip).notes)) {
+        if (n.start >= clip.startOffset + newLen1) {
+          (newClip as MidiClip).notes.add(n);
+          clip.notes.remove(n);
+        }
+      }
+    }
+    _saveState();
+    setState(() {
+      clip.length = newLen1;
+      trackClips[trackId]?.add(newClip);
+    });
+    return true;
   }
 
   Future<void> _normalizeAudioClip(AudioClip clip) async {
@@ -4551,7 +4672,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       colorValue: trackColor.toARGB32(),
     );
     if (_isSoloudReady) {
-      midiTrack.bus ??= Bus()..playOnEngine();
+      midiTrack.bus = ensureActiveBus(midiTrack.bus);
       final preset = getInstrumentPreset(0);
       midiTrack.synthSourcePath = preset.assetPath;
       midiTrack.synthSource = globalInstrumentSounds[0];
@@ -5154,6 +5275,23 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     );
   }
 
+  void _applyTrackColor(Track track, Color color) {
+    setState(() {
+      track.colorValue = color.toARGB32();
+      for (final clip in trackClips[track.id] ?? const <DawClip>[]) {
+        clip.color = color;
+      }
+    });
+  }
+
+  void _applyTrackColorById(String trackId, Color color) {
+    final track = tracks.where((t) => t.id == trackId).firstOrNull;
+    if (track != null) {
+      _saveState();
+      _applyTrackColor(track, color);
+    }
+  }
+
   void _showTrackColorPicker(Track track) {
     showDialog(
       context: context,
@@ -5168,12 +5306,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
             return GestureDetector(
               onTap: () {
                 _saveState();
-                setState(() {
-                  track.colorValue = c.toARGB32();
-                  for (final clip in trackClips[track.id] ?? []) {
-                    clip.color = c;
-                  }
-                });
+                _applyTrackColor(track, c);
                 Navigator.pop(ctx);
               },
               child: Container(
@@ -5309,10 +5442,13 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                       if ((track.type == TrackType.audio ||
                               track.type == TrackType.group) &&
                           (selectedBottomTab == 0 || selectedBottomTab == 3)) {
-                        selectedBottomTab = 2;
+                        selectedBottomTab = track.type == TrackType.audio ? 4 : 2;
                       } else if (track.type == TrackType.midi &&
-                          selectedBottomTab == 3) {
+                          (selectedBottomTab == 3 || selectedBottomTab == 4)) {
                         selectedBottomTab = 0;
+                      } else if (track.type == TrackType.group &&
+                          selectedBottomTab == 4) {
+                        selectedBottomTab = 2;
                       }
                       if (!wasSelected && track.type == TrackType.sampler) {
                         selectedBottomTab = 3;
@@ -5745,6 +5881,23 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           int tIdx = tracks.indexWhere((t) => t.id == trackId);
           if (tIdx != -1) {
             selectedTrackIndex = tIdx;
+          }
+        }),
+        onDoubleTap: () => setState(() {
+          selectedClip = clip;
+          multiSelectedClips.clear();
+          int tIdx = tracks.indexWhere((t) => t.id == trackId);
+          if (tIdx != -1) {
+            selectedTrackIndex = tIdx;
+          }
+          isBottomPanelExpanded = true;
+          if (_bottomPanelHeight < 360) {
+            _bottomPanelHeight = 360;
+          }
+          if (clip is MidiClip) {
+            selectedBottomTab = 0;
+          } else if (clip is AudioClip) {
+            selectedBottomTab = 4;
           }
         }),
         onSecondaryTapUp: (details) =>
@@ -6596,7 +6749,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                                     id: UniqueKey().toString(),
                                     start: start,
                                     length: beatWidth * timeSigTop,
-                                    color: lavenderAccent,
+                                    color: track.color,
                                   );
                                   if (!trackClips.containsKey(track.id)) {
                                     trackClips[track.id] = [];
@@ -7168,6 +7321,9 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                       if (tracks[selectedTrackIndex!].type == TrackType.midi ||
                           tracks[selectedTrackIndex!].type == TrackType.sampler)
                         _buildPanelTab('Editor', 0),
+                      if (tracks[selectedTrackIndex!].type == TrackType.audio ||
+                          selectedClip is AudioClip)
+                        _buildPanelTab('Audio Editor', 4),
                       _buildPanelTab('Mixer', 1),
                       _buildPanelTab('Effects', 2),
                       if (tracks[selectedTrackIndex!].type == TrackType.sampler)
@@ -7628,6 +7784,80 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           );
         }
         return SizedBox();
+      case 4:
+        AudioClip? targetAudioClip;
+        Track? audioOwnerTrack;
+        if (selectedClip is AudioClip) {
+          targetAudioClip = selectedClip as AudioClip;
+          for (final tr in tracks) {
+            if (trackClips[tr.id]?.contains(targetAudioClip) == true) {
+              audioOwnerTrack = tr;
+              break;
+            }
+          }
+        } else if (selectedTrackIndex != null &&
+            selectedTrackIndex! < tracks.length) {
+          audioOwnerTrack = tracks[selectedTrackIndex!];
+          final candidates = trackClips[audioOwnerTrack.id]
+              ?.whereType<AudioClip>()
+              .toList();
+          if (candidates != null && candidates.isNotEmpty) {
+            targetAudioClip = candidates.first;
+          }
+        }
+        if (targetAudioClip == null) {
+          return Center(
+            child: Text(
+              'Select or double-click an audio segment on the timeline to trim, split, fade, and process it.',
+              style: TextStyle(color: textMuted),
+            ),
+          );
+        }
+        final activeAudioClip = targetAudioClip;
+        final ownerId = audioOwnerTrack?.id ?? tracks[selectedTrackIndex!].id;
+        return AudioClipEditorWidget(
+          clip: activeAudioClip,
+          track: audioOwnerTrack,
+          bpm: bpm,
+          beatWidth: beatWidth,
+          snapToGrid: snapToGrid,
+          snapResolution: snapResolution,
+          playheadPosition: playheadPosition,
+          onPlayheadChanged: (pos) => setState(() => playheadPosition = pos),
+          onChangeStart: _saveState,
+          onClipChanged: () {
+            if (_isSoloudReady && activeAudioClip.currentHandle != null) {
+              try {
+                final tr = audioOwnerTrack;
+                final vol = tr != null
+                    ? (_effectiveTrackVolume(tr) *
+                            _computeClipEnvelope(
+                              activeAudioClip,
+                              playheadPosition,
+                              track: tr,
+                            ))
+                        .clamp(0.0, 2.5)
+                    : activeAudioClip.gain.clamp(0.0, 2.5);
+                SoLoud.instance.setVolume(activeAudioClip.currentHandle!, vol);
+              } catch (_) {}
+            }
+            setState(() {});
+          },
+          onSplitClip: (splitPos) =>
+              _splitClipAtTimelinePos(ownerId, activeAudioClip, splitPos),
+          isPlaying: isPlaying,
+          onPlayPause: _togglePlay,
+          onNormalize: () => _normalizeAudioClip(activeAudioClip),
+          onReverse: () async {
+            _saveState();
+            await activeAudioClip.toggleReverse();
+            setState(() {});
+          },
+          onStripSilence: () => _stripSilenceAudioClip(ownerId, activeAudioClip),
+          onAutoMatchBpm: () => _autoMatchClipBpm(activeAudioClip),
+          onAudioToMidi: () => _extractMelodyFromClip(activeAudioClip),
+          onSliceToSampler: () => _sliceClipToSampler(activeAudioClip),
+        );
       default:
         return SizedBox();
     }

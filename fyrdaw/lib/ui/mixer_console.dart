@@ -5,6 +5,7 @@ import 'package:fyrdaw/models/enums.dart';
 import 'package:fyrdaw/models/track.dart';
 import 'package:fyrdaw/ui/dial.dart';
 import 'package:fyrdaw/ui/meters.dart';
+import 'package:fyrdaw/utils/bus_metering.dart';
 
 /// Modular Mixer Console strip bank: track channel strips (Sends, Pre-Fader toggles,
 /// Pan, Fader, L/R VU meters, Mute/Solo), Aux Reverb & Delay return strips (with Solo),
@@ -107,15 +108,22 @@ class MixerConsoleView extends StatelessWidget {
               final t = tracks[index];
               final lvl = trackLevels[t.id] ?? (0.0, 0.0);
               final peak = trackPeaks[t.id] ?? (0.0, 0.0);
+              final maxPeak = peak.$1 > peak.$2 ? peak.$1 : peak.$2;
               return Container(
                 width: 112,
                 decoration: BoxDecoration(
-                  color: panelDark.withValues(alpha: 0.45),
-                  border: Border(right: BorderSide(color: panelLight)),
+                  color: Color.alphaBlend(
+                    t.color.withValues(alpha: 0.05),
+                    panelDark.withValues(alpha: 0.45),
+                  ),
+                  border: Border(
+                    left: BorderSide(color: t.color, width: 3),
+                    right: BorderSide(color: panelLight),
+                  ),
                 ),
                 child: Column(
                   children: [
-                    Container(height: 3, color: t.color),
+                    Container(height: 4, color: t.color),
                     const SizedBox(height: 4),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 6),
@@ -127,7 +135,7 @@ class MixerConsoleView extends StatelessWidget {
                               margin: const EdgeInsets.only(right: 4),
                               padding: const EdgeInsets.symmetric(horizontal: 3),
                               decoration: BoxDecoration(
-                                color: lavenderAccent.withValues(alpha: 0.25),
+                                color: t.color.withValues(alpha: 0.25),
                                 borderRadius: BorderRadius.circular(2),
                               ),
                               child: Text(
@@ -135,7 +143,7 @@ class MixerConsoleView extends StatelessWidget {
                                 style: TextStyle(
                                   fontSize: 8,
                                   fontWeight: FontWeight.bold,
-                                  color: lavenderLight,
+                                  color: t.color,
                                 ),
                               ),
                             ),
@@ -258,13 +266,31 @@ class MixerConsoleView extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(width: 8),
-                          SegmentedVuMeter(
-                            leftLevel: lvl.$1,
-                            rightLevel: lvl.$2,
-                            leftPeak: peak.$1,
-                            rightPeak: peak.$2,
-                            width: 14,
-                            height: 112,
+                          Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SegmentedVuMeter(
+                                leftLevel: lvl.$1,
+                                rightLevel: lvl.$2,
+                                leftPeak: peak.$1,
+                                rightPeak: peak.$2,
+                                width: 14,
+                                height: 94,
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                formatMeterDb(maxPeak),
+                                style: TextStyle(
+                                  fontSize: 8,
+                                  fontWeight: FontWeight.w600,
+                                  color: maxPeak >= 0.96
+                                      ? Colors.redAccent
+                                      : (maxPeak >= 0.88
+                                            ? Colors.amber
+                                            : textMuted),
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),

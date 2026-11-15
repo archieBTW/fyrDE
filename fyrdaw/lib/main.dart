@@ -34,7 +34,9 @@ import 'package:fyrdaw/ui/mixer_console.dart';
 import 'package:fyrdaw/ui/effects_rack.dart';
 import 'package:fyrdaw/ui/musical_keyboard_bar.dart';
 import 'package:fyrdaw/ui/session_launcher.dart';
+import 'package:fyrdaw/ui/audio_clip_editor.dart';
 import 'package:fyrdaw/utils/audio_utils.dart';
+import 'package:fyrdaw/utils/bus_metering.dart';
 import 'package:fyrdaw/utils/mixdown_renderer.dart';
 import 'package:fyrdaw/utils/pitch_detector.dart';
 import 'fyr_theme.dart';
@@ -72,7 +74,7 @@ SoundHandle? triggerInstrumentNote(
   if (src == null) return null;
 
   final s = track.synthSettings;
-  final busToUse = targetBus ?? (track.bus ??= Bus()..playOnEngine());
+  final busToUse = targetBus ?? (track.bus = ensureActiveBus(track.bus));
   final double targetVol =
       ((velocity.clamp(1, 127) / 127.0) *
               track.volume *
