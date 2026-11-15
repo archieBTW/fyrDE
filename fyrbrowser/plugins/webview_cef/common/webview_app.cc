@@ -109,11 +109,9 @@ void WebviewApp::OnBeforeCommandLineProcessing(const CefString &process_type, Ce
 			command_line->AppendSwitch("disable-gpu-compositing");
 		}
 
-		command_line->AppendSwitch("disable-web-security");                                     //disable web security
-		command_line->AppendSwitch("allow-running-insecure-content");                           //allow running insecure content in secure pages
 		// Don't create a "GPUCache" directory when cache-path is unspecified.
-		command_line->AppendSwitch("disable-gpu-shader-disk-cache");                            //disable gpu shader disk cache
-        		command_line->AppendSwitch("no-sandbox");                       
+		command_line->AppendSwitch("disable-gpu-shader-disk-cache");
+		command_line->AppendSwitch("no-sandbox");
 		command_line->AppendSwitch("enable-gpu");
 		command_line->AppendSwitch("ignore-gpu-blocklist");
 		command_line->AppendSwitch("enable-webgl");
@@ -126,7 +124,7 @@ void WebviewApp::OnBeforeCommandLineProcessing(const CefString &process_type, Ce
 		if (m_uMode == 1)
 		{
 			command_line->AppendSwitch("process-per-site");                                     //each site in its own process
-			command_line->AppendSwitchWithValue("renderer-process-limit ", "8");              //limit renderer process count to decrease memory usage
+			command_line->AppendSwitchWithValue("renderer-process-limit", "8");                 //limit renderer process count to decrease memory usage
 		}
 		else if (m_uMode == 2)
 		{
@@ -136,45 +134,27 @@ void WebviewApp::OnBeforeCommandLineProcessing(const CefString &process_type, Ce
 		{
 			command_line->AppendSwitch("single-process");                                     //all in one process
 		}
-		command_line->AppendSwitchWithValue("autoplay-policy", "no-user-gesture-required");
 		command_line->AppendSwitch("enable-media-stream");
-        command_line->AppendSwitch("enable-gpu-rasterization");
-        command_line->AppendSwitch("disable-ipv6");
-		command_line->AppendSwitch("enable-shared-array-buffer-unrestrictedly");
-        command_line->AppendSwitch("enable-cross-origin-isolated");
-        command_line->AppendSwitchWithValue("enable-blink-features", "SharedArrayBuffer");
+		command_line->AppendSwitch("enable-midi-sysex");
+		command_line->AppendSwitch("enable-web-midi");
 
-        // Essential features for BandLab
-        std::string values = command_line->GetSwitchValue("disable-features");
-        if (values.empty()) {
-            values = "CalculateNativeWinOcclusion,PermissionStorage,SameSiteByDefaultCookies,CookiesWithoutSameSiteMustBeSecure,IsolateOrigins,SitePerProcess";
-        } else {
-            values += ",CalculateNativeWinOcclusion,PermissionStorage,SameSiteByDefaultCookies,CookiesWithoutSameSiteMustBeSecure,IsolateOrigins,SitePerProcess";
-        }
-        command_line->AppendSwitchWithValue("disable-features", values);
-        command_line->AppendSwitch("disable-site-isolation-trials");
+		std::string values = command_line->GetSwitchValue("disable-features");
+		std::string extra_disable = "CalculateNativeWinOcclusion,WebRtcHideLocalIpsWithMdns";
+		if (values.empty()) {
+			values = extra_disable;
+		} else {
+			values += "," + extra_disable;
+		}
+		command_line->AppendSwitchWithValue("disable-features", values);
 
-        std::string enable_features = command_line->GetSwitchValue("enable-features");
-        std::string extra_features = "SharedArrayBuffer,SharedArrayBufferOnDesktop,WebAssembly,AudioWorklet,WebAssemblySharedMemory,WebGL2,WebMIDI,WebMIDISysex,NetworkServiceInProcess";
-        if (enable_features.empty()) {
-            enable_features = extra_features;
-        } else {
-            enable_features += "," + extra_features;
-        }
-        command_line->AppendSwitchWithValue("enable-features", enable_features);
-
-        // Disable features that can cause negotiation delays
-        std::string disable_features = command_line->GetSwitchValue("disable-features");
-        disable_features += ",WebRtcHideLocalIpsWithMdns";
-        command_line->AppendSwitchWithValue("disable-features", disable_features);
-        command_line->AppendSwitch("enable-permission-manager");
-        command_line->AppendSwitch("disable-permission-manager");
-        command_line->AppendSwitch("use-fake-ui-for-media-stream");
-        command_line->AppendSwitch("enable-midi-sysex");
-        command_line->AppendSwitch("enable-web-midi");
-        command_line->AppendSwitch("ignore-gpu-blocklist");
-        command_line->AppendSwitch("enable-webgl");
-        command_line->AppendSwitch("enable-shared-array-buffer-unrestrictedly");
+		std::string enable_features = command_line->GetSwitchValue("enable-features");
+		std::string extra_features = "SharedArrayBuffer,SharedArrayBufferOnDesktop,WebAssembly,AudioWorklet,WebGL2,WebMIDI,WebMIDISysex";
+		if (enable_features.empty()) {
+			enable_features = extra_features;
+		} else {
+			enable_features += "," + extra_features;
+		}
+		command_line->AppendSwitchWithValue("enable-features", enable_features);
         
         // for unsafe domain, add domain to whitelist
 		if (!m_strFilterDomain.empty())

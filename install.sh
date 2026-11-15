@@ -1034,27 +1034,39 @@ setup_sway_config() {
     cat << 'EOF' > ~/.config/fyr/toggle_floating.sh
 #!/bin/bash
 CONF="$HOME/.config/sway/floating.conf"
+EXCLUDED="fyrtaskbar|fyrdock|fyrdesktop|fyrsearch|launcher|fyroverview|fyrwindowoverview|fyrhelp|fyremoji"
 if [ -f "$CONF" ] && grep -q "floating enable" "$CONF"; then
     echo "" > "$CONF"
-    swaymsg '[floating workspace="^[0-9]+$" app_id="^(?!(fyrtaskbar|fyrdock|fyrdesktop|fyrsearch|launcher|fyroverview|fyrwindowoverview|fyrhelp|fyremoji)$).*$"] floating disable'
-    swaymsg '[tiling] border auto 2'
-    swaymsg 'gaps inner all set 20'
-    swaymsg 'gaps outer all set 20'
+    if swaymsg 'unfor_window [class=".*"] floating enable' >/dev/null 2>&1; then
+        swaymsg 'unfor_window [app_id=".*"] floating enable' >/dev/null 2>&1 || true
+        swaymsg 'unfor_window [class=".*"] border auto 4' >/dev/null 2>&1 || true
+        swaymsg "unfor_window [app_id=\"^(?!($EXCLUDED)$).*$\"] border auto 4" >/dev/null 2>&1 || true
+        swaymsg 'default_floating_border auto 4' >/dev/null 2>&1 || true
+        swaymsg 'gaps inner 20' >/dev/null 2>&1 || true
+        swaymsg 'gaps outer 20' >/dev/null 2>&1 || true
+        swaymsg "[floating workspace=\"^[0-9]+$\" app_id=\"^(?!($EXCLUDED)$).*$\"] floating disable; [tiling] border auto 2; gaps inner all set 20; gaps outer all set 20" >/dev/null 2>&1 || true
+    else
+        swaymsg "[floating workspace=\"^[0-9]+$\" app_id=\"^(?!($EXCLUDED)$).*$\"] floating disable; [tiling] border auto 2; gaps inner all set 20; gaps outer all set 20" >/dev/null 2>&1 || true
+        swaymsg reload >/dev/null 2>&1 || true
+    fi
 else
     echo 'for_window [class=".*"] floating enable' > "$CONF"
     echo 'for_window [app_id=".*"] floating enable' >> "$CONF"
     echo 'for_window [class=".*"] border auto 4' >> "$CONF"
-    echo 'for_window [app_id="^(?!(fyrtaskbar|fyrdock|fyrdesktop|fyrsearch|launcher|fyroverview|fyrwindowoverview|fyrhelp|fyremoji)$).*$"] border auto 4' >> "$CONF"
+    echo "for_window [app_id=\"^(?!($EXCLUDED)$).*$\"] border auto 4" >> "$CONF"
     echo 'default_floating_border auto 4' >> "$CONF"
     echo 'gaps inner 0' >> "$CONF"
     echo 'gaps outer 0' >> "$CONF"
-    swaymsg '[tiling] floating enable'
-    swaymsg '[floating workspace="^[0-9]+$" class=".*"] border auto 4'
-    swaymsg '[floating workspace="^[0-9]+$" app_id="^(?!(fyrtaskbar|fyrdock|fyrdesktop|fyrsearch|launcher|fyroverview|fyrwindowoverview|fyrhelp|fyremoji)$).*$"] border auto 4'
-    swaymsg 'gaps inner all set 0'
-    swaymsg 'gaps outer all set 0'
+    swaymsg 'for_window [class=".*"] floating enable' >/dev/null 2>&1 || true
+    swaymsg 'for_window [app_id=".*"] floating enable' >/dev/null 2>&1 || true
+    swaymsg 'for_window [class=".*"] border auto 4' >/dev/null 2>&1 || true
+    swaymsg "for_window [app_id=\"^(?!($EXCLUDED)$).*$\"] border auto 4" >/dev/null 2>&1 || true
+    swaymsg 'default_floating_border auto 4' >/dev/null 2>&1 || true
+    swaymsg 'gaps inner 0' >/dev/null 2>&1 || true
+    swaymsg 'gaps outer 0' >/dev/null 2>&1 || true
+    swaymsg "[tiling] floating enable; [floating workspace=\"^[0-9]+$\" class=\".*\"] border auto 4; [floating workspace=\"^[0-9]+$\" app_id=\"^(?!($EXCLUDED)$).*$\"] border auto 4; gaps inner all set 0; gaps outer all set 0" >/dev/null 2>&1 || true
 fi
-swaymsg reload
+exit 0
 EOF
     chmod +x ~/.config/fyr/toggle_floating.sh
 

@@ -1,1195 +1,1517 @@
-import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:window_manager/window_manager.dart';
-import 'package:webview_cef/webview_cef.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
-import 'package:http/http.dart' as http;
-import 'package:flutter/gestures.dart';
-import 'fyr_theme.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:webview_cef/webview_cef.dart';
+import 'package:window_manager/window_manager.dart';
+
 import 'adblock_engine.dart';
+import 'browser_models.dart';
 import 'download_manager.dart';
+import 'fyr_theme.dart';
+import 'home_page.dart';
 import 'logger_service.dart';
+import 'settings_dialog.dart';
 
-import 'package:intl/intl.dart';
-
-class BrowserTab {
-  late WebViewController controller;
-  String title;
-  String url;
-  bool isLoading = false;
-  bool isReady = false;
-  bool showPwaInstall = false;
-  String? pwaIconUrl;
-
-  BrowserTab({this.title = 'New Tab', this.url = 'https://start.duckduckgo.com'});
-}
+const String _kUserAgent =
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
+    '(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
 
 class BrowserScreen extends StatefulWidget {
   final String? initialUrl;
   final bool isAppMode;
 
-  const BrowserScreen({super.key, this.initialUrl, this.isAppMode = false});
+  const BrowserScreen({
+    super.key,
+    this.initialUrl,
+    this.isAppMode = false,
+  });
 
   @override
   State<BrowserScreen> createState() => _BrowserScreenState();
 }
 
-class _BrowserScreenState extends State<BrowserScreen> {
-  final WebviewManager _manager = WebviewManager();
+class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
   final List<BrowserTab> _tabs = [];
-  int _currentTabIndex = 0;
-  
+  int _activeTabIndex = 0;
+  int _nextTabId = 1;
+  final List<String> _closedTabUrls = [];
+
   final TextEditingController _urlController = TextEditingController();
   final FocusNode _urlFocusNode = FocusNode();
-  final FocusNode _keyboardFocusNode = FocusNode();
-  
-  bool _adBlockEnabled = false;
+  final LayerLink _urlBarLink = LayerLink();
+  OverlayEntry? _autocompleteOverlay;
+
+  final TextEditingController _findController = TextEditingController();
+  final FocusNode _findFocusNode = FocusNode();
+  bool _showFindBar = false;
+  int _findMatchCount = 0;
+  int _findActiveOrdinal = 0;
+
+  BrowserSettings _settings = BrowserSettings();
   List<Map<String, String>> _history = [];
   List<Map<String, String>> _bookmarks = [];
-  
+  Timer? _saveDebounce;
+
+  bool _isEngineReady = false;
+  bool _isMaximized = false;
+
+  BrowserTab? get _activeTab =>
+      (_tabs.isNotEmpty && _activeTabIndex >= 0 && _activeTabIndex < _tabs.length)
+          ? _tabs[_activeTabIndex]
+          : null;
+
   @override
   void initState() {
     super.initState();
-    _loadData();
-    _initManager().then((_) {
-      WebviewManager().onPopupCreated = (controller) {
-        if (!mounted) return;
-        final newTab = BrowserTab(url: 'about:blank');
-        newTab.controller = controller;
-        newTab.isReady = true;
-        _setupTabListeners(newTab);
-        setState(() {
-          _tabs.add(newTab);
-          _currentTabIndex = _tabs.length - 1;
-          _urlController.text = newTab.url;
-        });
-        logger.i('Popup created: ${newTab.url}');
-        Future.microtask(() {
-          if (mounted) {
-            _urlFocusNode.requestFocus();
-            _urlController.selection = TextSelection(baseOffset: 0, extentOffset: _urlController.text.length);
-          }
-        });
-      };
-      _addNewTab(url: widget.initialUrl);
-    });
-    
-    _urlFocusNode.addListener(() {
-      if (_urlFocusNode.hasFocus) {
-        _urlController.selection = TextSelection(
-          baseOffset: 0,
-          extentOffset: _urlController.text.length,
-        );
-      }
-    });
+    windowManager.addListener(this);
+    HardwareKeyboard.instance.addHandler(_handleGlobalKeyEvent);
+    _urlFocusNode.addListener(_onUrlFocusChanged);
+    _urlController.addListener(_onUrlTextChanged);
+    _initBrowser();
   }
 
   @override
   void dispose() {
+    _saveDebounce?.cancel();
+    _removeAutocompleteOverlay();
+    windowManager.removeListener(this);
+    HardwareKeyboard.instance.removeHandler(_handleGlobalKeyEvent);
+    _urlFocusNode.removeListener(_onUrlFocusChanged);
+    _urlController.removeListener(_onUrlTextChanged);
     _urlFocusNode.dispose();
     _urlController.dispose();
-    _keyboardFocusNode.dispose();
+    _findFocusNode.dispose();
+    _findController.dispose();
+    for (final tab in _tabs) {
+      tab.controller.dispose();
+    }
     super.dispose();
   }
 
-  Future<void> _initManager() async {
-    const String userAgent = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
-    await _manager.initialize(userAgent: userAgent);
+  @override
+  void onWindowMaximize() => setState(() => _isMaximized = true);
+
+  @override
+  void onWindowUnmaximize() => setState(() => _isMaximized = false);
+
+  Future<void> _initBrowser() async {
+    await _loadData();
+    try {
+      _isMaximized = await windowManager.isMaximized();
+    } catch (_) {}
+
+    try {
+      await WebviewManager().initialize(userAgent: _kUserAgent);
+      await _syncAdBlockConfig();
+      if (!mounted) return;
+      setState(() => _isEngineReady = true);
+
+      final startUrl = widget.initialUrl ?? _settings.homePage;
+      await _addNewTab(initialUrl: startUrl);
+    } catch (e, stack) {
+      logger.e('Failed to initialize CEF WebviewManager', e, stack);
+    }
   }
+
+  Future<Directory> _dataDir() => getApplicationSupportDirectory();
 
   Future<void> _loadData() async {
-    DownloadManager().init();
     try {
-      final dir = await getApplicationSupportDirectory();
+      final dir = await _dataDir();
       final historyFile = File(p.join(dir.path, 'history.json'));
-      if (historyFile.existsSync()) {
-        final content = await historyFile.readAsString();
-        _history = List<Map<String, String>>.from(json.decode(content).map((i) => Map<String, String>.from(i)));
+      if (await historyFile.exists()) {
+        final decoded = jsonDecode(await historyFile.readAsString());
+        if (decoded is List) {
+          _history = decoded
+              .whereType<Map>()
+              .map((m) => m.map((k, v) => MapEntry(k.toString(), v.toString())))
+              .toList();
+        }
       }
+
       final bookmarksFile = File(p.join(dir.path, 'bookmarks.json'));
-      if (bookmarksFile.existsSync()) {
-        final content = await bookmarksFile.readAsString();
-        _bookmarks = List<Map<String, String>>.from(json.decode(content).map((i) => Map<String, String>.from(i)));
+      if (await bookmarksFile.exists()) {
+        final decoded = jsonDecode(await bookmarksFile.readAsString());
+        if (decoded is List) {
+          _bookmarks = decoded
+              .whereType<Map>()
+              .map((m) => m.map((k, v) => MapEntry(k.toString(), v.toString())))
+              .toList();
+        }
       }
+
       final settingsFile = File(p.join(dir.path, 'settings.json'));
-      if (settingsFile.existsSync()) {
-        final content = await settingsFile.readAsString();
-        final settings = json.decode(content);
-        setState(() {
-          _adBlockEnabled = settings['adBlockEnabled'] ?? false;
-        });
+      if (await settingsFile.exists()) {
+        final decoded = jsonDecode(await settingsFile.readAsString());
+        if (decoded is Map<String, dynamic>) {
+          _settings = BrowserSettings.fromJson(decoded);
+        }
       }
     } catch (e) {
-      debugPrint('Failed to load data: $e');
+      logger.w('Failed loading persisted browser data: $e');
     }
   }
 
-  Future<void> _saveData() async {
+  void _scheduleSaveData() {
+    _saveDebounce?.cancel();
+    _saveDebounce = Timer(const Duration(milliseconds: 500), () {
+      _writeDataToDisk();
+    });
+  }
+
+  Future<void> _writeDataToDisk() async {
     try {
-      final dir = await getApplicationSupportDirectory();
-      final historyFile = File(p.join(dir.path, 'history.json'));
-      await historyFile.writeAsString(json.encode(_history));
-      final bookmarksFile = File(p.join(dir.path, 'bookmarks.json'));
-      await bookmarksFile.writeAsString(json.encode(_bookmarks));
-      final settingsFile = File(p.join(dir.path, 'settings.json'));
-      await settingsFile.writeAsString(json.encode({'adBlockEnabled': _adBlockEnabled}));
+      final dir = await _dataDir();
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+      }
+      await Future.wait([
+        File(p.join(dir.path, 'history.json'))
+            .writeAsString(jsonEncode(_history)),
+        File(p.join(dir.path, 'bookmarks.json'))
+            .writeAsString(jsonEncode(_bookmarks)),
+        File(p.join(dir.path, 'settings.json'))
+            .writeAsString(jsonEncode(_settings.toJson())),
+      ]);
     } catch (e) {
-      debugPrint('Failed to save data: $e');
+      logger.w('Failed writing browser data: $e');
     }
   }
 
-  void _addNewTab({String? url}) {
-    final newUrl = url ?? 'https://start.duckduckgo.com';
-    logger.i('Adding new tab: $newUrl');
-    final newTab = BrowserTab(url: newUrl);
-    newTab.controller = _manager.createWebView();
-    
-    setState(() {
-      _tabs.add(newTab);
-      _currentTabIndex = _tabs.length - 1;
-      _urlController.text = newTab.url;
-    });
-    
-    Future.microtask(() {
-      if (mounted) {
-        _urlFocusNode.requestFocus();
-        _urlController.selection = TextSelection(baseOffset: 0, extentOffset: _urlController.text.length);
-      }
-    });
-
-    _setupTabListeners(newTab);
-    newTab.controller.initialize(newTab.url).then((_) {
-      if (mounted) setState(() => newTab.isReady = true);
-    });
+  Future<void> _syncAdBlockConfig() async {
+    if (!WebviewManager().value) return;
+    await WebviewManager().setAdBlockConfig(
+      enabled: _settings.adBlockEnabled,
+      blockedDomains: AdBlockEngine.blockedDomains,
+      whitelistHosts: _settings.adBlockWhitelist,
+    );
   }
 
-  void _setupTabListeners(BrowserTab tab) {
-    tab.controller.setWebviewListener(WebviewEventsListener(
-      onUrlChanged: (String url) {
-        if (!mounted) return;
-        setState(() {
-          // Strictly ignore about:blank during initialization to preserve the target URL
-          // Special handling for popups which start as about:blank but have a target URL coming
-          if (url != 'about:blank' || (tab.isReady && tab.url != 'about:blank')) {
-            tab.url = url;
-          }
-          logger.d('URL changed in tab ${tab.title}: $url');
-          if (_tabs.indexOf(tab) == _currentTabIndex) _urlController.text = tab.url;
-          tab.showPwaInstall = false;
-          tab.pwaIconUrl = null;
-          _startPwaCheck(tab);
-          if (_adBlockEnabled) tab.controller.executeJavaScript(AdBlockEngine.injectionScript);
-          _addToHistory(tab.title, url);
-        });
-      },
-      onTitleChanged: (String title) {
-        if (!mounted) return;
-        setState(() {
-          tab.title = title;
-          if (_tabs.indexOf(tab) == _currentTabIndex && widget.isAppMode) {
-            windowManager.setTitle(title);
-          }
-        });
-      },
-      onLoadStart: (WebViewController controller, String url) {
-        if (!mounted) return;
-        setState(() => tab.isLoading = true);
-        if (_adBlockEnabled) tab.controller.executeJavaScript(AdBlockEngine.injectionScript);
-      },
-      onLoadEnd: (WebViewController controller, String url) {
-        if (!mounted) return;
-        setState(() {
-          tab.isLoading = false;
-          _startPwaCheck(tab);
-          if (_adBlockEnabled) tab.controller.executeJavaScript(AdBlockEngine.injectionScript);
-        });
-      },
-      onDownloadStart: (String suggestedName, String url) {
-        if (!mounted) return;
-        DownloadManager().startDownload(suggestedName, url);
-        _showDownloadDropdown();
-      },
-      onDownloadUpdated: (String url, int received, int total, int percent, bool complete) {
-        if (!mounted) return;
-        DownloadManager().updateDownload(url, received, total, percent, complete);
-      },
-      onContextMenu: (int x, int y, int typeFlags, String linkUrl, String sourceUrl, String selectionText, bool isEditable) {
-        if (!mounted) return;
-        _showContextMenu(x, y, typeFlags, linkUrl, sourceUrl, selectionText, isEditable);
-      },
-      onConsoleMessage: (int level, String message, String source, int line) {
-        logger.d('WebView Console [$level] ($source:$line): $message');
-      },
-      onFileDialog: (int browserId, int callbackId) async {
-        try {
-          final result = await Process.run('fyrfiles', ['--picker']);
-          if (result.exitCode == 0) {
-          final output = result.stdout.toString().trim();
-          if (output.isNotEmpty) {
-            final paths = output.split('\n').where((p) => p.isNotEmpty).toList();
-            tab.controller.continueFileDialog(callbackId, paths);
-          } else {
-            tab.controller.continueFileDialog(callbackId, []);
-          }
-          } else {
-            tab.controller.continueFileDialog(callbackId, []);
-          }
-        } catch (e) {
-          debugPrint('Failed to run fyrfiles picker: $e');
-          tab.controller.continueFileDialog(callbackId, []);
-        }
-      },
-      onExternalProtocol: (String url) {
-        if (!mounted) return;
-        _showExternalProtocolPrompt(url);
-      },
-      onBeforePopup: (String targetUrl) {
-        // We now allow CEF to handle the popup natively offscreen.
-        // We handle the UI via WebviewManager().onPopupCreated
-      },
-      onClose: () {
-        if (!mounted) return;
-        setState(() {
-          int index = _tabs.indexOf(tab);
-          if (index != -1) {
-            _tabs.removeAt(index);
-            if (_tabs.isEmpty) {
-              _addNewTab();
-            } else {
-              _currentTabIndex = (_currentTabIndex >= _tabs.length) ? _tabs.length - 1 : _currentTabIndex;
-              _urlController.text = _tabs[_currentTabIndex].url;
-            }
-          }
-        });
-      },
-    ));
-    void setupChannels() {
-      if (tab.controller.value) {
-        tab.controller.setJavaScriptChannels({
-          JavascriptChannel(
-            name: 'FyrBrowser',
-            onMessageReceived: (JavascriptMessage message) {
-              if (!mounted) return;
-              try {
-                final data = json.decode(message.message);
-                if (data['type'] == 'pwa_detected') {
-                  setState(() {
-                    tab.showPwaInstall = true;
-                    tab.pwaIconUrl = data['icon'];
-                  });
-                }
-              } catch (_) {}
-            },
-          ),
-        });
-        if (_adBlockEnabled) tab.controller.executeJavaScript(AdBlockEngine.injectionScript);
-
-
-      } else {
-        tab.controller.addListener(() {
-          if (tab.controller.value) setupChannels();
-        });
-      }
-    }
-
-    setupChannels();
-  }
-
-  void _startPwaCheck(BrowserTab tab) {
-    if (widget.isAppMode) return;
-    // Debounce PWA checks to avoid task flooding during rapid navigation or redirects
-    final String targetUrl = tab.url;
-    Future.delayed(const Duration(seconds: 3), () {
-      if (mounted && tab.isReady && !tab.showPwaInstall && tab.url == targetUrl && !tab.isLoading) {
-        _checkPwaStatus(tab);
-      }
-    });
-  }
-
-  void _checkPwaStatus(BrowserTab tab) {
-    if (!tab.controller.value) return;
-    tab.controller.executeJavaScript('''
-      (function() {
-        if (window.top !== window.self) return; // Only run in main frame
-        
-        // Force crossOriginIsolated to true for BandLab audio engine
-        try {
-          if (!window.crossOriginIsolated) {
-            Object.defineProperty(window, 'crossOriginIsolated', {
-              value: true,
-              configurable: true
-            });
-          }
-        } catch (e) {}
-
-        const check = (fn) => { try { return fn(); } catch(e) { return false; } };
-        const features = {
-          crossOriginIsolated: window.crossOriginIsolated,
-          SharedArrayBuffer: check(() => typeof SharedArrayBuffer !== 'undefined'),
-          WebAssembly: check(() => typeof WebAssembly !== 'undefined'),
-          AudioContext: check(() => typeof AudioContext !== 'undefined'),
-          AudioWorklet: check(() => {
-             const ctx = new (window.AudioContext || window.webkitAudioContext)();
-             const hasWorklet = !!ctx.audioWorklet;
-             ctx.close();
-             return hasWorklet;
-          }),
-          OffscreenCanvas: check(() => typeof OffscreenCanvas !== 'undefined'),
-          WebGL: check(() => {
-            var canvas = document.createElement('canvas');
-            return !!(window.WebGLRenderingContext && (canvas.getContext('webgl') || canvas.getContext('experimental-webgl')));
-          }),
-        };
-        /* 
-        console.log('FyrBrowser [Features] Detected: ' + Object.entries(features).filter(([k,v]) => v).map(([k,v]) => k).join(', '));
-        console.log('FyrBrowser [Features] Missing: ' + Object.entries(features).filter(([k,v]) => !v).map(([k,v]) => k).join(', '));
-        */
-        
-        // Permission Query Polyfill (Bypass "Blocked" state)
-        if (navigator.permissions && navigator.permissions.query) {
-          const originalQuery = navigator.permissions.query;
-          navigator.permissions.query = function(params) {
-            if (params && (params.name === 'midi' || params.name === 'camera' || params.name === 'microphone')) {
-              return Promise.resolve({
-                state: 'granted',
-                onchange: null,
-                name: params.name
-              });
-            }
-            return originalQuery.call(navigator.permissions, params);
-          };
-        }
-
-        const getIcon = () => {
-          const appleTouch = document.querySelector('link[rel="apple-touch-icon"]');
-          if (appleTouch) return appleTouch.href;
-          const manifest = document.querySelector('link[rel="manifest"]');
-          const icons = document.querySelectorAll('link[rel="icon"]');
-          if (icons.length > 0) return icons[0].href;
-          return null;
-        };
-        const indicators = [
-          () => !!document.querySelector('link[rel="manifest"]'),
-          () => !!document.querySelector('link[rel="apple-touch-icon"]'),
-          () => 'serviceWorker' in navigator
-        ];
-        if (indicators.some(check => check())) {
-          const data = { type: 'pwa_detected', icon: getIcon() };
-          if (window.FyrBrowser) window.FyrBrowser.postMessage(JSON.stringify(data));
-        }
-      })();
-    ''');
+  bool _shouldBlockOnUrl(String url) {
+    if (!_settings.adBlockEnabled || isInternalUrl(url)) return false;
+    final host = AdBlockEngine.extractHost(url);
+    return host.isNotEmpty && !_settings.isHostWhitelisted(host);
   }
 
   void _addToHistory(String title, String url) {
-    if (url.startsWith('data:') || url.startsWith('blob:') || widget.isAppMode) return;
-    _history.insert(0, {'title': title, 'url': url, 'time': DateTime.now().toIso8601String()});
-    if (_history.length > 500) _history.removeLast();
-    _saveData();
+    if (url.isEmpty || isInternalUrl(url) || url.startsWith('about:')) return;
+    if (_history.isNotEmpty && _history.first['url'] == url) {
+      if (title.isNotEmpty && _history.first['title'] != title) {
+        _history.first['title'] = title;
+        _scheduleSaveData();
+      }
+      return;
+    }
+    _history.insert(0, {
+      'title': title.isNotEmpty ? title : url,
+      'url': url,
+      'timestamp': DateTime.now().toIso8601String(),
+    });
+    if (_history.length > 500) {
+      _history.removeRange(500, _history.length);
+    }
+    _scheduleSaveData();
+  }
+
+  bool _isBookmarked(String url) {
+    if (isInternalUrl(url)) return false;
+    return _bookmarks.any((b) => b['url'] == url);
+  }
+
+  void _toggleBookmark(BrowserTab tab) {
+    if (tab.isHomePage || tab.url.isEmpty) return;
+    setState(() {
+      final idx = _bookmarks.indexWhere((b) => b['url'] == tab.url);
+      if (idx >= 0) {
+        _bookmarks.removeAt(idx);
+      } else {
+        _bookmarks.insert(0, {
+          'title': tab.title.isNotEmpty ? tab.title : tab.url,
+          'url': tab.url,
+        });
+      }
+    });
+    _scheduleSaveData();
+  }
+
+  Future<void> _addNewTab({String? initialUrl}) async {
+    final target = (initialUrl ?? kFyrHomeUrl).trim();
+    final isHome = target == kFyrHomeUrl;
+    final controller = WebviewManager().createWebView();
+    final tab = BrowserTab(
+      id: 'tab_${_nextTabId++}',
+      controller: controller,
+      title: isHome ? 'New Tab' : target,
+      url: isHome ? kFyrHomeUrl : target,
+      isLoading: !isHome,
+    );
+
+    _bindTabListeners(tab);
+
+    setState(() {
+      _tabs.add(tab);
+      _activeTabIndex = _tabs.length - 1;
+    });
+    _syncUrlBarWithActiveTab();
+
+    await controller.initialize(isHome ? 'about:blank' : target);
+  }
+
+  void _bindTabListeners(BrowserTab tab) {
+    tab.controller.setWebviewListener(
+      WebviewEventsListener(
+        onTitleChanged: (title) {
+          if (!mounted || tab.isHomePage) return;
+          if (title.isEmpty || title == 'about:blank') return;
+          setState(() => tab.title = title);
+        },
+        onUrlChanged: (url) {
+          if (!mounted) return;
+          if (tab.isHomePage && url == 'about:blank') return;
+          setState(() => tab.url = url);
+          if (_activeTab?.id == tab.id && !_urlFocusNode.hasFocus) {
+            _urlController.text = tab.isHomePage ? '' : url;
+          }
+        },
+        onLoadStart: (controller, url) {
+          if (!mounted) return;
+          if (tab.isHomePage && url == 'about:blank') return;
+          setState(() {
+            tab.isLoading = true;
+            tab.loadError = null;
+            tab.url = url;
+          });
+          if (_activeTab?.id == tab.id && !_urlFocusNode.hasFocus) {
+            _urlController.text = url;
+          }
+        },
+        onLoadEnd: (controller, url) {
+          if (!mounted) return;
+          if (tab.isHomePage || url == 'about:blank') return;
+          setState(() => tab.isLoading = false);
+          _applyCosmeticAdBlock(tab, url);
+          _checkPwaStatus(tab);
+          _addToHistory(tab.title, url);
+        },
+        onLoadError: (controller, errorCode, errorText, failedUrl) {
+          // Ignore ERR_ABORTED (-3) from user Stop or fast redirects.
+          if (!mounted || errorCode == -3) return;
+          if (tab.isHomePage || failedUrl == 'about:blank') return;
+          setState(() {
+            tab.isLoading = false;
+            tab.loadError = LoadErrorInfo(
+              errorCode: errorCode,
+              errorText: errorText,
+              failedUrl: failedUrl,
+            );
+          });
+        },
+        onLoadingStateChanged: (isLoading, canGoBack, canGoForward) {
+          if (!mounted || tab.isHomePage) return;
+          setState(() {
+            tab.isLoading = isLoading;
+            tab.canGoBack = canGoBack;
+            tab.canGoForward = canGoForward;
+          });
+        },
+        onFindResult: (count, activeMatchOrdinal, finalUpdate) {
+          if (!mounted || _activeTab?.id != tab.id) return;
+          setState(() {
+            _findMatchCount = count;
+            _findActiveOrdinal = activeMatchOrdinal;
+          });
+        },
+        onAdBlocked: (totalCount) {
+          if (!mounted) return;
+          setState(() => tab.blockedCount = totalCount);
+        },
+        onBeforePopup: (targetUrl) {
+          if (!mounted || targetUrl.isEmpty) return;
+          _addNewTab(initialUrl: targetUrl);
+        },
+        onExternalProtocol: (url) async {
+          final uri = Uri.tryParse(url);
+          if (uri != null && await canLaunchUrl(uri)) {
+            await launchUrl(uri);
+          }
+        },
+        onDownloadStart: (suggestedName, url) {
+          if (!mounted) return;
+          DownloadManager().startDownload(suggestedName, url);
+          setState(() {});
+        },
+        onDownloadUpdated:
+            (url, receivedBytes, totalBytes, percent, isComplete) {
+          if (!mounted) return;
+          DownloadManager().updateDownload(
+            url,
+            receivedBytes,
+            totalBytes,
+            percent,
+            isComplete,
+          );
+          setState(() {});
+        },
+        onContextMenu:
+            (x, y, typeFlags, linkUrl, sourceUrl, selectionText, isEditable) {
+          _showWebContextMenu(
+            tab: tab,
+            x: x.toDouble(),
+            y: y.toDouble(),
+            linkUrl: linkUrl,
+            selectionText: selectionText,
+          );
+        },
+        onFileDialog: (browserId, callbackId) async {
+          await _handleFileDialog(callbackId);
+        },
+        onClose: () {
+          if (!mounted) return;
+          final idx = _tabs.indexOf(tab);
+          if (idx >= 0) _closeTab(idx);
+        },
+      ),
+    );
+  }
+
+  Future<void> _handleFileDialog(int callbackId) async {
+    List<String> files = [];
+    try {
+      final result = await Process.run('zenity', ['--file-selection']);
+      if (result.exitCode == 0) {
+        final chosen = result.stdout.toString().trim();
+        if (chosen.isNotEmpty) files = [chosen];
+      }
+    } catch (_) {}
+    await WebviewManager()
+        .pluginChannel
+        .invokeMethod('continueFileDialog', [callbackId, files]);
+  }
+
+  Future<void> _applyCosmeticAdBlock(BrowserTab tab, String url) async {
+    final script = _shouldBlockOnUrl(url)
+        ? AdBlockEngine.cosmeticCssScript
+        : AdBlockEngine.removeCosmeticCssScript;
+    await tab.controller.executeJavaScript(script);
+  }
+
+  Future<void> _checkPwaStatus(BrowserTab tab) async {
+    try {
+      final raw = await tab.controller.evaluateJavascript('''
+        (function() {
+          var m = document.querySelector('link[rel="manifest"]');
+          var appleIcon = document.querySelector('link[rel="apple-touch-icon"]');
+          var icon = document.querySelector('link[rel*="icon"]');
+          return JSON.stringify({
+            hasManifest: !!m,
+            icon: (appleIcon && appleIcon.href) || (icon && icon.href) || null
+          });
+        })();
+      ''');
+      if (!mounted || raw is! String || raw.isEmpty) return;
+      final data = jsonDecode(raw);
+      if (data is Map) {
+        setState(() {
+          tab.isPwa = data['hasManifest'] == true;
+          final icon = data['icon'];
+          if (icon is String && icon.isNotEmpty) {
+            tab.faviconUrl = icon;
+          }
+        });
+      }
+    } catch (_) {}
   }
 
   void _closeTab(int index) {
-    if (_tabs.length <= 1) {
-      windowManager.close();
+    if (index < 0 || index >= _tabs.length) return;
+    if (_tabs.length == 1) {
+      _navigateActiveTabTo(kFyrHomeUrl);
       return;
     }
+
+    final closing = _tabs[index];
+    if (!closing.isHomePage && closing.url.isNotEmpty) {
+      _closedTabUrls.add(closing.url);
+      if (_closedTabUrls.length > 20) _closedTabUrls.removeAt(0);
+    }
+
     setState(() {
       _tabs.removeAt(index);
-      if (_currentTabIndex >= _tabs.length) _currentTabIndex = _tabs.length - 1;
-      _urlController.text = _tabs[_currentTabIndex].url;
+      if (_activeTabIndex >= _tabs.length) {
+        _activeTabIndex = _tabs.length - 1;
+      } else if (_activeTabIndex > index) {
+        _activeTabIndex--;
+      }
+    });
+    closing.controller.dispose();
+    _syncUrlBarWithActiveTab();
+  }
+
+  void _selectTab(int index) {
+    if (index < 0 || index >= _tabs.length) return;
+    setState(() => _activeTabIndex = index);
+    _syncUrlBarWithActiveTab();
+  }
+
+  void _syncUrlBarWithActiveTab() {
+    final tab = _activeTab;
+    if (tab == null) return;
+    _urlController.text = tab.isHomePage ? '' : tab.url;
+  }
+
+  Future<void> _navigateActiveTabTo(String rawInput) async {
+    final tab = _activeTab;
+    if (tab == null) return;
+
+    final resolved = resolveNavigationInput(rawInput, _settings.searchEngine);
+    _urlFocusNode.unfocus();
+    _removeAutocompleteOverlay();
+
+    if (resolved == kFyrHomeUrl) {
+      await tab.controller.stopLoad();
+      await tab.controller.loadUrl('about:blank');
+      setState(() {
+        tab.url = kFyrHomeUrl;
+        tab.title = 'New Tab';
+        tab.isLoading = false;
+        tab.loadError = null;
+        tab.isPwa = false;
+        tab.blockedCount = 0;
+      });
+      _urlController.text = '';
+      return;
+    }
+
+    setState(() {
+      tab.url = resolved;
+      tab.loadError = null;
+      tab.isLoading = true;
+    });
+    _urlController.text = resolved;
+    await tab.controller.loadUrl(resolved);
+  }
+
+  Future<void> _reloadOrStop() async {
+    final tab = _activeTab;
+    if (tab == null) return;
+    if (tab.isHomePage) return;
+
+    if (tab.isLoading) {
+      await tab.controller.stopLoad();
+      setState(() => tab.isLoading = false);
+      return;
+    }
+
+    if (tab.loadError != null) {
+      final retryUrl = tab.loadError!.failedUrl;
+      setState(() {
+        tab.loadError = null;
+        tab.isLoading = true;
+      });
+      await tab.controller.loadUrl(retryUrl);
+      return;
+    }
+
+    await tab.controller.reload();
+  }
+
+  Future<void> _adjustZoom(double delta) async {
+    final tab = _activeTab;
+    if (tab == null || tab.isHomePage) return;
+    final next = (tab.zoomLevel + delta).clamp(-3.0, 5.0);
+    setState(() => tab.zoomLevel = next);
+    await tab.controller.setZoomLevel(next);
+  }
+
+  Future<void> _resetZoom() async {
+    final tab = _activeTab;
+    if (tab == null || tab.isHomePage) return;
+    setState(() => tab.zoomLevel = 0.0);
+    await tab.controller.setZoomLevel(0.0);
+  }
+
+  String _zoomLabel(double zoomLevel) {
+    final pct = (100 + zoomLevel * 20).round();
+    return '$pct%';
+  }
+
+  void _openFindBar() {
+    if (_activeTab?.isHomePage ?? true) return;
+    setState(() => _showFindBar = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _findFocusNode.requestFocus();
+      _findController.selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: _findController.text.length,
+      );
     });
   }
 
-  void _handleKeyEvent(KeyEvent event) {
-    if (event is KeyDownEvent) {
-      final isControl = HardwareKeyboard.instance.isControlPressed;
-      if (isControl && event.logicalKey == LogicalKeyboardKey.keyT) {
+  void _closeFindBar() {
+    setState(() {
+      _showFindBar = false;
+      _findMatchCount = 0;
+      _findActiveOrdinal = 0;
+    });
+    _activeTab?.controller.stopFinding();
+  }
+
+  void _runFind({bool forward = true, bool findNext = false}) {
+    final tab = _activeTab;
+    if (tab == null || tab.isHomePage) return;
+    final query = _findController.text;
+    if (query.isEmpty) {
+      tab.controller.stopFinding();
+      setState(() {
+        _findMatchCount = 0;
+        _findActiveOrdinal = 0;
+      });
+      return;
+    }
+    tab.controller.findInPage(query, forward: forward, findNext: findNext);
+  }
+
+  bool _handleGlobalKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent) return false;
+    final key = event.logicalKey;
+    final ctrl = HardwareKeyboard.instance.isControlPressed;
+    final shift = HardwareKeyboard.instance.isShiftPressed;
+
+    if (key == LogicalKeyboardKey.f5) {
+      _reloadOrStop();
+      return true;
+    }
+    if (key == LogicalKeyboardKey.escape && _showFindBar) {
+      _closeFindBar();
+      return true;
+    }
+    if (!ctrl) return false;
+
+    if (key == LogicalKeyboardKey.keyR) {
+      if (_activeTab?.isLoading == false) _reloadOrStop();
+      return true;
+    }
+    if (key == LogicalKeyboardKey.keyT) {
+      if (shift && _closedTabUrls.isNotEmpty) {
+        _addNewTab(initialUrl: _closedTabUrls.removeLast());
+      } else {
         _addNewTab();
-      } else if (isControl && event.logicalKey == LogicalKeyboardKey.keyW) {
-        _closeTab(_currentTabIndex);
-      } else if (isControl && event.logicalKey == LogicalKeyboardKey.tab) {
-        setState(() {
-          _currentTabIndex = (_currentTabIndex + 1) % _tabs.length;
-          _urlController.text = _tabs[_currentTabIndex].url;
-        });
-      } else if (isControl && event.logicalKey == LogicalKeyboardKey.keyR) {
-        _tabs[_currentTabIndex].controller.reload();
-      } else if (event.logicalKey == LogicalKeyboardKey.f5) {
-        _tabs[_currentTabIndex].controller.reload();
-      } else if (isControl && event.logicalKey == LogicalKeyboardKey.keyL) {
-        FocusScope.of(context).requestFocus(_urlFocusNode);
+      }
+      return true;
+    }
+    if (key == LogicalKeyboardKey.keyW) {
+      _closeTab(_activeTabIndex);
+      return true;
+    }
+    if (key == LogicalKeyboardKey.keyL) {
+      _urlFocusNode.requestFocus();
+      _urlController.selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: _urlController.text.length,
+      );
+      return true;
+    }
+    if (key == LogicalKeyboardKey.keyF) {
+      _openFindBar();
+      return true;
+    }
+    if (key == LogicalKeyboardKey.equal ||
+        key == LogicalKeyboardKey.numpadAdd) {
+      _adjustZoom(0.5);
+      return true;
+    }
+    if (key == LogicalKeyboardKey.minus ||
+        key == LogicalKeyboardKey.numpadSubtract) {
+      _adjustZoom(-0.5);
+      return true;
+    }
+    if (key == LogicalKeyboardKey.digit0 ||
+        key == LogicalKeyboardKey.numpad0) {
+      _resetZoom();
+      return true;
+    }
+    if (key == LogicalKeyboardKey.tab && _tabs.length > 1) {
+      final delta = shift ? -1 : 1;
+      _selectTab((_activeTabIndex + delta + _tabs.length) % _tabs.length);
+      return true;
+    }
+    return false;
+  }
+
+  void _onUrlFocusChanged() {
+    if (_urlFocusNode.hasFocus) {
+      _urlController.selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: _urlController.text.length,
+      );
+      _updateAutocompleteOverlay();
+    } else {
+      _removeAutocompleteOverlay();
+      final tab = _activeTab;
+      if (tab != null) {
+        _urlController.text = tab.isHomePage ? '' : tab.url;
       }
     }
   }
 
-  Widget _buildTrafficLight(Color color, VoidCallback onTap) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          width: 12, height: 12,
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle, border: Border.all(color: Colors.black26, width: 0.5)),
-        ),
-      ),
-    );
+  void _onUrlTextChanged() {
+    if (_urlFocusNode.hasFocus) {
+      _updateAutocompleteOverlay();
+    }
   }
 
-  Widget _buildTab(int index) {
-    final tab = _tabs[index];
-    final bool isSelected = index == _currentTabIndex;
-    return GestureDetector(
-      onTap: () => setState(() {
-        _currentTabIndex = index;
-        _urlController.text = tab.url;
-      }),
-      child: Container(
-        height: 34,
-        margin: const EdgeInsets.only(right: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        decoration: BoxDecoration(
-          color: isSelected ? FyrTheme.bgColor : Colors.transparent,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(10)),
-          border: isSelected ? Border(
-            left: BorderSide(color: FyrTheme.dividerColor),
-            right: BorderSide(color: FyrTheme.dividerColor),
-            top: BorderSide(color: FyrTheme.dividerColor),
-          ) : null,
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (tab.isLoading)
-              const Padding(
-                padding: EdgeInsets.only(right: 8.0),
-                child: SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2)),
+  List<Map<String, String>> _buildSuggestions(String query) {
+    final q = query.trim().toLowerCase();
+    if (q.isEmpty) return const [];
+    final seen = <String>{};
+    final results = <Map<String, String>>[];
+    for (final list in [_bookmarks, _history]) {
+      for (final item in list) {
+        final url = item['url'] ?? '';
+        final title = item['title'] ?? '';
+        if (url.isEmpty || isInternalUrl(url) || seen.contains(url)) continue;
+        if (url.toLowerCase().contains(q) ||
+            title.toLowerCase().contains(q)) {
+          seen.add(url);
+          results.add({'title': title, 'url': url});
+          if (results.length >= 6) return results;
+        }
+      }
+    }
+    return results;
+  }
+
+  void _updateAutocompleteOverlay() {
+    _removeAutocompleteOverlay();
+    if (!_urlFocusNode.hasFocus) return;
+    final suggestions = _buildSuggestions(_urlController.text);
+    if (suggestions.isEmpty) return;
+
+    final overlay = Overlay.of(context);
+    _autocompleteOverlay = OverlayEntry(
+      builder: (context) => Positioned(
+        width: 520,
+        child: CompositedTransformFollower(
+          link: _urlBarLink,
+          showWhenUnlinked: false,
+          offset: const Offset(0, 38),
+          child: Material(
+            elevation: 8,
+            color: FyrTheme.bgColor,
+            borderRadius: BorderRadius.circular(10),
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: FyrTheme.dividerColor.withValues(alpha: 0.35),
+                ),
               ),
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 120),
-              child: Text(tab.title, style: TextStyle(color: FyrTheme.textColor, fontSize: 12), overflow: TextOverflow.ellipsis),
-            ),
-            const SizedBox(width: 8),
-            GestureDetector(onTap: () => _closeTab(index), child: Icon(Icons.close, size: 14, color: FyrTheme.textColor.withOpacity(0.5))),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showSettingsMenu() {
-    showDialog(
-      context: context,
-      builder: (context) {
-        return Center(
-          child: Container(
-            width: 500, height: 600,
-            margin: const EdgeInsets.all(32),
-            decoration: BoxDecoration(
-              color: FyrTheme.bgColor,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: FyrTheme.dividerColor),
-              boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 20, spreadRadius: 5)],
-            ),
-            child: Material(
-              color: Colors.transparent,
-              child: DefaultTabController(
-                length: 2,
-                child: Column(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.all(16.0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: suggestions.map((s) {
+                  final url = s['url'] ?? '';
+                  final title = (s['title'] ?? '').trim();
+                  return InkWell(
+                    onTap: () => _navigateActiveTabTo(url),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 8),
                       child: Row(
                         children: [
-                          Icon(Icons.settings, color: FyrTheme.accentColor),
-                          const SizedBox(width: 12),
-                          Text('Settings & Tools', style: TextStyle(color: FyrTheme.textColor, fontSize: 18, fontWeight: FontWeight.bold)),
-                          const Spacer(),
-                          IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context)),
+                          Icon(
+                            Icons.public,
+                            size: 14,
+                            color: FyrTheme.textColor.withValues(alpha: 0.55),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              title.isNotEmpty ? title : url,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: FyrTheme.textColor,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: Text(
+                              url,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: FyrTheme.accentColor,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ),
                         ],
                       ),
                     ),
-                    TabBar(
-                      labelColor: FyrTheme.accentColor,
-                      unselectedLabelColor: FyrTheme.textColor.withOpacity(0.5),
-                      indicatorColor: FyrTheme.accentColor,
-                      tabs: const [Tab(text: 'History'), Tab(text: 'Bookmarks')],
-                    ),
-                    Expanded(child: TabBarView(children: [_buildHistoryList(), _buildBookmarkList()])),
-                  ],
-                ),
+                  );
+                }).toList(),
               ),
             ),
           ),
-        );
-      },
+        ),
+      ),
     );
+    overlay.insert(_autocompleteOverlay!);
   }
 
-  Widget _buildHistoryList() {
-    return ListView.builder(
-      itemCount: _history.length,
-      itemBuilder: (context, index) {
-        final item = _history[index];
-        return ListTile(
-          leading: const Icon(Icons.history, size: 18),
-          title: Text(item['title'] ?? 'No Title', style: TextStyle(color: FyrTheme.textColor, fontSize: 14)),
-          subtitle: Text(item['url'] ?? '', style: TextStyle(color: FyrTheme.textColor.withOpacity(0.5), fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
-          onTap: () { Navigator.pop(context); _tabs[_currentTabIndex].controller.loadUrl(item['url']!); },
-        );
-      },
-    );
+  void _removeAutocompleteOverlay() {
+    _autocompleteOverlay?.remove();
+    _autocompleteOverlay = null;
   }
 
-  Widget _buildBookmarkList() {
-    return ListView.builder(
-      itemCount: _bookmarks.length,
-      itemBuilder: (context, index) {
-        final item = _bookmarks[index];
-        return ListTile(
-          leading: const Icon(Icons.star, size: 18, color: Colors.orangeAccent),
-          title: Text(item['title'] ?? 'No Title', style: TextStyle(color: FyrTheme.textColor, fontSize: 14)),
-          subtitle: Text(item['url'] ?? '', style: TextStyle(color: FyrTheme.textColor.withOpacity(0.5), fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
-          onTap: () { Navigator.pop(context); _tabs[_currentTabIndex].controller.loadUrl(item['url']!); },
-        );
-      },
-    );
-  }
-
-  final LayerLink _downloadLink = LayerLink();
-  OverlayEntry? _downloadOverlay;
-
-  void _showDownloadDropdown() {
-    _downloadOverlay?.remove();
-    _downloadOverlay = _createDownloadOverlay();
-    Overlay.of(context).insert(_downloadOverlay!);
-  }
-
-  OverlayEntry _createDownloadOverlay() {
-    return OverlayEntry(
-      builder: (context) => Stack(
-        children: [
-          GestureDetector(
-            onTap: () { _downloadOverlay?.remove(); _downloadOverlay = null; },
-            child: Container(color: Colors.transparent),
+  Future<void> _showWebContextMenu({
+    required BrowserTab tab,
+    required double x,
+    required double y,
+    required String linkUrl,
+    required String selectionText,
+  }) async {
+    if (!mounted) return;
+    final action = await showMenu<String>(
+      context: context,
+      color: FyrTheme.bgColor,
+      position: RelativeRect.fromLTRB(x, y + 84, x + 1, y + 85),
+      items: [
+        PopupMenuItem(
+          enabled: tab.canGoBack,
+          value: 'back',
+          child: const Text('Back'),
+        ),
+        PopupMenuItem(
+          enabled: tab.canGoForward,
+          value: 'forward',
+          child: const Text('Forward'),
+        ),
+        const PopupMenuItem(value: 'reload', child: Text('Reload')),
+        if (linkUrl.isNotEmpty) ...[
+          const PopupMenuDivider(),
+          const PopupMenuItem(
+            value: 'open_link_tab',
+            child: Text('Open Link in New Tab'),
           ),
-          Positioned(
-            width: 350,
-            child: CompositedTransformFollower(
-              link: _downloadLink,
-              showWhenUnlinked: false,
-              offset: const Offset(-310, 45),
-              child: Material(
-                color: Colors.transparent,
-                child: Container(
-                  height: 400,
-                  decoration: BoxDecoration(
-                    color: FyrTheme.bgColor,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: FyrTheme.dividerColor),
-                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 10, spreadRadius: 2)],
-                  ),
-                  child: Column(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: Row(
-                          children: [
-                            Text('Downloads', style: TextStyle(color: FyrTheme.textColor, fontSize: 16, fontWeight: FontWeight.bold)),
-                            const Spacer(),
-                            TextButton(
-                              onPressed: () { DownloadManager().clearHistory(); setState(() {}); },
-                              child: Text('Clear', style: TextStyle(color: FyrTheme.accentColor, fontSize: 12)),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Divider(height: 1, color: FyrTheme.dividerColor),
-                      Expanded(
-                        child: ListenableBuilder(
-                          listenable: DownloadManager(),
-                          builder: (context, _) {
-                            final tasks = DownloadManager().tasks;
-                            if (tasks.isEmpty) {
-                              return Center(child: Text('No downloads', style: TextStyle(color: FyrTheme.textColor.withOpacity(0.5))));
-                            }
-                            return ListView.builder(
-                              itemCount: tasks.length,
-                              itemBuilder: (context, index) {
-                                final task = tasks[index];
-                                return ListenableBuilder(
-                                  listenable: task,
-                                  builder: (context, _) {
-                                    return ListTile(
-                                      leading: Icon(
-                                        task.isComplete ? Icons.insert_drive_file : Icons.downloading,
-                                        color: task.isComplete ? Colors.greenAccent : FyrTheme.accentColor,
-                                      ),
-                                      title: Text(task.suggestedName, style: TextStyle(color: FyrTheme.textColor, fontSize: 13), overflow: TextOverflow.ellipsis),
-                                      subtitle: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          if (!task.isComplete) ...[
-                                            const SizedBox(height: 4),
-                                            LinearProgressIndicator(value: task.progress / 100, backgroundColor: Colors.grey.withOpacity(0.2), color: FyrTheme.accentColor, minHeight: 2),
-                                            const SizedBox(height: 4),
-                                            Text('${task.progress}% - ${task.suggestedName}', style: TextStyle(color: FyrTheme.textColor.withOpacity(0.5), fontSize: 10)),
-                                          ] else ...[
-                                            Text(DateFormat('MMM d, HH:mm').format(task.startTime), style: TextStyle(color: FyrTheme.textColor.withOpacity(0.5), fontSize: 10)),
-                                          ]
-                                        ],
-                                      ),
-                                      onTap: () async {
-                                        if (task.savePath != null) {
-                                          final file = File(task.savePath!);
-                                          if (await file.exists()) {
-                                            Process.run('fyrfiles', [p.dirname(task.savePath!)]);
-                                          } else {
-                                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('File not found')));
-                                          }
-                                        }
-                                      },
-                                    );
-                                  },
-                                );
-                              },
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
+          const PopupMenuItem(
+            value: 'copy_link',
+            child: Text('Copy Link Address'),
           ),
         ],
+        if (selectionText.isNotEmpty)
+          const PopupMenuItem(value: 'copy_text', child: Text('Copy')),
+        const PopupMenuDivider(),
+        const PopupMenuItem(value: 'devtools', child: Text('Inspect Element')),
+      ],
+    );
+
+    if (!mounted || action == null) return;
+    switch (action) {
+      case 'back':
+        tab.controller.goBack();
+        break;
+      case 'forward':
+        tab.controller.goForward();
+        break;
+      case 'reload':
+        tab.controller.reload();
+        break;
+      case 'open_link_tab':
+        _addNewTab(initialUrl: linkUrl);
+        break;
+      case 'copy_link':
+        Clipboard.setData(ClipboardData(text: linkUrl));
+        break;
+      case 'copy_text':
+        Clipboard.setData(ClipboardData(text: selectionText));
+        break;
+      case 'devtools':
+        tab.controller.openDevTools();
+        break;
+    }
+  }
+
+  void _openSettingsModal({int initialTab = 0}) {
+    showDialog<void>(
+      context: context,
+      builder: (context) => SettingsDialog(
+        settings: _settings,
+        history: _history,
+        bookmarks: _bookmarks,
+        initialTab: initialTab,
+        onSettingsChanged: (updated) {
+          setState(() => _settings = updated);
+          _syncAdBlockConfig();
+          _scheduleSaveData();
+          final tab = _activeTab;
+          if (tab != null && !tab.isHomePage) {
+            _applyCosmeticAdBlock(tab, tab.url);
+          }
+        },
+        onNavigate: (url) => _navigateActiveTabTo(url),
+        onRemoveBookmark: (url) {
+          setState(() => _bookmarks.removeWhere((b) => b['url'] == url));
+          _scheduleSaveData();
+        },
+        onClearHistory: () {
+          setState(() => _history.clear());
+          _scheduleSaveData();
+        },
       ),
     );
   }
 
-  void _toggleBookmark() {
-    final url = _urlController.text;
-    final existing = _bookmarks.indexWhere((b) => b['url'] == url);
-    setState(() {
-      if (existing != -1) _bookmarks.removeAt(existing);
-      else _bookmarks.add({'title': _tabs[_currentTabIndex].title, 'url': url});
-    });
-    _saveData();
-  }
-
-  void _showContextMenu(int x, int y, int typeFlags, String linkUrl, String sourceUrl, String selectionText, bool isEditable) {
-    final RenderBox overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-    final RelativeRect position = RelativeRect.fromLTRB(
-      x.toDouble(),
-      y.toDouble() + (widget.isAppMode ? 34 : 100), // Adjust for header height
-      overlay.size.width - x.toDouble(),
-      overlay.size.height - y.toDouble(),
-    );
-
-    final tab = _tabs[_currentTabIndex];
-
-    showMenu(
-      context: context,
-      position: position,
-      color: FyrTheme.bgColor,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: FyrTheme.dividerColor)),
-      items: <PopupMenuEntry<String>>[
-        PopupMenuItem(
-          value: 'back',
-          child: _buildMenuItem(Icons.arrow_back, 'Back'),
-          enabled: true,
-        ),
-        PopupMenuItem(
-          value: 'forward',
-          child: _buildMenuItem(Icons.arrow_forward, 'Forward'),
-          enabled: true,
-        ),
-        PopupMenuItem(
-          value: 'reload',
-          child: _buildMenuItem(Icons.refresh, 'Reload'),
-        ),
-        const PopupMenuDivider(),
-        if (selectionText.isNotEmpty)
-          PopupMenuItem(
-            value: 'copy',
-            child: _buildMenuItem(Icons.copy, 'Copy'),
-          ),
-        if (isEditable)
-          PopupMenuItem(
-            value: 'paste',
-            child: _buildMenuItem(Icons.paste, 'Paste'),
-          ),
-        if (linkUrl.isNotEmpty) ...[
-          const PopupMenuDivider(),
-          PopupMenuItem(
-            value: 'open_link',
-            child: _buildMenuItem(Icons.open_in_new, 'Open Link in New Tab'),
-          ),
-          PopupMenuItem(
-            value: 'copy_link',
-            child: _buildMenuItem(Icons.link, 'Copy Link Address'),
-          ),
-        ],
-        if (sourceUrl.isNotEmpty && (typeFlags & 8 != 0)) ...[
-          const PopupMenuDivider(),
-          PopupMenuItem(
-            value: 'download_image',
-            child: _buildMenuItem(Icons.image_outlined, 'Download Image'),
-          ),
-          PopupMenuItem(
-            value: 'copy_image_url',
-            child: _buildMenuItem(Icons.link, 'Copy Image Address'),
-          ),
-        ],
-        const PopupMenuDivider(),
-        PopupMenuItem(
-          value: 'inspect',
-          child: _buildMenuItem(Icons.code, 'Inspect Element'),
-        ),
-      ],
-    ).then((value) {
-      if (value == null) return;
-      switch (value) {
-        case 'back': tab.controller.goBack(); break;
-        case 'forward': tab.controller.goForward(); break;
-        case 'reload': tab.controller.reload(); break;
-        case 'copy': Clipboard.setData(ClipboardData(text: selectionText)); break;
-        case 'paste': 
-          Clipboard.getData(Clipboard.kTextPlain).then((data) {
-            if (data?.text != null) {
-              // This is a bit complex in CEF, usually we'd send a paste command
-              tab.controller.executeJavaScript("document.execCommand('paste')");
-            }
-          });
-          break;
-        case 'open_link': _addNewTab(url: linkUrl); break;
-        case 'copy_link': Clipboard.setData(ClipboardData(text: linkUrl)); break;
-        case 'download_image':
-          tab.controller.executeJavaScript("""
-            var link = document.createElement('a');
-            link.href = '$sourceUrl';
-            link.download = '';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-          """);
-          break;
-        case 'copy_image_url': Clipboard.setData(ClipboardData(text: sourceUrl)); break;
-        case 'inspect': tab.controller.openDevTools(); break;
-      }
-    });
-  }
-
-  void _showExternalProtocolPrompt(String url) {
-    showDialog(
+  void _showDownloadsDialog() {
+    showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: FyrTheme.bgColor,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: BorderSide(color: FyrTheme.dividerColor)),
-        title: Text('Open External Application?', style: TextStyle(color: FyrTheme.textColor)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('A website wants to open an external application for:', style: TextStyle(color: FyrTheme.textColor.withOpacity(0.7), fontSize: 14)),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(color: Colors.black26, borderRadius: BorderRadius.circular(8)),
-              child: Text(url, style: TextStyle(color: FyrTheme.accentColor, fontSize: 12, fontFamily: 'monospace')),
-            ),
-          ],
+        title: Text('Downloads', style: TextStyle(color: FyrTheme.textColor)),
+        content: SizedBox(
+          width: 420,
+          height: 280,
+          child: DownloadManager().tasks.isEmpty
+              ? Center(
+                  child: Text(
+                    'No downloads yet.',
+                    style: TextStyle(
+                      color: FyrTheme.textColor.withValues(alpha: 0.55),
+                    ),
+                  ),
+                )
+              : ListView.builder(
+                  itemCount: DownloadManager().tasks.length,
+                  itemBuilder: (context, index) {
+                    final task = DownloadManager().tasks[index];
+                    return ListTile(
+                      dense: true,
+                      title: Text(
+                        task.suggestedName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: FyrTheme.textColor, fontSize: 13),
+                      ),
+                      subtitle: Text(
+                        task.isComplete
+                            ? 'Completed (~/Downloads)'
+                            : '${task.progress}%',
+                        style: TextStyle(
+                          color: FyrTheme.textColor.withValues(alpha: 0.6),
+                          fontSize: 11,
+                        ),
+                      ),
+                    );
+                  },
+                ),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Cancel', style: TextStyle(color: FyrTheme.textColor.withOpacity(0.5))),
-          ),
-          ElevatedButton(
             onPressed: () {
-              Navigator.pop(context);
-              Process.run('xdg-open', [url]);
+              DownloadManager().clearHistory();
+              Navigator.of(context).pop();
+              setState(() {});
             },
-            style: ElevatedButton.styleFrom(backgroundColor: FyrTheme.accentColor, foregroundColor: Colors.white),
-            child: const Text('Open'),
+            child: const Text('Clear'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildMenuItem(IconData icon, String label) {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: FyrTheme.bgColor,
+      body: Column(
+        children: [
+          if (!widget.isAppMode) ...[
+            _buildTabStrip(),
+            _buildToolbar(),
+          ],
+          if (_showFindBar) _buildFindBar(),
+          Expanded(child: _buildViewport()),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTabStrip() {
+    return Container(
+      height: 38,
+      color: FyrTheme.bgColor,
+      padding: const EdgeInsets.only(left: 8, right: 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Row(
+              children: [
+                Flexible(
+                  child: ListView.builder(
+                    scrollDirection: Axis.horizontal,
+                    shrinkWrap: true,
+                    itemCount: _tabs.length,
+                    itemBuilder: (context, index) => _buildTabChip(index),
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => _addNewTab(),
+                  tooltip: 'New Tab (Ctrl+T)',
+                  iconSize: 16,
+                  padding: EdgeInsets.zero,
+                  constraints:
+                      const BoxConstraints(minWidth: 30, minHeight: 30),
+                  icon: Icon(
+                    Icons.add,
+                    color: FyrTheme.textColor.withValues(alpha: 0.75),
+                  ),
+                ),
+                const Expanded(
+                  child: DragToMoveArea(child: SizedBox.expand()),
+                ),
+              ],
+            ),
+          ),
+          _buildWindowControls(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTabChip(int index) {
+    final tab = _tabs[index];
+    final active = index == _activeTabIndex;
+    return GestureDetector(
+      key: ValueKey(tab.id),
+      onTap: () => _selectTab(index),
+      child: Container(
+        constraints: const BoxConstraints(minWidth: 110, maxWidth: 200),
+        margin: const EdgeInsets.only(top: 5, right: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        decoration: BoxDecoration(
+          color: active
+              ? FyrTheme.textColor.withValues(alpha: 0.1)
+              : FyrTheme.textColor.withValues(alpha: 0.03),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
+          border: active
+              ? Border(
+                  top: BorderSide(color: FyrTheme.accentColor, width: 2),
+                )
+              : null,
+        ),
+        child: Row(
+          children: [
+            if (tab.isLoading)
+              SizedBox(
+                width: 12,
+                height: 12,
+                child: CircularProgressIndicator(
+                  strokeWidth: 1.8,
+                  color: FyrTheme.accentColor,
+                ),
+              )
+            else
+              Icon(
+                tab.isHomePage ? Icons.home_outlined : Icons.public,
+                size: 13,
+                color: FyrTheme.textColor.withValues(alpha: 0.65),
+              ),
+            const SizedBox(width: 7),
+            Expanded(
+              child: Text(
+                tab.title.isNotEmpty ? tab.title : tab.url,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: active
+                      ? FyrTheme.textColor
+                      : FyrTheme.textColor.withValues(alpha: 0.68),
+                  fontSize: 12,
+                ),
+              ),
+            ),
+            InkWell(
+              onTap: () => _closeTab(index),
+              borderRadius: BorderRadius.circular(10),
+              child: Padding(
+                padding: const EdgeInsets.all(2),
+                child: Icon(
+                  Icons.close,
+                  size: 13,
+                  color: FyrTheme.textColor.withValues(alpha: 0.55),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWindowControls() {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 18, color: FyrTheme.textColor.withOpacity(0.7)),
-        const SizedBox(width: 12),
-        Text(label, style: TextStyle(color: FyrTheme.textColor, fontSize: 13)),
+        IconButton(
+          onPressed: () => windowManager.minimize(),
+          iconSize: 15,
+          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+          icon: Icon(Icons.remove, color: FyrTheme.textColor.withValues(alpha: 0.75)),
+        ),
+        IconButton(
+          onPressed: () async {
+            if (await windowManager.isMaximized()) {
+              await windowManager.unmaximize();
+            } else {
+              await windowManager.maximize();
+            }
+          },
+          iconSize: 14,
+          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+          icon: Icon(
+            _isMaximized ? Icons.filter_none : Icons.crop_square,
+            color: FyrTheme.textColor.withValues(alpha: 0.75),
+          ),
+        ),
+        IconButton(
+          onPressed: () => windowManager.close(),
+          iconSize: 15,
+          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+          icon: Icon(Icons.close, color: FyrTheme.textColor.withValues(alpha: 0.75)),
+        ),
       ],
     );
   }
 
-  Future<void> _installPwa() async {
-    final url = _urlController.text;
-    final tab = _tabs[_currentTabIndex];
-    final title = tab.title;
-    final iconUrl = tab.pwaIconUrl;
-    
-    try {
-      final home = Platform.environment['HOME'];
-      if (home == null) return;
-      final configDir = await getApplicationSupportDirectory();
-      final iconsDir = Directory(p.join(configDir.path, 'icons'));
-      if (!iconsDir.existsSync()) iconsDir.createSync(recursive: true);
-      
-      final appId = title.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_').toLowerCase();
-      String iconPath = 'internet-web-browser';
-      
-      if (iconUrl != null) {
-        try {
-          final response = await http.get(Uri.parse(iconUrl));
-          if (response.statusCode == 200) {
-            final ext = p.extension(Uri.parse(iconUrl).path).isEmpty ? '.png' : p.extension(Uri.parse(iconUrl).path);
-            final iconFile = File(p.join(iconsDir.path, '$appId$ext'));
-            await iconFile.writeAsBytes(response.bodyBytes);
-            iconPath = iconFile.path;
-          }
-        } catch (e) {
-          debugPrint('Failed to download icon: $e');
-        }
-      }
+  Widget _buildToolbar() {
+    final tab = _activeTab;
+    final canBack = tab?.canGoBack ?? false;
+    final canForward = tab?.canGoForward ?? false;
+    final isHome = tab?.isHomePage ?? true;
 
-      final appsDir = Directory(p.join(home, '.local', 'share', 'applications'));
-      if (!appsDir.existsSync()) appsDir.createSync(recursive: true);
-      final desktopFile = File(p.join(appsDir.path, 'fyrpwa_$appId.desktop'));
-      final content = '''
-[Desktop Entry]
-Version=1.0
-Name=$title
-Exec=/usr/local/bin/fyrbrowser --app=$url
-Icon=$iconPath
-Terminal=false
-Type=Application
-Categories=Network;WebBrowser;
-''';
-      await desktopFile.writeAsString(content);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Installed $title as PWA'), backgroundColor: FyrTheme.accentColor));
-    } catch (e) {
-      debugPrint('Failed to install PWA: $e');
-    }
-  }
-
-  Widget _buildBrowser() {
-    if (_tabs.isEmpty) return Container();
-    return IndexedStack(
-      index: _currentTabIndex,
-      children: _tabs.asMap().entries.map((entry) {
-        int idx = entry.key;
-        var tab = entry.value;
-        return ExcludeFocus(
-          excluding: idx != _currentTabIndex,
-          child: tab.isReady 
-            ? SmoothScrollWrapper(
-                controller: tab.controller,
-                child: WebView(tab.controller),
-              ) 
-            : const Center(child: CircularProgressIndicator()),
-        );
-      }).toList(),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return KeyboardListener(
-      focusNode: _keyboardFocusNode,
-      autofocus: true,
-      onKeyEvent: _handleKeyEvent,
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        body: ClipRRect(
-          borderRadius: BorderRadius.circular(widget.isAppMode ? 0 : 12),
-          child: Container(
-            color: FyrTheme.bgColor,
-            child: Column(
-              children: [
-                if (widget.isAppMode)
-                  _buildAppModeHeader()
-                else
-                  _buildBrowserHeader(),
-                Expanded(child: _buildBrowser()),
-              ],
-            ),
+    return Container(
+      height: 46,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(
+        color: FyrTheme.bgColor,
+        border: Border(
+          bottom: BorderSide(
+            color: FyrTheme.dividerColor.withValues(alpha: 0.25),
           ),
         ),
+      ),
+      child: Row(
+        children: [
+          _navButton(
+            icon: Icons.arrow_back,
+            tooltip: 'Back',
+            enabled: canBack,
+            onPressed: () => tab?.controller.goBack(),
+          ),
+          _navButton(
+            icon: Icons.arrow_forward,
+            tooltip: 'Forward',
+            enabled: canForward,
+            onPressed: () => tab?.controller.goForward(),
+          ),
+          _navButton(
+            icon: (tab?.isLoading ?? false) ? Icons.close : Icons.refresh,
+            tooltip: (tab?.isLoading ?? false) ? 'Stop' : 'Reload (Ctrl+R)',
+            enabled: tab != null && !isHome,
+            onPressed: _reloadOrStop,
+          ),
+          _navButton(
+            icon: Icons.home_outlined,
+            tooltip: 'Home',
+            enabled: tab != null,
+            onPressed: () => _navigateActiveTabTo(_settings.homePage),
+          ),
+          const SizedBox(width: 8),
+          Expanded(child: _buildUrlBar(tab)),
+          const SizedBox(width: 6),
+          if (tab != null && tab.zoomLevel != 0.0)
+            TextButton(
+              onPressed: _resetZoom,
+              child: Text(
+                _zoomLabel(tab.zoomLevel),
+                style: TextStyle(color: FyrTheme.accentColor, fontSize: 12),
+              ),
+            ),
+          if (tab != null && !isHome) _buildShieldMenu(tab),
+          _navButton(
+            icon: DownloadManager().tasks.any((t) => !t.isComplete)
+                ? Icons.downloading
+                : Icons.download_outlined,
+            tooltip: 'Downloads',
+            enabled: true,
+            onPressed: _showDownloadsDialog,
+          ),
+          _buildOverflowMenu(),
+        ],
       ),
     );
   }
 
-  Widget _buildAppModeHeader() {
-    final currentTab = _tabs.isNotEmpty ? _tabs[_currentTabIndex] : null;
-    return DragToMoveArea(
+  Widget _navButton({
+    required IconData icon,
+    required String tooltip,
+    required bool enabled,
+    required VoidCallback onPressed,
+  }) {
+    return IconButton(
+      onPressed: enabled ? onPressed : null,
+      tooltip: tooltip,
+      iconSize: 18,
+      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+      icon: Icon(
+        icon,
+        color: enabled
+            ? FyrTheme.textColor.withValues(alpha: 0.85)
+            : FyrTheme.textColor.withValues(alpha: 0.25),
+      ),
+    );
+  }
+
+  Widget _buildUrlBar(BrowserTab? tab) {
+    final url = tab?.url ?? kFyrHomeUrl;
+    final isSecure = url.startsWith('https://');
+    final isError = tab?.loadError != null;
+    final bookmarked = tab != null && _isBookmarked(url);
+
+    return CompositedTransformTarget(
+      link: _urlBarLink,
       child: Container(
         height: 34,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
         decoration: BoxDecoration(
-          color: FyrTheme.isDark ? Colors.black : Colors.white,
-          border: Border(bottom: BorderSide(color: FyrTheme.dividerColor)),
+          color: FyrTheme.textColor.withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: _urlFocusNode.hasFocus
+                ? FyrTheme.accentColor.withValues(alpha: 0.7)
+                : FyrTheme.dividerColor.withValues(alpha: 0.25),
+          ),
         ),
         child: Row(
           children: [
-            _buildTrafficLight(Colors.redAccent, () => windowManager.close()),
+            const SizedBox(width: 12),
+            Icon(
+              isError
+                  ? Icons.warning_amber_rounded
+                  : isInternalUrl(url)
+                      ? Icons.search
+                      : isSecure
+                          ? Icons.lock_outline
+                          : Icons.lock_open,
+              size: 14,
+              color: isError
+                  ? Colors.orangeAccent
+                  : isSecure
+                      ? Colors.greenAccent
+                      : FyrTheme.textColor.withValues(alpha: 0.55),
+            ),
             const SizedBox(width: 8),
-            _buildTrafficLight(Colors.orangeAccent, () => windowManager.minimize()),
-            const SizedBox(width: 8),
-            _buildTrafficLight(Colors.greenAccent, () async {
-              if (await windowManager.isMaximized()) windowManager.unmaximize();
-              else windowManager.maximize();
-            }),
-            const SizedBox(width: 16),
             Expanded(
-              child: Text(
-                currentTab?.title ?? 'PWA',
-                style: TextStyle(color: FyrTheme.textColor, fontSize: 12, fontWeight: FontWeight.bold),
-                overflow: TextOverflow.ellipsis,
+              child: TextField(
+                controller: _urlController,
+                focusNode: _urlFocusNode,
+                style: TextStyle(color: FyrTheme.textColor, fontSize: 13),
+                decoration: InputDecoration(
+                  hintText:
+                      'Search with ${_settings.searchEngine.label} or enter URL',
+                  hintStyle: TextStyle(
+                    color: FyrTheme.textColor.withValues(alpha: 0.4),
+                    fontSize: 13,
+                  ),
+                  border: InputBorder.none,
+                  isDense: true,
+                  contentPadding: EdgeInsets.zero,
+                ),
+                onSubmitted: _navigateActiveTabTo,
               ),
             ),
+            if (tab != null && !tab.isHomePage)
+              IconButton(
+                onPressed: () => _toggleBookmark(tab),
+                tooltip: bookmarked ? 'Remove Bookmark' : 'Bookmark Page',
+                iconSize: 16,
+                constraints:
+                    const BoxConstraints(minWidth: 32, minHeight: 32),
+                icon: Icon(
+                  bookmarked ? Icons.star : Icons.star_border,
+                  color: bookmarked
+                      ? Colors.amber
+                      : FyrTheme.textColor.withValues(alpha: 0.55),
+                ),
+              )
+            else
+              const SizedBox(width: 8),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildBrowserHeader() {
-    return Column(
-      children: [
-        DragToMoveArea(
-          child: Container(
-            height: 40,
-            decoration: BoxDecoration(color: FyrTheme.isDark ? Colors.black.withOpacity(0.5) : Colors.grey.withOpacity(0.2)),
-            child: Stack(
-              children: [
-                Positioned(
-                  left: 16, top: 14,
-                  child: Row(
-                    children: [
-                      _buildTrafficLight(Colors.redAccent, () => windowManager.close()),
-                      const SizedBox(width: 8),
-                      _buildTrafficLight(Colors.orangeAccent, () => windowManager.minimize()),
-                      const SizedBox(width: 8),
-                      _buildTrafficLight(Colors.greenAccent, () async {
-                        if (await windowManager.isMaximized()) windowManager.unmaximize();
-                        else windowManager.maximize();
-                      }),
-                    ],
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.only(left: 80, top: 6, right: 16),
-                  child: ListView.builder(
-                    scrollDirection: Axis.horizontal,
-                    itemCount: _tabs.length + 1,
-                    itemBuilder: (context, index) {
-                      if (index == _tabs.length) {
-                        return IconButton(
-                          icon: const Icon(Icons.add, size: 18),
-                          onPressed: () => _addNewTab(),
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(minWidth: 34),
-                          tooltip: 'New Tab',
-                        );
-                      }
-                      return _buildTab(index);
-                    },
-                  ),
-                ),
-              ],
+  Widget _buildShieldMenu(BrowserTab tab) {
+    final host = AdBlockEngine.extractHost(tab.url);
+    final whitelisted =
+        host.isNotEmpty && _settings.isHostWhitelisted(host);
+    final active = _settings.adBlockEnabled && !whitelisted;
+
+    return PopupMenuButton<String>(
+      tooltip: active
+          ? 'AdBlock Active (${tab.blockedCount} blocked)'
+          : 'AdBlock Paused',
+      color: FyrTheme.bgColor,
+      onSelected: (value) async {
+        if (value == 'toggle_site' && host.isNotEmpty) {
+          setState(() => _settings.toggleWhitelistHost(host));
+          await _syncAdBlockConfig();
+          _scheduleSaveData();
+          await _applyCosmeticAdBlock(tab, tab.url);
+        } else if (value == 'toggle_global') {
+          setState(() => _settings.adBlockEnabled = !_settings.adBlockEnabled);
+          await _syncAdBlockConfig();
+          _scheduleSaveData();
+          await _applyCosmeticAdBlock(tab, tab.url);
+        } else if (value == 'settings') {
+          _openSettingsModal(initialTab: 0);
+        }
+      },
+      itemBuilder: (context) => [
+        PopupMenuItem(
+          enabled: false,
+          child: Text(
+            active
+                ? 'Shield Active • ${tab.blockedCount} blocked'
+                : 'Shield Paused',
+            style: TextStyle(
+              color: FyrTheme.textColor,
+              fontWeight: FontWeight.w600,
+              fontSize: 12,
             ),
           ),
         ),
-        _buildUrlBar(),
+        if (host.isNotEmpty)
+          PopupMenuItem(
+            value: 'toggle_site',
+            child: Text(
+              whitelisted ? 'Enable on $host' : 'Pause on $host',
+            ),
+          ),
+        PopupMenuItem(
+          value: 'toggle_global',
+          child: Text(
+            _settings.adBlockEnabled
+                ? 'Disable AdBlock Globally'
+                : 'Enable AdBlock Globally',
+          ),
+        ),
+        const PopupMenuDivider(),
+        const PopupMenuItem(
+          value: 'settings',
+          child: Text('AdBlock Settings...'),
+        ),
+      ],
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              active ? Icons.shield : Icons.shield_outlined,
+              size: 18,
+              color: active
+                  ? Colors.greenAccent
+                  : FyrTheme.textColor.withValues(alpha: 0.45),
+            ),
+            if (active && tab.blockedCount > 0) ...[
+              const SizedBox(width: 3),
+              Text(
+                '${tab.blockedCount}',
+                style: TextStyle(
+                  color: FyrTheme.textColor.withValues(alpha: 0.75),
+                  fontSize: 11,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOverflowMenu() {
+    return PopupMenuButton<String>(
+      tooltip: 'Menu',
+      color: FyrTheme.bgColor,
+      icon: Icon(
+        Icons.more_vert,
+        size: 18,
+        color: FyrTheme.textColor.withValues(alpha: 0.8),
+      ),
+      onSelected: (action) {
+        switch (action) {
+          case 'find':
+            _openFindBar();
+            break;
+          case 'zoom_in':
+            _adjustZoom(0.5);
+            break;
+          case 'zoom_out':
+            _adjustZoom(-0.5);
+            break;
+          case 'zoom_reset':
+            _resetZoom();
+            break;
+          case 'history':
+            _openSettingsModal(initialTab: 1);
+            break;
+          case 'bookmarks':
+            _openSettingsModal(initialTab: 2);
+            break;
+          case 'settings':
+            _openSettingsModal(initialTab: 0);
+            break;
+          case 'devtools':
+            _activeTab?.controller.openDevTools();
+            break;
+        }
+      },
+      itemBuilder: (context) => const [
+        PopupMenuItem(value: 'find', child: Text('Find in Page (Ctrl+F)')),
+        PopupMenuDivider(),
+        PopupMenuItem(value: 'zoom_in', child: Text('Zoom In (Ctrl++)')),
+        PopupMenuItem(value: 'zoom_out', child: Text('Zoom Out (Ctrl+-)')),
+        PopupMenuItem(value: 'zoom_reset', child: Text('Reset Zoom (Ctrl+0)')),
+        PopupMenuDivider(),
+        PopupMenuItem(value: 'history', child: Text('History')),
+        PopupMenuItem(value: 'bookmarks', child: Text('Bookmarks')),
+        PopupMenuItem(value: 'settings', child: Text('Settings')),
+        PopupMenuDivider(),
+        PopupMenuItem(value: 'devtools', child: Text('Developer Tools')),
       ],
     );
   }
 
-  Widget _buildUrlBar() {
-    final textColor = FyrTheme.textColor;
-    final currentTab = _tabs.isNotEmpty ? _tabs[_currentTabIndex] : null;
-
-    return GestureDetector(
-      behavior: HitTestBehavior.translucent,
-      onPanStart: (details) => windowManager.startDragging(),
-      onTap: () => FocusScope.of(context).requestFocus(_urlFocusNode),
-      onDoubleTap: () {
-        FocusScope.of(context).requestFocus(_urlFocusNode);
-        _urlController.selection = TextSelection(
-          baseOffset: 0,
-          extentOffset: _urlController.text.length,
-        );
-      },
-      child: Container(
-        height: 60,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        decoration: BoxDecoration(color: FyrTheme.bgColor, border: Border(bottom: BorderSide(color: FyrTheme.dividerColor))),
-        child: Row(
-          children: [
-            IconButton(
-              icon: const Icon(Icons.arrow_back_ios_new, size: 16),
-              onPressed: currentTab?.isReady == true ? () => currentTab!.controller.goBack() : null,
-              color: textColor.withOpacity(0.7),
-            ),
-            IconButton(
-              icon: const Icon(Icons.arrow_forward_ios, size: 16),
-              onPressed: currentTab?.isReady == true ? () => currentTab!.controller.goForward() : null,
-              color: textColor.withOpacity(0.7),
-            ),
-            IconButton(
-              icon: Icon(currentTab?.isLoading == true ? Icons.close : Icons.refresh, size: 20),
-              onPressed: currentTab?.isReady == true ? () => currentTab!.isLoading ? currentTab.controller.loadUrl(currentTab.url) : currentTab.controller.reload() : null,
-              color: textColor.withOpacity(0.7),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: FyrTheme.isDark ? Colors.white.withOpacity(0.1) : Colors.black.withOpacity(0.05),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: TextField(
-                    controller: _urlController,
-                    focusNode: _urlFocusNode,
-                    style: TextStyle(color: textColor, fontSize: 13),
-                    decoration: InputDecoration(
-                      hintText: 'Search or enter URL',
-                      hintStyle: TextStyle(color: textColor.withOpacity(0.4)),
-                      border: InputBorder.none,
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                      prefixIcon: IconButton(
-                        icon: Icon(_bookmarks.any((b) => b['url'] == _urlController.text) ? Icons.star : Icons.star_border, size: 16),
-                        color: FyrTheme.accentColor,
-                        onPressed: _toggleBookmark,
-                      ),
-                      suffixIcon: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (currentTab?.showPwaInstall == true)
-                            IconButton(icon: Icon(Icons.install_desktop, size: 18, color: FyrTheme.accentColor), onPressed: _installPwa, tooltip: 'Install PWA (Detected)'),
-                          IconButton(icon: const Icon(Icons.install_desktop_outlined, size: 18), onPressed: _installPwa, tooltip: 'Force Install as PWA'),
-                        ],
-                      ),
-                    ),
-                    onSubmitted: (value) {
-                      if (currentTab?.isReady != true) return;
-                      String url = value.trim();
-                      if (!url.startsWith('http')) {
-                        url = (url.contains('.') && !url.contains(' ')) ? 'https://$url' : 'https://start.duckduckgo.com/?q=$url';
-                      }
-                      currentTab!.controller.loadUrl(url);
-                    },
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(width: 10),
-            IconButton(
-              icon: Icon(_adBlockEnabled ? Icons.security : Icons.security_outlined, size: 18),
-              onPressed: () {
-                setState(() => _adBlockEnabled = !_adBlockEnabled);
-                _saveData();
-                for (var tab in _tabs) if (tab.isReady) tab.controller.reload();
-              },
-              color: _adBlockEnabled ? FyrTheme.accentColor : textColor.withOpacity(0.5),
-            ),
-            CompositedTransformTarget(
-              link: _downloadLink,
-              child: IconButton(
-                icon: const Icon(Icons.download_outlined, size: 18),
-                onPressed: _showDownloadDropdown,
-                color: DownloadManager().tasks.any((t) => !t.isComplete) ? FyrTheme.accentColor : textColor.withOpacity(0.7),
-                tooltip: 'Downloads',
-              ),
-            ),
-            IconButton(icon: const Icon(Icons.settings, size: 18), onPressed: _showSettingsMenu, color: textColor.withOpacity(0.7)),
-          ],
+  Widget _buildFindBar() {
+    return Container(
+      height: 40,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: FyrTheme.bgColor,
+        border: Border(
+          bottom: BorderSide(
+            color: FyrTheme.dividerColor.withValues(alpha: 0.25),
+          ),
         ),
+      ),
+      child: Row(
+        children: [
+          const Spacer(),
+          SizedBox(
+            width: 240,
+            child: TextField(
+              controller: _findController,
+              focusNode: _findFocusNode,
+              style: TextStyle(color: FyrTheme.textColor, fontSize: 13),
+              decoration: InputDecoration(
+                hintText: 'Find in page...',
+                hintStyle: TextStyle(
+                  color: FyrTheme.textColor.withValues(alpha: 0.45),
+                  fontSize: 12,
+                ),
+                isDense: true,
+                border: InputBorder.none,
+              ),
+              onChanged: (_) => _runFind(forward: true, findNext: false),
+              onSubmitted: (_) => _runFind(forward: true, findNext: true),
+            ),
+          ),
+          Text(
+            _findController.text.isEmpty
+                ? ''
+                : '$_findActiveOrdinal/$_findMatchCount',
+            style: TextStyle(
+              color: FyrTheme.textColor.withValues(alpha: 0.6),
+              fontSize: 12,
+            ),
+          ),
+          IconButton(
+            onPressed: () => _runFind(forward: false, findNext: true),
+            iconSize: 16,
+            icon: Icon(Icons.keyboard_arrow_up, color: FyrTheme.textColor),
+          ),
+          IconButton(
+            onPressed: () => _runFind(forward: true, findNext: true),
+            iconSize: 16,
+            icon: Icon(Icons.keyboard_arrow_down, color: FyrTheme.textColor),
+          ),
+          IconButton(
+            onPressed: _closeFindBar,
+            iconSize: 16,
+            icon: Icon(Icons.close, color: FyrTheme.textColor),
+          ),
+        ],
       ),
     );
   }
-}
 
-class SmoothScrollWrapper extends StatefulWidget {
-  final WebViewController controller;
-  final Widget child;
-
-  const SmoothScrollWrapper({
-    super.key,
-    required this.controller,
-    required this.child,
-  });
-
-  @override
-  State<SmoothScrollWrapper> createState() => _SmoothScrollWrapperState();
-}
-
-class _SmoothScrollWrapperState extends State<SmoothScrollWrapper> {
-  double _scrollTargetY = 0;
-  bool _isScrolling = false;
-
-  void _onPointerSignal(PointerSignalEvent signal) {
-    if (signal is PointerScrollEvent) {
-      // Intercept the scroll signal
-      GestureBinding.instance.pointerSignalResolver.register(signal, (resolvedSignal) {
-        _handleScroll(signal);
-      });
-    }
-  }
-
-  void _handleScroll(PointerScrollEvent signal) {
-    // Increase target
-    _scrollTargetY += signal.scrollDelta.dy;
-    
-    if (!_isScrolling) {
-      _isScrolling = true;
-      _animateScroll(signal.localPosition);
-    }
-  }
-
-  void _animateScroll(Offset position) {
-    if (!mounted || _scrollTargetY.abs() < 0.5) {
-      _isScrolling = false;
-      _scrollTargetY = 0;
-      return;
+  Widget _buildViewport() {
+    if (!_isEngineReady || _tabs.isEmpty) {
+      return Center(
+        child: CircularProgressIndicator(color: FyrTheme.accentColor),
+      );
     }
 
-    // Determine step (speed and smoothness)
-    // Using a slightly more aggressive smoothing factor to reduce event count
-    double step = _scrollTargetY * 0.2; 
-    if (step.abs() < 1) step = _scrollTargetY > 0 ? 1 : -1;
-    if (step.abs() > _scrollTargetY.abs()) step = _scrollTargetY;
-
-    // Send to CEF
-    widget.controller.setScrollDelta(position, 0, step.round());
-    
-    _scrollTargetY -= step;
-
-    // Use 16ms (60Hz) to match standard display cycles and avoid overwhelming Blink
-    Future.delayed(const Duration(milliseconds: 16), () {
-      _animateScroll(position);
-    });
-  }
-
-
-  @override
-  Widget build(BuildContext context) {
-    return Listener(
-      onPointerSignal: _onPointerSignal,
-      child: widget.child,
+    return IndexedStack(
+      index: _activeTabIndex,
+      children: _tabs.map((tab) {
+        final hideWebView = tab.isHomePage || tab.loadError != null;
+        return Stack(
+          key: ValueKey('stack_${tab.id}'),
+          children: [
+            IgnorePointer(
+              ignoring: hideWebView,
+              child: WebView(
+                tab.controller,
+                key: ValueKey('webview_${tab.id}'),
+              ),
+            ),
+            if (tab.isHomePage)
+              Positioned.fill(
+                child: FyrHomePage(
+                  searchEngine: _settings.searchEngine,
+                  adBlockEnabled: _settings.adBlockEnabled,
+                  bookmarks: _bookmarks,
+                  history: _history,
+                  onNavigate: _navigateActiveTabTo,
+                  onOpenSettings: () => _openSettingsModal(initialTab: 0),
+                ),
+              )
+            else if (tab.loadError != null)
+              Positioned.fill(
+                child: FyrErrorPage(
+                  error: tab.loadError!,
+                  onRetry: _reloadOrStop,
+                  onGoHome: () => _navigateActiveTabTo(kFyrHomeUrl),
+                ),
+              ),
+          ],
+        );
+      }).toList(),
     );
   }
 }

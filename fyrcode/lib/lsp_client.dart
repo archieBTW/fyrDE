@@ -4,12 +4,14 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:json_rpc_2/json_rpc_2.dart' as json_rpc;
 import 'package:stream_channel/stream_channel.dart';
-import 'fyr_theme.dart';
 
 class LspClient {
   Process? _process;
   json_rpc.Peer? _peer;
   bool _isInitialized = false;
+  bool _isDisposed = false;
+
+  bool get isDisposed => _isDisposed || (_peer?.isClosed ?? false);
 
   final void Function(String uri, List<dynamic> diagnostics)? onDiagnostics;
 
@@ -17,7 +19,6 @@ class LspClient {
 
   Future<void> start(String projectRoot, {String command = 'dart', List<String> args = const ['language-server', '--protocol=lsp']}) async {
     _process = await Process.start(command, args, workingDirectory: projectRoot);
-    print('test');
     _peer = json_rpc.Peer(
       StreamChannel(
         // Read raw bytes instead of Strings to prevent multi-byte characters
@@ -82,6 +83,19 @@ class LspClient {
             },
           },
           'definition': {'dynamicRegistration': true},
+          'references': {'dynamicRegistration': true},
+          'rename': {'dynamicRegistration': true, 'prepareSupport': true},
+          'documentSymbol': {
+            'dynamicRegistration': true,
+            'hierarchicalDocumentSymbolSupport': true,
+          },
+          'signatureHelp': {
+            'dynamicRegistration': true,
+            'signatureInformation': {
+              'documentationFormat': ['markdown', 'plaintext'],
+              'parameterInformation': {'labelOffsetSupport': true},
+            },
+          },
           'completion': {
             'dynamicRegistration': true,
             'completionItem': {
@@ -188,6 +202,73 @@ class LspClient {
     }
   }
 
+  Future<List<dynamic>?> findReferences(
+    String filePath,
+    int line,
+    int character, {
+    bool includeDeclaration = true,
+  }) async {
+    if (!_isInitialized || _peer == null || _peer!.isClosed) return null;
+    try {
+      final result = await _peer!.sendRequest('textDocument/references', {
+        'textDocument': {'uri': Uri.file(filePath).toString()},
+        'position': {'line': line, 'character': character},
+        'context': {'includeDeclaration': includeDeclaration},
+      });
+      return result is List ? result : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  Future<Map<String, dynamic>?> renameSymbol(
+    String filePath,
+    int line,
+    int character,
+    String newName,
+  ) async {
+    if (!_isInitialized || _peer == null || _peer!.isClosed) return null;
+    try {
+      final result = await _peer!.sendRequest('textDocument/rename', {
+        'textDocument': {'uri': Uri.file(filePath).toString()},
+        'position': {'line': line, 'character': character},
+        'newName': newName,
+      });
+      return result is Map ? Map<String, dynamic>.from(result) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  Future<List<dynamic>?> getDocumentSymbols(String filePath) async {
+    if (!_isInitialized || _peer == null || _peer!.isClosed) return null;
+    try {
+      final result = await _peer!.sendRequest('textDocument/documentSymbol', {
+        'textDocument': {'uri': Uri.file(filePath).toString()},
+      });
+      return result is List ? result : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  Future<Map<String, dynamic>?> getSignatureHelp(
+    String filePath,
+    int line,
+    int character,
+  ) async {
+    if (!_isInitialized || _peer == null || _peer!.isClosed) return null;
+    try {
+      final result = await _peer!.sendRequest('textDocument/signatureHelp', {
+        'textDocument': {'uri': Uri.file(filePath).toString()},
+        'position': {'line': line, 'character': character},
+      });
+      return result is Map ? Map<String, dynamic>.from(result) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   // In lib/lsp_client.dart
   Future<dynamic> getCompletions(
     String filePath,
@@ -279,6 +360,7 @@ class LspClient {
   }
 
   void dispose() {
+    _isDisposed = true;
     _peer?.close();
     _process?.kill();
   }

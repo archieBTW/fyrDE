@@ -316,6 +316,9 @@ FLUTTER_PLUGIN_EXPORT int initCEFProcesses(int argc, char **argv)
 FLUTTER_PLUGIN_EXPORT gboolean processKeyEventForCEF(GtkWidget *widget, GdkEventKey *event, gpointer data)
 {
   // FyrBrowser: Allow standard shortcuts to bypass CEF and reach Flutter
+  if (event->keyval == GDK_KEY_F5) {
+    return FALSE;
+  }
   bool isControl = (event->state & GDK_CONTROL_MASK);
   if (isControl) {
     guint keyval = event->keyval;
@@ -323,16 +326,21 @@ FLUTTER_PLUGIN_EXPORT gboolean processKeyEventForCEF(GtkWidget *widget, GdkEvent
         keyval == GDK_KEY_t || keyval == GDK_KEY_T ||
         keyval == GDK_KEY_w || keyval == GDK_KEY_W ||
         keyval == GDK_KEY_l || keyval == GDK_KEY_L ||
-        keyval == GDK_KEY_Tab || keyval == GDK_KEY_ISO_Left_Tab ||
-        keyval == GDK_KEY_F5) {
-      return FALSE; 
+        keyval == GDK_KEY_f || keyval == GDK_KEY_F ||
+        keyval == GDK_KEY_plus || keyval == GDK_KEY_equal ||
+        keyval == GDK_KEY_KP_Add ||
+        keyval == GDK_KEY_minus || keyval == GDK_KEY_underscore ||
+        keyval == GDK_KEY_KP_Subtract ||
+        keyval == GDK_KEY_0 || keyval == GDK_KEY_KP_0 ||
+        keyval == GDK_KEY_Tab || keyval == GDK_KEY_ISO_Left_Tab) {
+      return FALSE;
     }
   }
 
   int64_t _id = int64_t(widget);
   if (webviewPlugins.find(_id) != webviewPlugins.end() && webviewPlugins[_id]->getAnyBrowserFocused())
   {
-    CefKeyEvent key_event;
+    CefKeyEvent key_event = {};
     KeyboardCode windows_key_code = GdkEventToWindowsKeyCode(event);
     key_event.windows_key_code =
         GetWindowsKeyCodeWithoutLocation(windows_key_code);
@@ -383,13 +391,17 @@ FLUTTER_PLUGIN_EXPORT gboolean processKeyEventForCEF(GtkWidget *widget, GdkEvent
     {
       key_event.type = KEYEVENT_RAWKEYDOWN;
       webviewPlugins[_id]->sendKeyEvent(key_event);
-      key_event.type = KEYEVENT_CHAR;
+      if (key_event.character != 0 &&
+          !(key_event.modifiers & EVENTFLAG_CONTROL_DOWN)) {
+        key_event.type = KEYEVENT_CHAR;
+        webviewPlugins[_id]->sendKeyEvent(key_event);
+      }
     }
     else
     {
       key_event.type = KEYEVENT_KEYUP;
+      webviewPlugins[_id]->sendKeyEvent(key_event);
     }
-    webviewPlugins[_id]->sendKeyEvent(key_event);
 
     return TRUE;
   }

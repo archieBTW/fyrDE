@@ -1047,10 +1047,55 @@ static void handle_swaybg_client_destroy(struct wl_listener *listener,
 	sway_config->swaybg_client = NULL;
 }
 
-static bool _spawn_swaybg(char **command) {
+void swaybg_free_argv(struct sway_config *cfg) {
+	if (!cfg || !cfg->swaybg_argv) {
+		return;
+	}
+	for (size_t i = 0; i < cfg->swaybg_argc; i++) {
+		free(cfg->swaybg_argv[i]);
+	}
+	free(cfg->swaybg_argv);
+	cfg->swaybg_argv = NULL;
+	cfg->swaybg_argc = 0;
+}
+
+void swaybg_transfer(struct sway_config *dest, struct sway_config *src) {
+	if (!dest || !src || !src->swaybg_client) {
+		return;
+	}
+	wl_list_remove(&src->swaybg_client_destroy.link);
+	wl_list_init(&src->swaybg_client_destroy.link);
+
+	dest->swaybg_client = src->swaybg_client;
+	src->swaybg_client = NULL;
+	dest->swaybg_client_destroy.notify = handle_swaybg_client_destroy;
+	wl_client_add_destroy_listener(dest->swaybg_client,
+		&dest->swaybg_client_destroy);
+
+	dest->swaybg_argv = src->swaybg_argv;
+	dest->swaybg_argc = src->swaybg_argc;
+	src->swaybg_argv = NULL;
+	src->swaybg_argc = 0;
+}
+
+static bool swaybg_argv_equals(const struct sway_config *cfg,
+		char *const *cmd, size_t argc) {
+	if (!cfg->swaybg_argv || cfg->swaybg_argc != argc) {
+		return false;
+	}
+	for (size_t i = 0; i < argc; i++) {
+		if (strcmp(cfg->swaybg_argv[i], cmd[i]) != 0) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static bool _spawn_swaybg(char **command, size_t argc) {
 	if (config->swaybg_client != NULL) {
 		wl_client_destroy(config->swaybg_client);
 	}
+	swaybg_free_argv(config);
 	int sockets[2];
 	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) != 0) {
 		sway_log_errno(SWAY_ERROR, "socketpair failed");
@@ -1069,6 +1114,16 @@ static bool _spawn_swaybg(char **command) {
 	config->swaybg_client_destroy.notify = handle_swaybg_client_destroy;
 	wl_client_add_destroy_listener(config->swaybg_client,
 		&config->swaybg_client_destroy);
+
+	if (argc > 0) {
+		config->swaybg_argv = calloc(argc, sizeof(char *));
+		if (config->swaybg_argv) {
+			config->swaybg_argc = argc;
+			for (size_t i = 0; i < argc; i++) {
+				config->swaybg_argv[i] = strdup(command[i]);
+			}
+		}
+	}
 
 	pid_t pid = fork();
 	if (pid < 0) {
@@ -1100,6 +1155,10 @@ static bool _spawn_swaybg(char **command) {
 
 bool spawn_swaybg(void) {
 	if (!config->swaybg_command) {
+		if (config->swaybg_client != NULL) {
+			wl_client_destroy(config->swaybg_client);
+		}
+		swaybg_free_argv(config);
 		return true;
 	}
 
@@ -1155,7 +1214,13 @@ bool spawn_swaybg(void) {
 		sway_log(SWAY_DEBUG, "spawn_swaybg cmd[%zd] = %s", k, cmd[k]);
 	}
 
-	bool result = _spawn_swaybg(cmd);
+	if (config->swaybg_client != NULL && swaybg_argv_equals(config, cmd, i)) {
+		sway_log(SWAY_DEBUG, "swaybg command unchanged across reload; reusing live swaybg client");
+		free(cmd);
+		return true;
+	}
+
+	bool result = _spawn_swaybg(cmd, i);
 	free(cmd);
 	return result;
 }

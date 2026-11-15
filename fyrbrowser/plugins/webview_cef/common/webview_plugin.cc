@@ -220,6 +220,88 @@ namespace webview_cef {
                 }
             };
 
+            m_handler->onLoadError = [=](int nBrowserId, int errorCode, std::string errorText, std::string failedUrl)
+            {
+                if (m_invokeFunc)
+                {
+                    WValue* bId = webview_value_new_int(nBrowserId);
+                    WValue* eCode = webview_value_new_int(errorCode);
+                    WValue* eText = webview_value_new_string(const_cast<char*>(errorText.c_str()));
+                    WValue* fUrl = webview_value_new_string(const_cast<char*>(failedUrl.c_str()));
+                    WValue* retMap = webview_value_new_map();
+                    webview_value_set_string(retMap, "browserId", bId);
+                    webview_value_set_string(retMap, "errorCode", eCode);
+                    webview_value_set_string(retMap, "errorText", eText);
+                    webview_value_set_string(retMap, "failedUrl", fUrl);
+                    m_invokeFunc("onLoadError", retMap);
+                    webview_value_unref(bId);
+                    webview_value_unref(eCode);
+                    webview_value_unref(eText);
+                    webview_value_unref(fUrl);
+                    webview_value_unref(retMap);
+                }
+            };
+
+            m_handler->onLoadingStateChanged = [=](int nBrowserId, bool isLoading, bool canGoBack, bool canGoForward)
+            {
+                if (m_invokeFunc)
+                {
+                    WValue* bId = webview_value_new_int(nBrowserId);
+                    WValue* wLoading = webview_value_new_bool(isLoading);
+                    WValue* wBack = webview_value_new_bool(canGoBack);
+                    WValue* wForward = webview_value_new_bool(canGoForward);
+                    WValue* retMap = webview_value_new_map();
+                    webview_value_set_string(retMap, "browserId", bId);
+                    webview_value_set_string(retMap, "isLoading", wLoading);
+                    webview_value_set_string(retMap, "canGoBack", wBack);
+                    webview_value_set_string(retMap, "canGoForward", wForward);
+                    m_invokeFunc("onLoadingStateChanged", retMap);
+                    webview_value_unref(bId);
+                    webview_value_unref(wLoading);
+                    webview_value_unref(wBack);
+                    webview_value_unref(wForward);
+                    webview_value_unref(retMap);
+                }
+            };
+
+            m_handler->onFindResult = [=](int nBrowserId, int count, int activeMatchOrdinal, bool finalUpdate)
+            {
+                if (m_invokeFunc)
+                {
+                    WValue* bId = webview_value_new_int(nBrowserId);
+                    WValue* wCount = webview_value_new_int(count);
+                    WValue* wOrdinal = webview_value_new_int(activeMatchOrdinal);
+                    WValue* wFinal = webview_value_new_bool(finalUpdate);
+                    WValue* retMap = webview_value_new_map();
+                    webview_value_set_string(retMap, "browserId", bId);
+                    webview_value_set_string(retMap, "count", wCount);
+                    webview_value_set_string(retMap, "activeMatchOrdinal", wOrdinal);
+                    webview_value_set_string(retMap, "finalUpdate", wFinal);
+                    m_invokeFunc("onFindResult", retMap);
+                    webview_value_unref(bId);
+                    webview_value_unref(wCount);
+                    webview_value_unref(wOrdinal);
+                    webview_value_unref(wFinal);
+                    webview_value_unref(retMap);
+                }
+            };
+
+            m_handler->onAdBlocked = [=](int nBrowserId, int count)
+            {
+                if (m_invokeFunc)
+                {
+                    WValue* bId = webview_value_new_int(nBrowserId);
+                    WValue* wCount = webview_value_new_int(count);
+                    WValue* retMap = webview_value_new_map();
+                    webview_value_set_string(retMap, "browserId", bId);
+                    webview_value_set_string(retMap, "count", wCount);
+                    m_invokeFunc("onAdBlocked", retMap);
+                    webview_value_unref(bId);
+                    webview_value_unref(wCount);
+                    webview_value_unref(retMap);
+                }
+            };
+
             m_handler->onDownloadStart = [=](int browserId, std::string suggestedName, std::string url)
             {
                 if (m_invokeFunc)
@@ -396,6 +478,12 @@ namespace webview_cef {
 		m_handler->onJavaScriptChannelMessage = nullptr;
 		m_handler->onFocusedNodeChangeMessage = nullptr;
 		m_handler->onImeCompositionRangeChangedMessage = nullptr;
+		m_handler->onLoadStart = nullptr;
+		m_handler->onLoadEnd = nullptr;
+		m_handler->onLoadError = nullptr;
+		m_handler->onLoadingStateChanged = nullptr;
+		m_handler->onFindResult = nullptr;
+		m_handler->onAdBlocked = nullptr;
 		m_handler->onDownloadStart = nullptr;
 		m_handler->onDownloadUpdated = nullptr;
 		m_handler->onContextMenu = nullptr;
@@ -439,10 +527,12 @@ namespace webview_cef {
 		}
 		else if (name.compare("close") == 0) {
 			int browserId = int(webview_value_get_int(values));
-			m_handler->closeBrowser(browserId);
-			if(m_renderers.find(browserId) != m_renderers.end() && m_renderers[browserId] != nullptr) {
-				m_renderers[browserId].reset();
+			if (m_focusedBrowserId == browserId) {
+				m_focusedBrowserId = -1;
+				m_handler->setClientFocus(browserId, false);
 			}
+			m_handler->closeBrowser(browserId);
+			m_renderers.erase(browserId);
 			result(1, nullptr);
 		}
 		else if (name.compare("loadUrl") == 0) {
@@ -491,6 +581,57 @@ namespace webview_cef {
 			m_handler->reload(browserId);
 			result(1, nullptr);
 		}
+		else if (name.compare("stopLoad") == 0) {
+			int browserId = int(webview_value_get_int(values));
+			m_handler->stopLoad(browserId);
+			result(1, nullptr);
+		}
+		else if (name.compare("findInPage") == 0) {
+			int browserId = int(webview_value_get_int(webview_value_get_list_value(values, 0)));
+			const auto rawText = webview_value_get_string(webview_value_get_list_value(values, 1));
+			bool forward = webview_value_get_bool(webview_value_get_list_value(values, 2));
+			bool matchCase = webview_value_get_bool(webview_value_get_list_value(values, 3));
+			bool findNext = webview_value_get_bool(webview_value_get_list_value(values, 4));
+			m_handler->findInPage(browserId, rawText ? rawText : "", forward, matchCase, findNext);
+			result(1, nullptr);
+		}
+		else if (name.compare("stopFinding") == 0) {
+			int browserId = int(webview_value_get_int(webview_value_get_list_value(values, 0)));
+			bool clearSelection = webview_value_get_bool(webview_value_get_list_value(values, 1));
+			m_handler->stopFinding(browserId, clearSelection);
+			result(1, nullptr);
+		}
+		else if (name.compare("setZoomLevel") == 0) {
+			int browserId = int(webview_value_get_int(webview_value_get_list_value(values, 0)));
+			double zoomLevel = webview_value_get_double(webview_value_get_list_value(values, 1));
+			m_handler->setZoomLevel(browserId, zoomLevel);
+			result(1, nullptr);
+		}
+		else if (name.compare("setAdBlockConfig") == 0) {
+			bool enabled = webview_value_get_bool(webview_value_get_list_value(values, 0));
+			WValue *domainList = webview_value_get_list_value(values, 1);
+			WValue *whitelistList = webview_value_get_list_value(values, 2);
+			std::vector<std::string> domains;
+			if (domainList) {
+				auto len = webview_value_get_len(domainList);
+				domains.reserve(len);
+				for (size_t i = 0; i < len; i++) {
+					const auto s = webview_value_get_string(webview_value_get_list_value(domainList, i));
+					if (s) domains.emplace_back(s);
+				}
+			}
+			std::vector<std::string> whitelist;
+			if (whitelistList) {
+				auto len = webview_value_get_len(whitelistList);
+				whitelist.reserve(len);
+				for (size_t i = 0; i < len; i++) {
+					const auto s = webview_value_get_string(webview_value_get_list_value(whitelistList, i));
+					if (s) whitelist.emplace_back(s);
+				}
+			}
+			m_handler->setAdBlockConfig(enabled, domains, whitelist);
+			result(1, nullptr);
+		}
 		else if (name.compare("openDevTools") == 0) {			
 			int browserId = int(webview_value_get_int(values));
 			m_handler->openDevTools(browserId);
@@ -510,9 +651,25 @@ namespace webview_cef {
 		} 
 		else if (name.compare("setClientFocus") == 0) {
 			int browserId = int(webview_value_get_int(webview_value_get_list_value(values, 0)));
-			if (m_renderers.find(browserId) != m_renderers.end() && m_renderers[browserId] != nullptr) {
-				m_renderers[browserId].get()->isFocused = webview_value_get_bool(webview_value_get_list_value(values, 1));
-				m_handler->setClientFocus(browserId, m_renderers[browserId].get()->isFocused);
+			bool focus = webview_value_get_bool(webview_value_get_list_value(values, 1));
+			if (focus) {
+				for (auto& kv : m_renderers) {
+					if (kv.second) {
+						kv.second->isFocused = (kv.first == browserId);
+					}
+				}
+				if (m_renderers.find(browserId) != m_renderers.end() && m_renderers[browserId] != nullptr) {
+					m_focusedBrowserId = browserId;
+					m_handler->setClientFocus(browserId, true);
+				}
+			} else {
+				if (m_renderers.find(browserId) != m_renderers.end() && m_renderers[browserId] != nullptr) {
+					m_renderers[browserId]->isFocused = false;
+				}
+				if (m_focusedBrowserId == browserId) {
+					m_focusedBrowserId = -1;
+					m_handler->setClientFocus(browserId, false);
+				}
 			}
 			result(1, nullptr);
 		}
@@ -667,31 +824,20 @@ namespace webview_cef {
 			});
 		}
 		else {
-			result = 0;
+			result(0, nullptr);
 		}
 	}
 
 	void WebviewPlugin::sendKeyEvent(CefKeyEvent& ev)
 	{
 		std::lock_guard<std::recursive_mutex> lock(m_mutex);
-		int focusedId = -1;
-		for (auto const& [id, renderer] : m_renderers) {
-			if (renderer && renderer->isFocused) {
-				focusedId = id;
-				break;
-			}
+		if (m_focusedBrowserId == -1 || m_renderers.find(m_focusedBrowserId) == m_renderers.end()) {
+			return;
 		}
-
-		if (focusedId != -1) {
-			m_handler->sendKeyEvent(focusedId, ev);
-		}
+		m_handler->sendKeyEvent(m_focusedBrowserId, ev);
 
 		if(ev.type == KEYEVENT_RAWKEYDOWN && ev.windows_key_code == 0x7B && (ev.modifiers & EVENTFLAG_CONTROL_DOWN) != 0){
-			for(auto render : m_renderers){
-				if(render.second.get()->isFocused){
-					m_handler->openDevTools(render.first);
-				}
-			}
+			m_handler->openDevTools(m_focusedBrowserId);
 		}
 	}
 
@@ -709,12 +855,8 @@ namespace webview_cef {
 	}
 	
 	bool WebviewPlugin::getAnyBrowserFocused(){
-		for(auto render : m_renderers){
-			if(render.second != nullptr && render.second.get()->isFocused){
-				return true;
-			}
-		}
-		return false;
+		std::lock_guard<std::recursive_mutex> lock(m_mutex);
+		return m_focusedBrowserId != -1 && m_renderers.find(m_focusedBrowserId) != m_renderers.end();
 	}
 	
 	int WebviewPlugin::cursorAction(WValue *args, std::string name) {
@@ -806,18 +948,14 @@ namespace webview_cef {
 	}
 
 	void SwapBufferFromBgraToRgba(void* _dest, const void* _src, int width, int height) {
-		int32_t* dest = (int32_t*)_dest;
-		int32_t* src = (int32_t*)_src;
-		int32_t rgba;
-		int32_t bgra;
-		int length = width * height;
+		uint32_t* __restrict dest = static_cast<uint32_t*>(_dest);
+		const uint32_t* __restrict src = static_cast<const uint32_t*>(_src);
+		const int length = width * height;
 		for (int i = 0; i < length; i++) {
-			bgra = src[i];
-			// BGRA in hex = 0xAARRGGBB.
-			rgba = (bgra & 0x00ff0000) >> 16 // Red >> Blue.
-				| (bgra & 0xff00ff00) // Green Alpha.
-				| (bgra & 0x000000ff) << 16; // Blue >> Red.
-			dest[i] = rgba;
+			const uint32_t bgra = src[i];
+			dest[i] = ((bgra & 0x00ff0000u) >> 16)
+				| (bgra & 0xff00ff00u)
+				| ((bgra & 0x000000ffu) << 16);
 		}
 	}
 

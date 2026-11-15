@@ -712,6 +712,8 @@ static void disable_workspace(struct sway_workspace *ws) {
 	for (int i = 0; i < ws->current.floating->length; i++) {
 		struct sway_container *floater = ws->current.floating->items[i];
 		wlr_scene_node_reparent(&floater->scene_tree->node, root->layers.floating);
+		wlr_scene_node_set_position(&floater->scene_tree->node,
+			floater->current.x, floater->current.y);
 		disable_container(floater);
 		wlr_scene_node_set_enabled(&floater->scene_tree->node, false);
 	}
@@ -782,6 +784,12 @@ static void arrange_output(struct sway_output *output, int width, int height) {
 				arrange_workspace_floating(child, offset_x);
 			}
 		} else {
+			struct wlr_box *area = &output->usable_area;
+			struct side_gaps *gaps = &child->current_gaps;
+			wlr_scene_node_set_position(&child->layers.tiling->node,
+				gaps->left + area->x, gaps->top + area->y);
+			wlr_scene_node_set_position(&child->layers.fullscreen->node,
+				gaps->left + area->x, gaps->top + area->y);
 			wlr_scene_node_set_enabled(&child->layers.tiling->node, false);
 			wlr_scene_node_set_enabled(&child->layers.fullscreen->node, false);
 
@@ -890,6 +898,26 @@ void animation_update_callback() {
 	}
 }
 
+static void reset_container_animation(struct sway_container *con,
+		const struct sway_container_state *state) {
+	if (con->animation_state.animation) {
+		if (con->animation_state.animation->initialized) {
+			con->animation_state.animation->initialized = false;
+			wl_list_remove(&con->animation_state.animation->link);
+		}
+		con->animation_state.animation->progress = 1.0f;
+		con->animation_state.animation->multiplier = 1.0f;
+	}
+	con->animation_state.delta_x = 0;
+	con->animation_state.delta_y = 0;
+	con->animation_state.delta_width = 0;
+	con->animation_state.delta_height = 0;
+	con->animation_state.current_width = state->width;
+	con->animation_state.current_height = state->height;
+	con->animation_state.current_content_width = state->content_width;
+	con->animation_state.current_content_height = state->content_height;
+}
+
 static bool should_con_new_animation(struct sway_container *con, struct sway_container_state *new_state) {
 	return con->current.width != new_state->width ||
 		con->current.height != new_state->height ||
@@ -965,18 +993,26 @@ static void transaction_apply(struct sway_transaction *transaction) {
 			struct sway_container *con = node->sway_container;
 			if (!con->node.destroying &&
 					should_con_new_animation(con, &instruction->container_state)) {
-				should_start_new_animation = true;
+				// Only animate containers that stay on a currently visible workspace.
+				// Containers modified on inactive workspaces have stale/off-screen scene
+				// coordinates and would otherwise glitch when switching to that workspace.
+				struct sway_workspace *ws = con->current.workspace;
+				bool ws_visible = ws && workspace_is_visible(ws) &&
+					ws == instruction->container_state.workspace;
+				if (con->view && ws_visible) {
+					should_start_new_animation = true;
 
-				// TODO: reset animation state on going to scratchpad
-				// skip newly spawned windows (for now!)
-				if (con->view && con->current.workspace) {
+					// TODO: reset animation state on going to scratchpad
+					// skip newly spawned windows (for now!)
 					int lx, ly;
 					wlr_scene_node_coords(&con->scene_tree->node, &lx, &ly);
-					con->animation_state.delta_x = lx - con->pending.x;
-					con->animation_state.delta_y = ly - con->pending.y;
-					con->animation_state.delta_width = con->animation_state.current_width - con->pending.width;
-					con->animation_state.delta_height = con->animation_state.current_height - con->pending.height;
+					con->animation_state.delta_x = lx - instruction->container_state.x;
+					con->animation_state.delta_y = ly - instruction->container_state.y;
+					con->animation_state.delta_width = con->animation_state.current_width - instruction->container_state.width;
+					con->animation_state.delta_height = con->animation_state.current_height - instruction->container_state.height;
 					add_animation(con->animation_state.animation);
+				} else {
+					reset_container_animation(con, &instruction->container_state);
 				}
 			}
 			apply_container_state(con, &instruction->container_state);

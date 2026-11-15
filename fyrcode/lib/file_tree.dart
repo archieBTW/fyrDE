@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'dart:io';
 import 'package:path/path.dart' as p;
@@ -8,12 +9,18 @@ import 'fyr_theme.dart';
 class FileTree extends StatefulWidget {
   final String rootDirectory;
   final void Function(String path) onFileSelected;
+  final void Function(String oldPath, String newPath)? onFileRenamed;
+  final void Function(String path)? onFileDeleted;
+  final VoidCallback? onCollapse;
   final Map<String, int> fileErrorCounts;
 
   const FileTree({
     super.key,
     required this.rootDirectory,
     required this.onFileSelected,
+    this.onFileRenamed,
+    this.onFileDeleted,
+    this.onCollapse,
     this.fileErrorCounts = const {},
   });
 
@@ -216,8 +223,8 @@ class _FileTreeState extends State<FileTree> {
       ),
       color: FyrTheme.cardColor,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      items: [
-        PopupMenuItem(
+      items: <PopupMenuEntry<dynamic>>[
+        PopupMenuItem<dynamic>(
           onTap: () => Future.delayed(
             Duration.zero,
             () => _createNewItem(context, parentDir, false),
@@ -259,8 +266,192 @@ class _FileTreeState extends State<FileTree> {
             ],
           ),
         ),
+        if (path != widget.rootDirectory) ...[
+          const PopupMenuDivider(),
+          PopupMenuItem(
+            onTap: () => Future.delayed(
+              Duration.zero,
+              () => _renameItem(context, path, isDirectory),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.edit_outlined, color: FyrTheme.textColor, size: 16),
+                const SizedBox(width: 8),
+                Text(
+                  'Rename',
+                  style: GoogleFonts.jetBrainsMono(
+                    color: FyrTheme.textColor,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          PopupMenuItem(
+            onTap: () => Clipboard.setData(
+              ClipboardData(text: p.relative(path, from: widget.rootDirectory)),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.copy, color: FyrTheme.textColor, size: 16),
+                const SizedBox(width: 8),
+                Text(
+                  'Copy Relative Path',
+                  style: GoogleFonts.jetBrainsMono(
+                    color: FyrTheme.textColor,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          PopupMenuItem(
+            onTap: () => Future.delayed(
+              Duration.zero,
+              () => _deleteItem(context, path, isDirectory),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.delete_outline,
+                  color: Colors.redAccent,
+                  size: 16,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Delete',
+                  style: GoogleFonts.jetBrainsMono(
+                    color: Colors.redAccent,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ],
     );
+  }
+
+  Future<void> _renameItem(
+    BuildContext context,
+    String path,
+    bool isDirectory,
+  ) async {
+    final controller = TextEditingController(text: p.basename(path));
+    final nextName = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: FyrTheme.cardColor,
+        title: Text(
+          'Rename',
+          style: GoogleFonts.jetBrainsMono(
+            color: FyrTheme.textColor,
+            fontSize: 15,
+          ),
+        ),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          style: GoogleFonts.jetBrainsMono(color: FyrTheme.textColor),
+          onSubmitted: (val) => Navigator.pop(ctx, val),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(
+              'CANCEL',
+              style: GoogleFonts.jetBrainsMono(color: FyrTheme.textColorMuted),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            child: Text(
+              'RENAME',
+              style: GoogleFonts.jetBrainsMono(color: FyrTheme.accentColor),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (nextName == null || nextName.trim().isEmpty) return;
+    final newPath = p.join(p.dirname(path), nextName.trim());
+    if (newPath == path) return;
+    try {
+      if (isDirectory) {
+        await Directory(path).rename(newPath);
+      } else {
+        await File(path).rename(newPath);
+      }
+      _loadDirectory();
+      widget.onFileRenamed?.call(path, newPath);
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Rename failed: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _deleteItem(
+    BuildContext context,
+    String path,
+    bool isDirectory,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: FyrTheme.cardColor,
+        title: Text(
+          'Delete ${p.basename(path)}?',
+          style: GoogleFonts.jetBrainsMono(
+            color: FyrTheme.textColor,
+            fontSize: 15,
+          ),
+        ),
+        content: Text(
+          isDirectory
+              ? 'This will recursively delete the folder and its contents.'
+              : 'This file will be permanently deleted from disk.',
+          style: TextStyle(color: FyrTheme.textColorMuted, fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(
+              'CANCEL',
+              style: GoogleFonts.jetBrainsMono(color: FyrTheme.textColorMuted),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(
+              'DELETE',
+              style: GoogleFonts.jetBrainsMono(color: Colors.redAccent),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+    try {
+      if (isDirectory) {
+        await Directory(path).delete(recursive: true);
+      } else {
+        await File(path).delete();
+      }
+      _loadDirectory();
+      widget.onFileDeleted?.call(path);
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Delete failed: $e')),
+        );
+      }
+    }
   }
 
   Future<void> _createNewItem(
@@ -359,17 +550,36 @@ class _FileTreeState extends State<FileTree> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 16.0,
-              vertical: 8.0,
-            ),
-            child: Text(
-              'EXPLORER',
-              style: GoogleFonts.jetBrainsMono(
-                color: FyrTheme.textColorMuted,
-                fontSize: 11,
-                fontWeight: FontWeight.bold,
-              ),
+            padding: const EdgeInsets.fromLTRB(16.0, 6.0, 8.0, 6.0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'EXPLORER',
+                    style: GoogleFonts.jetBrainsMono(
+                      color: FyrTheme.textColorMuted,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                if (widget.onCollapse != null)
+                  Tooltip(
+                    message: 'Collapse Explorer (Ctrl+B)',
+                    child: InkWell(
+                      onTap: widget.onCollapse,
+                      borderRadius: BorderRadius.circular(4),
+                      child: Padding(
+                        padding: const EdgeInsets.all(2),
+                        child: Icon(
+                          Icons.chevron_left,
+                          size: 16,
+                          color: FyrTheme.textColorMuted,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
           Expanded(

@@ -49,7 +49,11 @@ class WebviewManager extends ValueNotifier<bool> {
 
   WebviewManager._internal() : super(false);
 
+  bool _initialized = false;
+
   Future<void> initialize({String? userAgent}) async {
+    if (_initialized) return _creatingCompleter.future;
+    _initialized = true;
     _creatingCompleter = Completer<void>();
     try {
       if (userAgent != null && userAgent.isNotEmpty) {
@@ -63,6 +67,7 @@ class WebviewManager extends ValueNotifier<bool> {
       _creatingCompleter.complete();
       value = true;
     } on PlatformException catch (e) {
+      _initialized = false;
       _creatingCompleter.completeError(e);
     }
     return _creatingCompleter.future;
@@ -152,6 +157,41 @@ class WebviewManager extends ValueNotifier<bool> {
         WebViewController controller =
         _webViews[browserId] as WebViewController;
         _webViews[browserId]?.listener?.onLoadEnd?.call(controller, urlId);
+        return;
+      case 'onLoadError':
+        int browserId = call.arguments["browserId"] as int;
+        final controller = _webViews[browserId];
+        if (controller != null) {
+          controller.listener?.onLoadError?.call(
+            controller,
+            call.arguments["errorCode"] as int,
+            call.arguments["errorText"] as String,
+            call.arguments["failedUrl"] as String,
+          );
+        }
+        return;
+      case 'onLoadingStateChanged':
+        int browserId = call.arguments["browserId"] as int;
+        _webViews[browserId]?.listener?.onLoadingStateChanged?.call(
+              call.arguments["isLoading"] as bool,
+              call.arguments["canGoBack"] as bool,
+              call.arguments["canGoForward"] as bool,
+            );
+        return;
+      case 'onFindResult':
+        int browserId = call.arguments["browserId"] as int;
+        _webViews[browserId]?.listener?.onFindResult?.call(
+              call.arguments["count"] as int,
+              call.arguments["activeMatchOrdinal"] as int,
+              call.arguments["finalUpdate"] as bool,
+            );
+        return;
+      case 'onAdBlocked':
+        int browserId = call.arguments["browserId"] as int;
+        _webViews[browserId]
+            ?.listener
+            ?.onAdBlocked
+            ?.call(call.arguments["count"] as int);
         return;
       case 'onDownloadStart':
         int browserId = call.arguments["browserId"] as int;
@@ -246,6 +286,16 @@ class WebviewManager extends ValueNotifier<bool> {
   Future<dynamic> visitUrlCookies(String domain, bool isHttpOnly) async {
     assert(value);
     return pluginChannel.invokeMethod('visitUrlCookies', [domain, isHttpOnly]);
+  }
+
+  Future<void> setAdBlockConfig({
+    required bool enabled,
+    required List<String> blockedDomains,
+    required List<String> whitelistHosts,
+  }) async {
+    assert(value);
+    return pluginChannel.invokeMethod(
+        'setAdBlockConfig', [enabled, blockedDomains, whitelistHosts]);
   }
 
   Future<void> quit() async {

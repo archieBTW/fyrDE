@@ -143,6 +143,7 @@ void free_config(struct sway_config *config) {
 	if (config->swaybg_client != NULL) {
 		wl_client_destroy(config->swaybg_client);
 	}
+	swaybg_free_argv(config);
 	if (config->input_configs) {
 		for (int i = 0; i < config->input_configs->length; i++) {
 			free_input_config(config->input_configs->items[i]);
@@ -301,6 +302,7 @@ static void config_defaults(struct sway_config *config) {
 	if (!(config->active_bar_modifiers = create_list())) goto cleanup;
 
 	if (!(config->swaybg_command = strdup("swaybg"))) goto cleanup;
+	wl_list_init(&config->swaybg_client_destroy.link);
 
 	if (!(config->config_chain = create_list())) goto cleanup;
 	config->current_config_path = NULL;
@@ -523,10 +525,6 @@ bool load_main_config(const char *file, bool is_active, bool validating) {
 		config->primary_selection = old_config->primary_selection;
 
 		if (!config->validating) {
-			if (old_config->swaybg_client != NULL) {
-				wl_client_destroy(old_config->swaybg_client);
-			}
-
 			if (old_config->swaynag_config_errors.client != NULL) {
 				wl_client_destroy(old_config->swaynag_config_errors.client);
 			}
@@ -569,6 +567,7 @@ bool load_main_config(const char *file, bool is_active, bool validating) {
 		}
 		sway_switch_retrigger_bindings_for_all();
 
+		swaybg_transfer(config, old_config);
 		spawn_swaybg();
 
 		config->reloading = false;
