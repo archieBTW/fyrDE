@@ -644,7 +644,7 @@ class _SamplerEditorWidgetState extends State<SamplerEditorWidget> {
         VerticalDivider(width: 1, color: textFaint),
         Expanded(
           child: Padding(
-            padding: EdgeInsets.all(16),
+            padding: EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -768,64 +768,67 @@ class _SamplerEditorWidgetState extends State<SamplerEditorWidget> {
                     ),
                   ],
                 ),
-                SizedBox(height: 16),
-                Container(
-                  height: 80,
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    color: bgDark,
-                    border: Border.all(color: textFaint),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Stack(
-                    children: [
-                      if (pad.source != null && pad.waveformData != null)
-                        CustomPaint(
-                          size: Size.infinite,
-                          painter: SamplerWaveformPainter(pad),
-                        ),
-                      if (pad.source != null)
-                        Positioned.fill(
-                          child: SliderTheme(
-                            data: SliderTheme.of(context).copyWith(
-                              activeTrackColor: lavenderAccent.withValues(
-                                alpha: 0.3,
+                SizedBox(height: 10),
+                Expanded(
+                  child: Container(
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      color: bgDark,
+                      border: Border.all(color: textFaint),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Stack(
+                      children: [
+                        if (pad.waveformData != null && pad.waveformData!.isNotEmpty)
+                          CustomPaint(
+                            size: Size.infinite,
+                            painter: SamplerWaveformPainter(pad),
+                          ),
+                        if (pad.source != null)
+                          Positioned.fill(
+                            child: SliderTheme(
+                              data: SliderTheme.of(context).copyWith(
+                                activeTrackColor: lavenderAccent.withValues(
+                                  alpha: 0.3,
+                                ),
+                                inactiveTrackColor: textMuted,
+                                thumbColor: lavenderAccent,
+                                overlayColor: lavenderAccent.withValues(
+                                  alpha: 0.2,
+                                ),
+                                trackHeight: 80,
+                                thumbShape: RoundSliderThumbShape(
+                                  enabledThumbRadius: 6,
+                                ),
                               ),
-                              inactiveTrackColor: textMuted,
-                              thumbColor: lavenderAccent,
-                              overlayColor: lavenderAccent.withValues(
-                                alpha: 0.2,
-                              ),
-                              trackHeight: 80,
-                              thumbShape: RoundSliderThumbShape(
-                                enabledThumbRadius: 6,
+                              child: RangeSlider(
+                                values: RangeValues(pad.trimStart, pad.trimEnd),
+                                min: 0.0,
+                                max: 1.0,
+                                onChanged: (RangeValues values) {
+                                  setState(() {
+                                    pad.trimStart = values.start;
+                                    pad.trimEnd = values.end;
+                                  });
+                                  widget.onStateChanged();
+                                },
                               ),
                             ),
-                            child: RangeSlider(
-                              values: RangeValues(pad.trimStart, pad.trimEnd),
-                              min: 0.0,
-                              max: 1.0,
-                              onChanged: (RangeValues values) {
-                                setState(() {
-                                  pad.trimStart = values.start;
-                                  pad.trimEnd = values.end;
-                                });
-                                widget.onStateChanged();
-                              },
+                          ),
+                        if (pad.source == null &&
+                            (pad.waveformData == null ||
+                                pad.waveformData!.isEmpty))
+                          Center(
+                            child: Text(
+                              'No Audio Data',
+                              style: TextStyle(color: textFaint),
                             ),
                           ),
-                        ),
-                      if (pad.source == null && pad.waveformData == null)
-                        Center(
-                          child: Text(
-                            'No Audio Data',
-                            style: TextStyle(color: textFaint),
-                          ),
-                        ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
-                SizedBox(height: 16),
+                SizedBox(height: 10),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [

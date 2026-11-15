@@ -927,7 +927,7 @@ static void transaction_apply(struct sway_transaction *transaction) {
 			struct sway_workspace *old_ws = output->current.active_workspace;
 			struct sway_workspace *new_ws = instruction->output_state.active_workspace;
 			if (old_ws && new_ws && old_ws != new_ws &&
-					!old_ws->node.destroying && !new_ws->node.destroying &&
+					!new_ws->node.destroying &&
 					config->animation_duration_ms > 0) {
 				should_start_new_animation = true;
 
@@ -940,14 +940,18 @@ static void transaction_apply(struct sway_transaction *transaction) {
 					direction = strcmp(new_ws->name, old_ws->name) > 0 ? 1 : -1;
 				}
 				int width = output->width;
-				
-				old_ws->animation_state.start_x = old_ws->layers.tiling->node.x;
-				old_ws->animation_state.end_x = old_ws->animation_state.start_x - (direction * width);
-				
-				new_ws->animation_state.start_x = old_ws->layers.tiling->node.x + (direction * width);
-				new_ws->animation_state.end_x = old_ws->layers.tiling->node.x;
+				int old_target_x = output->usable_area.x + old_ws->current_gaps.left;
+				int new_target_x = output->usable_area.x + new_ws->current_gaps.left;
 
-				add_animation(old_ws->animation_state.animation);
+				// Only animate old_ws out when it isn't an empty workspace already being destroyed.
+				if (!old_ws->node.destroying) {
+					old_ws->animation_state.start_x = old_ws->layers.tiling->node.x;
+					old_ws->animation_state.end_x = old_target_x - (direction * width);
+					add_animation(old_ws->animation_state.animation);
+				}
+
+				new_ws->animation_state.start_x = new_target_x + (direction * width);
+				new_ws->animation_state.end_x = new_target_x;
 				add_animation(new_ws->animation_state.animation);
 			}
 			apply_output_state(output, &instruction->output_state);

@@ -88,6 +88,7 @@ usage() {
     echo "Usage: $0 [options]"
     echo "Options:"
     echo "  -a <app>    Rebuild and reinstall a specific Flutter app (e.g., fyrtaskbar)"
+    echo "  -w          Build and install SwayFX compositor"
     echo "  -s          Reinstall Sway configuration and scripts"
     echo "  -l          Reinstall SDDM theme and configuration"
     echo "  -t          Reinstall GTK and icon themes"
@@ -202,8 +203,10 @@ build_swayfx() {
     echo "Building and installing local swayfx..."
     if [ -d "./swayfx" ]; then
         cd ./swayfx
-        rm -rf build
-        meson setup build
+        if [ ! -f "build/build.ninja" ]; then
+            rm -rf build
+            meson setup build
+        fi
         ninja -C build
         sudo ninja -C build install
         cd ..
@@ -1326,10 +1329,11 @@ setup_zsh() {
 
 APP_TO_REINSTALL=""
 
-while getopts "a:sldthfFzH" opt; do
+while getopts "a:wsldthfFzH" opt; do
     MODULAR=true
     case $opt in
         a) APP_TO_REINSTALL="$OPTARG" ;;
+        w) INSTALL_SWAYFX=true ;;
         s) INSTALL_SWAY_CONFIG=true ;;
         l) INSTALL_SDDM=true ;;
         t) INSTALL_THEMES=true ;;
@@ -1364,6 +1368,7 @@ else
     [ "$INSTALL_DEPS" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
     [ "$INSTALL_ZSH" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
     [ -n "$APP_TO_REINSTALL" ] && TOTAL_STEPS=$((TOTAL_STEPS + 2)) # flutter + app
+    [ "$INSTALL_SWAYFX" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
     [ "$INSTALL_SWAY_CONFIG" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
     [ "$INSTALL_SDDM" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
     [ "$INSTALL_THEMES" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
@@ -1378,6 +1383,7 @@ else
         install_flutter
         reinstall_app "$APP_TO_REINSTALL"
     fi
+    if [ "$INSTALL_SWAYFX" = "true" ]; then build_swayfx; fi
     if [ "$INSTALL_SWAY_CONFIG" = "true" ]; then setup_sway_config; fi
     if [ "$INSTALL_SDDM" = "true" ]; then setup_sddm; fi
     if [ "$INSTALL_THEMES" = "true" ]; then setup_themes; fi

@@ -1,8 +1,8 @@
 # fyrDAW
 
-A desktop Digital Audio Workstation built in **Flutter** and **C++/SoLoud DSP** for Linux — featuring multi-track audio & MIDI recording, 17 built-in multi-sampled instruments, a 16-pad chop sampler, reorderable stompbox & mastering FX, Group Bus routing, real-time Arpeggiator & Groove tools, an Ableton-style Session Clip Launcher, hardware MIDI Learn, Reference Track LUFS A/B comparison, and offline WAV / FLAC / MP3 / Stem export.
+A desktop Digital Audio Workstation built in **Flutter** and **C++/SoLoud DSP** for Linux — featuring multi-track audio & MIDI recording, **31 built-in multi-sampled instruments**, a **16-pad chop sampler** with bundled studio/808/boombap drum kits, a close-up **Audio Clip Editor**, reorderable stompbox & mastering FX, color-synced **Group Bus** routing & live **dBFS metering**, real-time **Arpeggiator & Groove** tools, an Ableton-style **Session Clip Launcher**, hardware **MIDI Learn**, **Reference Track LUFS A/B**, and offline WAV / FLAC / MP3 / Stem export.
 
-![fyrDAW Arrangement, Piano Roll MIDI FX & Musical Typing](screenshots/timeline_midi_arp.png)
+![fyrDAW Arrangement Timeline, Piano Roll & Musical Typing](screenshots/timeline_midi_arp.png)
 
 ---
 
@@ -11,11 +11,11 @@ A desktop Digital Audio Workstation built in **Flutter** and **C++/SoLoud DSP** 
 - [Features at a Glance](#features-at-a-glance)
 - [1. Top Bar, Transport & Project Templates](#1-top-bar-transport--project-templates)
 - [2. Track Types & Group Bus Routing](#2-track-types--group-bus-routing)
-- [3. Arrangement Timeline & Surgical Audio Tools](#3-arrangement-timeline--surgical-audio-tools)
-- [4. Piano Roll, Synth Rack & Real-Time MIDI FX](#4-piano-roll-synth-rack--real-time-midi-fx)
-- [5. 16-Pad Sampler & Slicing](#5-16-pad-sampler--slicing)
+- [3. Arrangement Timeline & Close-Up Audio Clip Editor](#3-arrangement-timeline--close-up-audio-clip-editor)
+- [4. Virtual Instruments, Piano Roll & Real-Time MIDI FX](#4-virtual-instruments-piano-roll--real-time-midi-fx)
+- [5. 16-Pad Sampler, Drum Kits & Transient Slicing](#5-16-pad-sampler-drum-kits--transient-slicing)
 - [6. Stompbox Effects & Dedicated Mastering Chain](#6-stompbox-effects--dedicated-mastering-chain)
-- [7. Mixing Console, Pre/Post Aux Sends & Reference A/B](#7-mixing-console-prepost-aux-sends--reference-ab)
+- [7. Mixing Console, Synced Track Colors & Live dBFS Metering](#7-mixing-console-synced-track-colors--live-dbfs-metering)
 - [8. Session Clip Launcher & Hardware MIDI Learn](#8-session-clip-launcher--hardware-midi-learn)
 - [9. Saving Projects (.adaw) & Exporting Mixdowns / Stems](#9-saving-projects-adaw--exporting-mixdowns--stems)
 - [Keyboard Shortcuts](#keyboard-shortcuts)
@@ -25,12 +25,13 @@ A desktop Digital Audio Workstation built in **Flutter** and **C++/SoLoud DSP** 
 
 ## Features at a Glance
 
-- **4 Track Types**: Audio, MIDI Instrument, 16-Pad Sampler, and collapsible **Group / Bus (`BUS`)** tracks.
-- **17 Built-In Multi-Sampled Instruments**: Analog synths (`Square Lead`, `Sawtooth Bass`, `Sine Sub`), keys & organs (`Grand Piano`, `Electric Piano (Rhodes)`, `Hammond B3 Organ`, `Cathedral Pipe Organ`), guitars (`Clean`, `Overdriven`, `Acoustic`), orchestral (`Solo Cello`, `Solo Violin`, `String Ensemble`, `Brass Section`, `Concert Flute`), and pads (`Choir Pad (Ahh)`, `Analog Warm Pad`).
-- **Real-Time MIDI FX**: Built-in **Arpeggiator** (`Up`, `Down`, `Up/Down`, `Random`, rate, 1–3 octaves, gate), **Humanize**, and **Audio-Transient Groove Extract**, plus live **Synth ADSR & Filter** shaping.
-- **Surgical Audio Editing**: Peak **Normalize (-1 dBFS)**, **Strip Silence**, **Extract Melody to MIDI Track**, **Auto-Match BPM**, **Pitch/Time Stretch**, **Take Comping Lanes**, **Slice to Sampler Track**, and automatic **Overlap Crossfades**.
-- **11 Stompbox Effects + Master Rack**: `EQ` (interactive curve), `Compressor` (with cross-track **Sidechain Ducking**), `TubeScreamer`, `GuitarAmp`, `Reverb`, `Echo`, `Flanger`, `Chorus`, `Lofi`, `Robotize`, and `BassBoost`.
-- **Pro Mixing & Mastering**: Group Bus summing, **Pre/Post-Fader** Aux Sends, Aux Return **Solo**, dedicated **Master FX** chain, integrated LUFS meter with selectable targets (`-14` / `-11` / `-9` LUFS), Stereo Correlation meter, Brickwall Limiter, and **Loudness-Matched Reference A/B** auditioning.
+- **4 Track Types**: Audio, MIDI Instrument, 16-Pad Sampler, and collapsible **Group / Bus (`BUS`)** tracks with consistent color coding across Timeline headers, clips, and Mixer strips.
+- **31 Built-In Multi-Sampled Virtual Instruments**: Acoustic/electric instruments, studio pianos & mallets, brass/woodwinds, strings, choirs, analog synths, and **Pure Deep Sine / 808 / Reese Sub** basses.
+- **3 Realistic Drum Kits + Custom Kit Persistence**: Built-in **Acoustic Studio Kit**, **808 Trap Kit**, and **Vintage Boom-Bap Kit** loaded with stereo WAV samples, choke groups, 16-level modes, and custom kit save/load/delete.
+- **Close-Up Audio Clip Editor**: Double-click any Audio clip on the timeline to open a dedicated zoomed waveform view for non-destructive trimming, cursor splitting, fade curves, gain/pitch/stretch dials, normalization, and transient slicing.
+- **Real-Time MIDI FX**: Double-click any MIDI or Sampler clip to open the Piano Roll with built-in **Arpeggiator** (`Up`, `Down`, `Up/Down`, `Random`, rate, 1–3 octaves, gate), **Humanize**, **Audio-Transient Groove Extract**, **Step Sequencer**, and **Synth ADSR & Filter** shaping.
+- **11 Stompbox Effects + Master Rack**: `EQ`, `Compressor` (with cross-track **Sidechain Ducking**), `TubeScreamer`, `GuitarAmp`, `Reverb`, `Echo`, `Flanger`, `Chorus`, `Lofi`, `Robotize`, and `BassBoost`.
+- **Pro Mixing & Live Per-Track dBFS Metering**: Color-matched channel strips with `-48..0 dBFS` L/R VU meters and live peak dBFS readouts, Group Bus level summing, **Pre/Post-Fader** Aux Sends, Aux Return **Solo**, dedicated **Master FX** chain, integrated **LUFS meter** (`-14` / `-11` / `-9`), Stereo Correlation meter, Brickwall Limiter, and **Loudness-Matched Reference A/B**.
 - **Live Performance & Hardware**: Next-bar quantized **Session Clip Launcher** (`Scene` & per-clip launching), built-in **QWERTY Musical Typing Keyboard**, ALSA/USB hardware MIDI routing, and 1-click **MIDI Learn (`0xB0` CC)**.
 
 ---
@@ -43,7 +44,7 @@ Start fast from **Settings (`⚙`) -> `New from Template...`**:
 - **Lo-Fi Chill Sketch** (`85 BPM`) — Rhodes chords, Sine Sub, vinyl Lofi FX, and Sampler kit.
 - **Guitar + Vocals Rig** (`112 BPM`) — Armed vocal track (`EQ` + `Compressor`) and Guitar pedalboard (`TubeScreamer` -> `GuitarAmp` -> `Reverb`).
 - **Synthwave 4-Track** (`118 BPM`) — Sawtooth Arp, Warm Pad, Square Lead, and Drum Machine.
-- **Cinematic Strings & Piano** (`92 BPM`) — Grand Piano, Strings, and Hall Reverb.
+- **Cinematic Strings & Piano** (`92 BPM`) — Grand Piano, Solo Cello, String Ensemble, and Hall Reverb.
 
 ### Top Bar Controls
 - **Transport**: Play/Pause (`Space`), Stop (`Enter` returns to loop start or bar 1), Record (`R`).
@@ -51,7 +52,7 @@ Start fast from **Settings (`⚙`) -> `New from Template...`**:
 - **Punch-In (`PUNCH`)**: Jumps playhead inside the loop brace and punches in/out automatically.
 - **Tempo & Meter**: Type BPM directly or click **Tap** for tap-tempo; toggle the Metronome bell icon and change time signature (`3/4` to `7/4`).
 - **Tools (Right)**: Undo/Redo, Zoom In/Out, Snap to Grid, Auto-Follow Playhead, **QWERTY Musical Typing Keyboard**, **Session View / Timeline Toggle**, **MIDI Learn Mode**, live Master FFT Spectrum, and Settings (`New`, `Templates`, `Open`, `Save`, `Save As`, `Export Mixdown`, `Export Stems`, `Preferences`).
-- **Timeline Overview Minimap & Song Markers**: Click/drag the top `OVERVIEW` strip to scrub long arrangements, right-click the ruler to add labeled **Song Markers** (`Intro`, `Chorus`, `Drop`), or drag the top loop bar ends to toggle/resize loop regions.
+- **Timeline Overview Minimap & Song Markers**: Click/drag the top `OVERVIEW` strip to scrub long arrangements, right-click the ruler to add labeled **Song Markers** (`Intro`, `Verse 1`, `Chorus`, `Drop`), or drag the top loop bar ends to toggle/resize loop regions.
 
 ---
 
@@ -59,70 +60,75 @@ Start fast from **Settings (`⚙`) -> `New from Template...`**:
 
 Click the **`+`** button next to `Tracks` to add:
 - **Audio Track**: Records live microphone/interface input or imports WAV/MP3/FLAC files. Includes **Headphones Monitor** toggle and Input Tuner/Noise Gate in the Effects tab.
-- **MIDI Track**: Triggers any of the 17 built-in instruments (click the piano icon to browse instruments, or the cable icon to select a hardware MIDI input port).
+- **MIDI Track**: Triggers any of the **31 built-in instruments** (click the piano icon on the header to browse by category, or the cable icon to select a hardware MIDI input port).
 - **Sampler Track**: Opens the 16-Pad chop sampler in the bottom panel (`Sampler` tab).
 - **Group Bus (`BUS`)**: Dedicated sub-mix bus that sums routed child tracks cleanly through shared Group Effects, Group Fader/Pan, Mute/Solo propagation, and Group Sends.
 
 ### Routing Tracks to a Group Bus
-1. Create a Group Bus via **`+` -> `Add Group Bus`** (badged **`BUS`** in amber).
+1. Create a Group Bus via **`+` -> `Add Group Bus`** (badged **`BUS`** in the track's own color).
 2. **Right-click** any Audio, MIDI, or Sampler track header and choose **`Route to Group Bus...`**.
 3. Child tracks display a colored **`GRP`** badge matching their parent bus.
 4. Click the chevron (`v` / `>`) beside **`BUS`** on the Group header to collapse/expand all child lanes in both headers and timeline views.
 
-> Muting or Soloing a Group Bus automatically propagates to all routed child tracks during both live playback and offline mixdown rendering.
+> Muting, Soloing, or metering a Group Bus propagates across all routed child tracks during live playback, Mixer metering, and offline mixdown rendering.
 
 ---
 
-## 3. Arrangement Timeline & Surgical Audio Tools
+## 3. Arrangement Timeline & Close-Up Audio Clip Editor
 
-- **Multi-Take Comping**: Recording audio over an existing clip automatically appends numbered takes (`Take 1`, `Take 2`, ...). Right-click the clip to audition/switch takes non-destructively.
-- **Automatic Overlap Crossfades**: Whenever two Audio Clips on the same track overlap, fyrDAW computes smooth raised-cosine crossfade curves automatically in both live playback and WAV/Stem mixdown.
-- **Clip Edge Trimming, Looping & Fades**: Drag clip edges to trim or loop (with notch indicators), drag top corners for Fade In / Fade Out curves, or split any clip at the playhead (**`Split at Playhead`**).
-- **Track Automation (`A`)**: Toggle **`A`** on any track header to expose break-point automation lanes for `Volume`, `Pan`, `Reverb Send`, `Delay Send`, or any active Effect parameter (`Effect_Param`). Right-click the lane to insert/clear points.
+![Close-Up Audio Clip Editor](screenshots/audio_clip_editor.png)
 
-### Audio Clip Context Menu
-Right-click any Audio Clip in the timeline to access surgical audio tools:
-- **Normalize (-1 dBFS)**: Scans peak amplitude and renders a normalized WAV scaled to `-1 dBFS`, refreshing the clip waveform.
-- **Strip Silence**: Analyzes amplitude envelopes and splits the clip cleanly into separate regions around silent gaps.
-- **Extract Melody to MIDI Track**: Runs monophonic pitch tracking (`YIN`-based Hz detection) across the audio clip and creates a new MIDI Track populated with transcribed `MidiNote` events.
-- **Gain & Pitch... / Stretch / Fit to Bars... / Auto-Match Project BPM**: Adjust clip gain, transpose in semitones, fit a loop cleanly to N bars, or auto-detect clip BPM and stretch to match project tempo.
-- **Reverse Audio / Slice to Sampler Track**: Non-destructively reverse playback or transient-slice the clip straight into 16 Sampler pads.
-
----
-
-## 4. Piano Roll, Synth Rack & Real-Time MIDI FX
-
-Select any MIDI clip (or double-click an empty MIDI lane to create one) and open the bottom **`Editor`** tab:
-
-- **Scale & Chord Tools**: Choose a musical key/scale (`Major`, `Minor`, `Harmonic Min`, `Dorian`, `Pentatonic`, `Blues`) to highlight/snap notes in-key, or use **Chords** to stamp common triads & 7th voicings directly onto the grid.
-- **Ghost Notes & Linked Patterns**: Enable Ghost Notes to view translucent notes from overlapping MIDI tracks for tight harmonic counterpoint. Right-click a clip -> **`Duplicate as Linked Alias`** so edits mirror across chorus/verse copies (`Make Unique` detaches an instance).
-- **Embedded Step Sequencer**: Toggle pattern grid step entry for fast drum or synth programming, including instant 4-step kick/snare/hat fills.
-- **Velocity Lane**: Toggle the equalizer icon in the toolbar to draw expressive per-note velocities below the Piano Roll.
-- **Real-Time Synth Panel (`Synth`)**: Shape the track's instrument voice with live **ADSR Envelope** (`ATK`, `DEC`, `SUS`, `REL`), resonant lowpass filter (**`CUTOFF`**, **`RESO`**), **Octave Shift**, and **Detune**.
-
-### Real-Time MIDI FX Rack (`Arp`, `Humanize` & `Groove`)
-- **Arpeggiator (`Arp`)**: Click **`Arp`** in the MIDI toolbar to reveal the **ARP FX** strip:
-  - Enable/disable with the switch.
-  - Choose pattern direction (**`Up`**, **`Down`**, **`Up/Down`**, **`Random`**), sync rate (`1/4`, `1/8`, `1/16`), **Octaves** (`1`–`3`), and **Gate** length slider (`15%`–`100%`).
-  - Runs live while holding notes on hardware MIDI or QWERTY Musical Typing, during live timeline playback, and inside offline Mixdowns!
-- **Humanize**: Adds natural micro-timing swing and velocity variation across all notes in the clip.
-- **Audio Groove Extraction (`Groove`)**: When Audio Clips exist in your project, use the Groove menu to detect transient onsets from any audio loop and quantize your MIDI notes directly to that pocket.
-
-### QWERTY Musical Typing Keyboard
-Click the keyboard icon in the top bar (or open the bottom bar) to play notes directly from your computer keyboard (`A W S E D F T G Y H U J K`), shift octaves with **`Z` / `X`**, and adjust velocity with **`C` / `V`**.
+**Double-click any Audio segment** on the timeline (or select an audio track/clip and open the **`Audio Editor`** tab) to inspect and sculpt the clip up close:
+- **Interactive Zoomed Waveform & Cursor**: Click/drag along the close-up waveform or time ruler to set a split/trim cursor (`ms`/`s` readout), zoom in/out on transients, and click **`Audition`** to preview immediately.
+- **Non-Destructive Trim & Split**: Use **`<| Trim In`**, **`|> Trim Out`**, **`Split at Cursor`**, or **`Reset Trim`** to tighten start/end boundaries cleanly with grid snap support.
+- **Fade Curves & Presets**: Drag the Fade In / Fade Out corner handles or use the rotary dials and 1-click presets (**`Clear`**, **`15ms De-Click`**, **`250ms Swell`**, **`Long Fade Out`**).
+- **Clip Gain, Pitch & Stretch**: Dial in clip gain (`%`), semitone pitch transposition, and speed/stretch multiplier in real time.
+- **Multi-Take Comping & Overlap Crossfades**: Recording over an existing audio region stacks numbered takes (`T1/2`, `T2/2`...) you can switch non-destructively via right-click, while overlapping audio clips compute automatic raised-cosine crossfades.
+- **One-Click Surgical DSP Tools** (available in both the **`Audio Editor`** toolbar and Audio Clip context menu):
+  - **`Normalize`**: Peaks audio cleanly to `-1 dBFS` and refreshes the waveform.
+  - **`Reverse`**: Non-destructively toggles reversed playback.
+  - **`Strip Silence`**: Detects silent gaps and splits the clip cleanly around active audio regions.
+  - **`Auto BPM`**: Estimates clip tempo and stretches cleanly to match project BPM.
+  - **`Audio->MIDI`**: Runs YIN monophonic pitch tracking to transcribe the audio melody into a new MIDI track.
+  - **`Slice->Pads`**: Auto-detects transient hits and maps up to 16 audio slices straight into a new Sampler Track + chromatic MIDI trigger pattern.
 
 ---
 
-## 5. 16-Pad Sampler & Slicing
+## 4. Virtual Instruments, Piano Roll & Real-Time MIDI FX
 
-![16-Pad Sampler Editor](screenshots/sampler_editor.png)
+![Virtual Instrument Browser](screenshots/instrument_browser.png)
 
-Select a Sampler Track and open the **`Sampler`** tab:
-- **16 Performance Pads**: Click `Load Sample` to assign WAV/audio files, or click the mic button to record a one-shot directly onto the active pad.
-- **Interactive Waveform & Per-Pad Controls**: Adjust `Volume`, `Pitch` (semitones), `Fade In`, and `Fade Out` knobs alongside MIDI note trigger mapping (`36`+ GM drum layout).
-- **16-Level Mode**: Switch pads into **`Vel`**, **`Pitch`**, or **`Filter`** stepped performance mode across all 16 pads.
-- **Choke Groups**: Assign pads (e.g., Open & Closed Hi-Hats) to the same colored **Choke Grp** so triggering one immediately mutes the other.
-- **Transient Slicing**: Right-click any Audio Clip -> **`Slice to Sampler Track`** to auto-detect drum hits/transients into up to 16 sliced pads AND generate a chromatic MIDI pattern triggering each slice in order.
+**Double-click any MIDI or Sampler segment** on the timeline to jump straight into the bottom **`Editor` (Piano Roll)** tab. Click the piano icon on any MIDI track header (or the **`Instrument`** selector in the MIDI toolbar) to browse **31 stereo multi-sampled sounds** across 7 categories:
+
+| Category | Instruments |
+|---|---|
+| **Synth & Bass / Leads** | `Square Lead`, `Sawtooth Bass`, `Sine Sub`, `Supersaw Trance Lead`, `Analog Poly Brass`, `Acid 303 Bass` |
+| **Sine & 808 Bass** | `Pure Deep Sine Bass`, `808 Boom Sub`, `Detuned Reese Sub` |
+| **Keys & Organ** | `Grand Piano`, `Electric Piano (Rhodes)`, `Hammond B3 Organ`, `Cathedral Pipe Organ` |
+| **Keys & Mallets** | `Warm Felted Piano`, `Concert Marimba`, `Concert Harp`, `FM Glassy Bell` |
+| **Guitars & Bass** | `Clean Electric Guitar`, `Overdriven Guitar`, `Acoustic Guitar`, `Nylon Spanish Guitar`, `Upright Acoustic Bass`, `Fingered Electric Bass` |
+| **Strings & Orchestral** | `Solo Cello`, `Solo Violin`, `String Ensemble`, `Brass Section`, `Concert Flute`, `Tenor / Alto Sax` |
+| **Pads & Choir** | `Choir Pad (Ahh)`, `Analog Warm Pad` |
+
+### Piano Roll, Step Sequencer & MIDI FX
+- **Scale & Chord Tools**: Highlight/snap notes to `Major`, `Minor`, `Harmonic Min`, `Dorian`, `Pentatonic`, or `Blues`, or stamp triads & 7th chords directly from **Chords**.
+- **Ghost Notes & Linked Patterns**: Overlay translucent notes from other MIDI tracks, or right-click a clip -> **`Duplicate as Linked Alias`** so pattern edits mirror across chorus/verse copies (`Make Unique` detaches).
+- **Embedded Step Sequencer & Velocity Lane**: Toggle grid step sequencing with instant drum grooves or draw per-note velocities along the bottom lane.
+- **Real-Time Synth Panel (`Synth`)**: Shape voice envelopes (**`ATK`**, **`DEC`**, **`SUS`**, **`REL`**), resonant lowpass filter (**`CUTOFF`**, **`RESO`**), **Octave**, and **Detune**.
+- **Arpeggiator (`Arp`), Humanize & Groove**: Enable live arpeggiation (`Up`, `Down`, `Up/Down`, `Random`, `1/4`–`1/32` rate, `1`–`3` octaves, Gate `%`), micro-timing **`Humanize`**, or **`Groove`** extraction quantized to transients detected in your Audio clips.
+- **QWERTY Musical Typing Keyboard**: Toggle the keyboard icon in the top bar to play chromatic notes (`A W S E D F T G Y H U J K`), shift octaves (`Z` / `X`), and adjust velocity (`C` / `V`).
+
+---
+
+## 5. 16-Pad Sampler, Drum Kits & Transient Slicing
+
+![16-Pad Sampler Editor with Acoustic Studio Kit](screenshots/sampler_editor.png)
+
+Select a Sampler Track and open the **`Sampler`** tab (or double-click its timeline clip to edit trigger notes in the Piano Roll):
+- **Built-In Drum Kit Presets**: Load **`Acoustic Studio Kit`**, **`808 Trap Kit`**, or **`Vintage Boom-Bap Kit`** from the **`Kit`** menu to populate pads with realistic studio birch drums, sub-heavy 808s, or dusty SP-1200 breaks complete with live waveforms and choke groups.
+- **Custom Sampler Kits**: Click **`Save`** next to the kit selector to save, overwrite, reload, or delete custom user drum kits across sessions.
+- **16 Performance Pads & Chop Waveform**: Click `Load Sample` to import WAV/audio files or click the red mic button to record directly onto any pad; drag the range trimmers on the pad waveform, flip **`Reverse`**, or tweak **`Volume`**, **`Pitch`**, **`Fade In`**, **`Fade Out`**, and **`MIDI Note`** (`36`+ GM layout).
+- **16-Level Mode & Choke Groups**: Play stepped **`16-Level Velocity`** or **`16-Level Pitch`** variations of the active pad across all 16 buttons, and assign Open/Closed Hi-Hats to **`Choke Grp A–D`** for authentic cymbal choking.
 
 ---
 
@@ -130,28 +136,28 @@ Select a Sampler Track and open the **`Sampler`** tab:
 
 ![Effects Rack Pedalboard](screenshots/effects_rack.png)
 
-Open the **`Effects`** tab to shape any track — or the entire Master Bus:
-- **Drag-to-Reorder Pedalboard**: Click **`+ Add Effect`** to insert `EQ`, `Compressor`, `TubeScreamer`, `GuitarAmp`, `Reverb`, `Echo`, `Flanger`, `Chorus`, `Lofi`, `Robotize`, or `BassBoost`. Drag cards horizontally to reorder the DSP signal chain, toggle pedal bypass LEDs, or click expand (`⤢`) to open the large Pedal Inspector with live curve/modulation visualizers.
+Open the **`Effects`** tab to process any Track, Group Bus, or the Master Bus:
+- **Drag-to-Reorder Pedalboard**: Click **`+ Add Effect`** to insert `EQ`, `Compressor`, `TubeScreamer`, `GuitarAmp`, `Reverb`, `Echo`, `Flanger`, `Chorus`, `Lofi`, `Robotize`, or `BassBoost`. Drag cards to reorder DSP signal flow, toggle bypass LEDs, or expand (`⤢`) any pedal for large curve & modulation visualizers.
 - **Chain Presets (`Presets`)**: Instantly load **`Crunch Guitar Rig`**, **`Vocal Polish Chain`**, **`Lo-Fi Tape Machine`**, **`Wide Ambient Space`**, or **`Clear All Effects`**.
-- **Sidechain Compression**: On any `Compressor` pedal, select another track as its **Sidechain Source** (`SC`) to duck bass or pads whenever your kick hits — rendered accurately in both live playback and mixdown!
-- **Chromatic Tuner & Noise Gate (Audio Tracks)**: Choose your audio input device, toggle the live **Tuner** (`Hz` / note / cents needle), and dial in the **Noise Gate** threshold to silence room hiss between takes.
-- **Dedicated Master Bus FX Chain (`TRACK FX` / `MASTER FX`)**: Click the **`TRACK FX`** pill in the right sidebar to switch the rack to **`MASTER FX`**. Any EQ, Compression, Reverb, or saturation placed on Master is applied across the final mix bus live and baked into final exports.
+- **Sidechain Compression (`SC`)**: On any `Compressor` pedal, route another track (such as Kick/Sampler) as its Sidechain trigger to duck basslines, guitars, or pads cleanly in both live playback and offline mixdown.
+- **Chromatic Tuner & Noise Gate (Audio Tracks)**: Choose an input device, tune guitars/vocals with the live Hz/cents needle, and set the input Noise Gate threshold.
+- **Master Bus FX (`TRACK FX` / `MASTER FX`)**: Toggle the sidebar pill to **`MASTER FX`** to insert mastering EQ, bus compression, reverb, or saturation across the entire stereo mix.
 
 ---
 
-## 7. Mixing Console, Pre/Post Aux Sends & Reference A/B
+## 7. Mixing Console, Synced Track Colors & Live dBFS Metering
 
-![Mixing Console with Group Bus, Aux Returns & Master Reference A/B](screenshots/mixer_console.png)
+![Mixing Console with Matched Track Colors, VU Meters & Peak dBFS Readouts](screenshots/mixer_console.png)
 
 Open the **`Mixer`** tab for a full multi-channel console:
-- **Channel Strips (`TRACK` / `BUS`)**: Each track provides **Rev Send (`REV`)** and **Delay Send (`DLY`)** rotary dials, **Pan (`PAN`)**, smooth fader, dual L/R segmented **VU meters with peak-hold**, and **`M` / `S`** buttons.
-- **Pre / Post-Fader Send Toggles (`PRE` / `PST`)**: Click **`PST`** / **`PRE`** directly below `REV` or `DLY` on any strip to send signal before or after the channel fader.
-- **Shared Aux Return Strips (`FX A: REV`, `FX B: DLY`)**: Control master Aux Reverb & Delay return mix levels and solo either wet return in isolation via its **`S`** button to dial in effects cleanly.
+- **Synced Track Colors**: Every Mixer channel strip, top accent bar, left border, tint, fader slider, and Group **`BUS`** badge mirrors its exact Timeline track and clip color (`Track.color`). Right-clicking a clip or clicking a track color swatch updates both Timeline and Mixer simultaneously.
+- **Per-Track `-48..0 dBFS` VU Meters & Peak Readouts**: Every Audio, MIDI, Sampler, and Group Bus strip monitors live native SoLoud channel amplitudes (`-48..0 dBFS` logarithmic scaling), displaying dual segmented L/R VU bars alongside a numeric peak dBFS readout (`-2.9dB`, `-4.0dB`, `-∞`), plus aggregated child-track summing on Group Buses.
+- **Pre/Post-Fader Sends & Aux Returns**: Adjust **`REV`** and **`DLY`** sends with 1-click **`PST` / `PRE`** toggles, Pan dials, Mute (`M`) / Solo (`S`), and dedicated **`FX A: REV`** / **`FX B: DLY`** Aux Return strips (with Aux Solo `S`).
 - **Master Bus Strip**:
-  - **LUFS Integrated Meter & Target**: Displays live integrated loudness vs target (`-14`, `-11`, or `-9` LUFS — click the readout to cycle streaming/club targets).
-  - **Stereo Correlation Meter (`+1` to `-1`)**: Spot phase cancellation immediately.
-  - **Brickwall Limiter (`LIMIT`)**: Protects master output against digital clipping.
-  - **Loudness-Matched Reference A/B (`+REF` -> `MIX A` / `REF B`)**: Click **`+REF`** to load any `.wav` / `.mp3` / `.flac` / `.ogg` reference master. For WAV files, fyrDAW estimates integrated LUFS and gain-matches the reference to your target LUFS; click **`MIX A` / `REF B`** to toggle instantly between your mix and reference track (`long-press` loads a new reference).
+  - **LUFS Integrated Meter & Target**: Displays live loudness vs target (`-14`, `-11`, or `-9` LUFS — click the readout to cycle streaming/club targets).
+  - **Stereo Correlation Meter (`+1` to `-1`)**: Spot phase issues immediately.
+  - **Brickwall Limiter (`LIMIT`)**: Prevents digital clipping at the master output.
+  - **Loudness-Matched Reference A/B (`+REF` -> `MIX A` / `REF B`)**: Load any `.wav` / `.mp3` / `.flac` / `.ogg` reference track, auto-gain-match WAV references to your LUFS target, and A/B instantaneously (`long-press` loads a new file).
 
 ---
 
@@ -160,12 +166,11 @@ Open the **`Mixer`** tab for a full multi-channel console:
 ![Session Clip Launcher View](screenshots/session_launcher.png)
 
 ### Live Session Clip Launcher
-Toggle **`Switch to Session Clip Launcher`** (grid icon in the top bar) to switch from linear arrangement to a live performance grid:
-- Trigger individual clip slots (`16th Pulse`, `Am - F`, `Hook`, etc.) — if the transport is already playing, the clip arms in amber and launches **quantized to the next bar boundary**; if stopped, playback starts immediately.
-- Trigger full horizontal rows from the right-hand **`SCENES`** strip (`Scene 1`, `Scene 2`, ...).
-- Mute (`M`), Solo (`S`), or `STOP` individual tracks directly per column, or double-click any slot to jump straight into its Piano Roll or Effects view.
+Toggle **`Switch to Session Clip Launcher`** (grid icon in the top bar) to switch from linear arrangement to a live performance grid containing both Audio and MIDI clips:
+- Trigger individual clip slots (`Strum Riff.wav`, `Am9 - Dm9`, `Sub Groove`, `Studio Groove`, etc.) — while playing, newly triggered slots arm in amber and launch **quantized to the next bar boundary**; when stopped, playback starts immediately.
+- Launch entire horizontal rows from the **`SCENES`** column (`Scene 1`, `Scene 2`, ...), or `M` / `S` / `STOP` tracks per column.
 
-### Hardware MIDI Learn (`Icons.sensors`)
+### Hardware MIDI Learn
 1. Connect a hardware MIDI controller (auto-discovered via Linux ALSA/MIDI).
 2. Click the **`MIDI Learn Mode`** sensor icon in the top bar (lights amber).
 3. Click any track's mixer fader percentage label in the **Mixer** tab (switches to **`TWIST`**).
