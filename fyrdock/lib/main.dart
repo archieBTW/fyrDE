@@ -333,6 +333,80 @@ class _DockScreenState extends State<DockScreen>
     return false;
   }
 
+  Future<Map<String, int>?> _getMonitorRect() async {
+    try {
+      const channel = MethodChannel('fyrdock/resize');
+      final res = await channel.invokeMethod('getMonitorRect');
+      if (res is Map) {
+        return {
+          'x': (res['x'] as num).toInt(),
+          'y': (res['y'] as num).toInt(),
+          'width': (res['width'] as num).toInt(),
+          'height': (res['height'] as num).toInt(),
+        };
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<String?> _getPrimaryDisplayName() async {
+    try {
+      final home = Platform.environment['HOME'];
+      if (home == null || home.isEmpty) return null;
+      final file = File('$home/.config/fyr/primary_display');
+      if (await file.exists()) {
+        final content = (await file.readAsString()).trim();
+        if (content.isNotEmpty) return content;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  String? _resolveDockOutputName(
+    Map<String, dynamic> tree,
+    Map<String, int>? monitorRect,
+    String? primaryDisplayName,
+  ) {
+    final outputs = (tree['nodes'] as List? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .where((n) => n['type'] == 'output' && n['name'] != '__i3')
+        .toList();
+    if (outputs.isEmpty) return null;
+
+    if (monitorRect != null) {
+      for (final out in outputs) {
+        final rect = out['rect'];
+        if (rect is Map) {
+          final x = (rect['x'] as num?)?.toInt() ?? 0;
+          final y = (rect['y'] as num?)?.toInt() ?? 0;
+          final w = (rect['width'] as num?)?.toInt() ?? 0;
+          final h = (rect['height'] as num?)?.toInt() ?? 0;
+          if ((x - monitorRect['x']!).abs() <= 2 &&
+              (y - monitorRect['y']!).abs() <= 2 &&
+              (w - monitorRect['width']!).abs() <= 2 &&
+              (h - monitorRect['height']!).abs() <= 2) {
+            return out['name']?.toString();
+          }
+        }
+      }
+    }
+
+    if (primaryDisplayName != null) {
+      for (final out in outputs) {
+        if (out['name']?.toString() == primaryDisplayName) {
+          return primaryDisplayName;
+        }
+      }
+    }
+
+    for (final out in outputs) {
+      if (out['focused'] == true) {
+        return out['name']?.toString();
+      }
+    }
+    return outputs.first['name']?.toString();
+  }
+
   Future<void> _checkWindowVisibility() async {
     if (_checkingVisibility) {
       _pendingVisibilityRecheck = true;
@@ -340,8 +414,20 @@ class _DockScreenState extends State<DockScreen>
     }
     _checkingVisibility = true;
     try {
-      final tree = await SwayIpc.getTree();
+      final results = await Future.wait<dynamic>([
+        SwayIpc.getTree(),
+        _getMonitorRect(),
+        _getPrimaryDisplayName(),
+      ]);
+      final tree = results[0] as Map<String, dynamic>?;
+      final monitorRect = results[1] as Map<String, int>?;
+      final primaryDisplayName = results[2] as String?;
       if (tree != null) {
+        final dockOutputName = _resolveDockOutputName(
+          tree,
+          monitorRect,
+          primaryDisplayName,
+        );
         List<Map<String, dynamic>> windows = [];
         bool hasVisibleWindows = false;
         bool hasSearchOverlay = false;
@@ -365,13 +451,18 @@ class _DockScreenState extends State<DockScreen>
           Map<String, dynamic> node,
           bool isScratch,
           String? currentWorkspace,
+          bool isDockOutput,
         ) {
+          bool nodeOnDockOutput = isDockOutput;
           if (node['type'] == 'output' &&
               node['name'] != '__i3' &&
               node['rect'] != null) {
+            nodeOnDockOutput =
+                dockOutputName == null ||
+                node['name']?.toString() == dockOutputName;
             final w = (node['rect']['width'] as num?)?.toDouble() ?? 0;
             final h = (node['rect']['height'] as num?)?.toDouble() ?? 0;
-            if (w > 0 && h > 0) {
+            if (nodeOnDockOutput && w > 0 && h > 0) {
               screenX = (node['rect']['x'] as num?)?.toDouble() ?? 0;
               screenY = (node['rect']['y'] as num?)?.toDouble() ?? 0;
               screenWidth = w;
@@ -415,9 +506,14 @@ class _DockScreenState extends State<DockScreen>
                 'workspace': ws,
                 'marks': node['marks'] ?? [],
               });
-              if (!currentScratch && node['visible'] == true) {
+              final int fsMode =
+                  (node['fullscreen_mode'] as num?)?.toInt() ?? 0;
+              final bool isGlobalFullscreen = fsMode == 2;
+              if (!currentScratch &&
+                  node['visible'] == true &&
+                  (nodeOnDockOutput || isGlobalFullscreen)) {
                 hasTrackableVisible = true;
-                if ((node['fullscreen_mode'] as num? ?? 0) > 0) {
+                if (fsMode > 0) {
                   hasVisibleWindows = true;
                   hasFullscreenWindow = true;
                 } else if (node['rect'] != null) {
@@ -439,12 +535,12 @@ class _DockScreenState extends State<DockScreen>
             }
           }
           for (var child in (node['nodes'] ?? []))
-            traverse(child, currentScratch, ws);
+            traverse(child, currentScratch, ws, nodeOnDockOutput);
           for (var child in (node['floating_nodes'] ?? []))
-            traverse(child, currentScratch, ws);
+            traverse(child, currentScratch, ws, nodeOnDockOutput);
         }
 
-        traverse(tree, false, null);
+        traverse(tree, false, null, dockOutputName == null);
 
         if (mounted) {
           _hasTrackableVisibleWindows = hasTrackableVisible;

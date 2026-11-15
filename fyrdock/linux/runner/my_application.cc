@@ -83,6 +83,28 @@ static void fyr_method_call_cb(FlMethodChannel* channel, FlMethodCall* method_ca
     }
     g_autoptr(FlMethodResponse) response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
     fl_method_call_respond(method_call, response, nullptr);
+  } else if (strcmp(method, "getMonitorRect") == 0) {
+    g_autoptr(FlValue) result = nullptr;
+    if (GdkWindow* gdk_window = gtk_widget_get_window(GTK_WIDGET(window))) {
+      GdkDisplay* display = gdk_window_get_display(gdk_window);
+      if (display != nullptr) {
+        GdkMonitor* monitor = gdk_display_get_monitor_at_window(display, gdk_window);
+        if (monitor != nullptr) {
+          GdkRectangle geom;
+          gdk_monitor_get_geometry(monitor, &geom);
+          result = fl_value_new_map();
+          fl_value_set_string_take(result, "x", fl_value_new_int(geom.x));
+          fl_value_set_string_take(result, "y", fl_value_new_int(geom.y));
+          fl_value_set_string_take(result, "width", fl_value_new_int(geom.width));
+          fl_value_set_string_take(result, "height", fl_value_new_int(geom.height));
+        }
+      }
+    }
+    if (result == nullptr) {
+      result = fl_value_new_null();
+    }
+    g_autoptr(FlMethodResponse) response = FL_METHOD_RESPONSE(fl_method_success_response_new(result));
+    fl_method_call_respond(method_call, response, nullptr);
   } else {
     g_autoptr(FlMethodResponse) response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
     fl_method_call_respond(method_call, response, nullptr);
