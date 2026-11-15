@@ -77,14 +77,14 @@ static const struct wlr_buffer_impl fyr_cairo_buffer_impl = {
 	.end_data_ptr_access = fyr_cairo_buffer_handle_end_data_ptr_access,
 };
 
-static bool fyr_titlebar_is_dark(void) {
+static bool fyr_titlebar_is_dark(bool force_refresh) {
 	static struct timespec last_check = {0};
 	static bool cached_dark = true;
 	struct timespec now;
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	long elapsed_ms = (now.tv_sec - last_check.tv_sec) * 1000L +
 		(now.tv_nsec - last_check.tv_nsec) / 1000000L;
-	if (last_check.tv_sec == 0 || elapsed_ms >= 500) {
+	if (force_refresh || last_check.tv_sec == 0 || elapsed_ms >= 500) {
 		last_check = now;
 		const char *home = getenv("HOME");
 		if (home) {
@@ -104,14 +104,20 @@ static bool fyr_titlebar_is_dark(void) {
 	return cached_dark;
 }
 
-static void fyr_titlebar_get_colors(float bg[4], float fg[4]) {
-	if (fyr_titlebar_is_dark()) {
-		bg[0] = 0.0f; bg[1] = 0.0f; bg[2] = 0.0f; bg[3] = 1.0f;
+static void fyr_titlebar_get_colors_opt(float bg[4], float fg[4], bool force_refresh) {
+	if (fyr_titlebar_is_dark(force_refresh)) {
+		// Avoid exact {0,0,0,1}: scenefx's construct_render_list_iterator skips
+		// rects matching {0,0,0,1} while rounded rects don't occlude behind.
+		bg[0] = 0.001f; bg[1] = 0.001f; bg[2] = 0.001f; bg[3] = 1.0f;
 		fg[0] = 1.0f; fg[1] = 1.0f; fg[2] = 1.0f; fg[3] = 1.0f;
 	} else {
 		bg[0] = 1.0f; bg[1] = 1.0f; bg[2] = 1.0f; bg[3] = 1.0f;
 		fg[0] = 0.1f; fg[1] = 0.1f; fg[2] = 0.1f; fg[3] = 1.0f;
 	}
+}
+
+static void fyr_titlebar_get_colors(float bg[4], float fg[4]) {
+	fyr_titlebar_get_colors_opt(bg, fg, false);
 }
 
 static int fyr_get_max_output_scale(void) {
@@ -996,7 +1002,7 @@ void container_update_title_bar(struct sway_container *con) {
 	float fyr_bg[4], fyr_fg[4];
 	float *title_fg = colors->text;
 	if (container_has_fyr_titlebar(con)) {
-		fyr_titlebar_get_colors(fyr_bg, fyr_fg);
+		fyr_titlebar_get_colors_opt(fyr_bg, fyr_fg, true);
 		title_fg = fyr_fg;
 	}
 

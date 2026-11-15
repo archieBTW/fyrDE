@@ -10,6 +10,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  fyr_core:
+    path: ../packages/fyr_core
   cupertino_icons: ^1.0.8
   camera: ^0.11.0+1
   camera_desktop: ^1.1.3

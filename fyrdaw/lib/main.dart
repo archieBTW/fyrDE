@@ -5,7 +5,6 @@ import 'package:flutter/services.dart';
 import 'dart:math';
 import 'dart:async';
 import 'dart:io';
-import 'package:dotted_border/dotted_border.dart';
 import 'dart:convert';
 import 'package:flutter_soloud/flutter_soloud.dart';
 import 'package:record/record.dart';
@@ -19,13 +18,36 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:fyrdaw/models/enums.dart';
 import 'package:fyrdaw/models/daw_clip.dart';
 import 'package:fyrdaw/models/daw_effect.dart';
-import 'package:fyrdaw/models/automation_point.dart';
 import 'package:fyrdaw/models/track.dart';
+import 'package:fyrdaw/models/sampler_pad.dart';
 import 'package:fyrdaw/models/midi_note.dart';
+import 'package:fyrdaw/models/midi_mapping.dart';
+import 'package:fyrdaw/models/song_marker.dart';
+import 'package:fyrdaw/models/tempo_marker.dart';
+import 'package:fyrdaw/ui/automation_lane_overlay.dart';
 import 'package:fyrdaw/ui/dial.dart';
 import 'package:fyrdaw/ui/painters.dart';
+import 'package:fyrdaw/ui/meters.dart';
 import 'package:fyrdaw/ui/midi_editor.dart';
 import 'package:fyrdaw/ui/sampler_editor.dart';
+import 'package:fyrdaw/ui/sample_browser_drawer.dart';
+import 'package:fyrdaw/ui/templates_dialog.dart';
+import 'package:fyrdaw/ui/mixer_console.dart';
+import 'package:fyrdaw/ui/effects_rack.dart';
+import 'package:fyrdaw/ui/musical_keyboard_bar.dart';
+import 'package:fyrdaw/ui/session_launcher.dart';
+import 'package:fyrdaw/ui/tempo_signature_lane.dart';
+import 'package:fyrdaw/ui/timeline_loop_bar.dart';
+import 'package:fyrdaw/ui/audio_clip_editor.dart';
+import 'package:fyrdaw/utils/audio_utils.dart';
+import 'package:fyrdaw/utils/bus_metering.dart';
+import 'package:fyrdaw/utils/metronome_synth.dart';
+import 'package:fyrdaw/utils/midi_file_codec.dart';
+import 'package:fyrdaw/utils/mixdown_renderer.dart';
+import 'package:fyrdaw/utils/parametric_eq_dsp.dart';
+import 'package:fyrdaw/utils/pitch_detector.dart';
+import 'package:fyrdaw/utils/plugin_host.dart';
+import 'package:fyrdaw/utils/time_stretch.dart';
 import 'fyr_theme.dart';
 
 part 'ui/daw_main_screen.dart';
@@ -36,6 +58,8 @@ AudioSource? globalSineSound;
 AudioSource? globalPianoSound;
 AudioSource? globalCelloSound;
 AudioSource? globalViolinSound;
+AudioSource? globalMetronomeAccentSound;
+AudioSource? globalMetronomeBeatSound;
 final Map<int, AudioSource> globalInstrumentSounds = {};
 
 AudioSource? getInstrumentAudioSource(Track track) {
@@ -49,26 +73,37 @@ SoundHandle? triggerInstrumentNote(
   int midiPitch,
   int velocity, {
   double volumeScale = 1.0,
+  Bus? targetBus,
 }) {
-  if (!SoLoud.instance.isInitialized) return null;
+  try {
+    if (!SoLoud.instance.isInitialized) return null;
+  } catch (_) {
+    return null;
+  }
   final preset = getInstrumentPreset(track.instrumentIndex);
   final src = getInstrumentAudioSource(track);
   if (src == null) return null;
 
-  track.bus ??= Bus()..playOnEngine();
+  final s = track.synthSettings;
+  final busToUse = targetBus ?? (track.bus = ensureActiveBus(track.bus));
   final double targetVol =
       ((velocity.clamp(1, 127) / 127.0) *
               track.volume *
               preset.volumeMultiplier *
               volumeScale)
           .clamp(0.0, 2.5);
-  final double speed = pow(2.0, (midiPitch - preset.basePitch) / 12.0)
+  final double semitoneOffset =
+      (midiPitch - preset.basePitch) +
+      (s.octave * 12.0) +
+      (s.detuneCents / 100.0);
+  final double speed = pow(2.0, semitoneOffset / 12.0)
       .toDouble()
       .clamp(0.05, 16.0);
 
-  final handle = track.bus!.play(
+  final bool hasAttack = s.attackSec > 0.01;
+  final handle = busToUse.play(
     src,
-    volume: targetVol,
+    volume: hasAttack ? 0.001 : targetVol,
     pan: track.pan.clamp(-1.0, 1.0),
     paused: true,
   );
@@ -79,12 +114,34 @@ SoundHandle? triggerInstrumentNote(
   );
   SoLoud.instance.setRelativePlaySpeed(handle, speed);
   SoLoud.instance.setPause(handle, false);
+
+  final attackMs = (s.attackSec * 1000).round();
+  if (hasAttack) {
+    SoLoud.instance.fadeVolume(
+      handle,
+      targetVol,
+      Duration(milliseconds: attackMs),
+    );
+  }
+  if (s.sustain < 0.99 && s.decaySec > 0.01) {
+    Timer(Duration(milliseconds: max(10, attackMs)), () {
+      try {
+        if (SoLoud.instance.getIsValidVoiceHandle(handle)) {
+          SoLoud.instance.fadeVolume(
+            handle,
+            targetVol * s.sustain.clamp(0.0, 1.0),
+            Duration(milliseconds: (s.decaySec * 1000).round().clamp(20, 4000)),
+          );
+        }
+      } catch (_) {}
+    });
+  }
   return handle;
 }
 
 void releaseInstrumentNote(SoundHandle handle, {int releaseMs = 140}) {
-  if (!SoLoud.instance.isInitialized) return;
   try {
+    if (!SoLoud.instance.isInitialized) return;
     if (SoLoud.instance.getIsValidVoiceHandle(handle)) {
       final dur = Duration(milliseconds: max(20, releaseMs));
       SoLoud.instance.fadeVolume(handle, 0.0, dur);
@@ -95,7 +152,7 @@ void releaseInstrumentNote(SoundHandle handle, {int releaseMs = 140}) {
 
 Future<Directory> getProjectMediaDirectory() async {
   final docsDir = await getApplicationDocumentsDirectory();
-  final dir = Directory('${docsDir.path}/FyrDAW/Media');
+  final dir = Directory('${docsDir.path}/SoundBooth/Media');
   if (!dir.existsSync()) {
     dir.createSync(recursive: true);
   }
@@ -129,6 +186,9 @@ void main() async {
     }
     SoLoud.instance.setGlobalVolume(1.0);
     try {
+      SoLoud.instance.setVisualizationEnabled(true);
+    } catch (_) {}
+    try {
       SoLoud.instance.setMaxActiveVoiceCount(64);
     } catch (_) {}
 
@@ -147,6 +207,18 @@ void main() async {
     globalPianoSound = globalInstrumentSounds[3];
     globalCelloSound = globalInstrumentSounds[4];
     globalViolinSound = globalInstrumentSounds[5];
+
+    // Synthesize punchy metronome click buffers (downbeat accent + regular beat)
+    try {
+      globalMetronomeAccentSound = await SoLoud.instance.loadMem(
+        'sb_metronome_accent.wav',
+        MetronomeSynth.generateClickWav(isDownbeat: true),
+      );
+      globalMetronomeBeatSound = await SoLoud.instance.loadMem(
+        'sb_metronome_beat.wav',
+        MetronomeSynth.generateClickWav(isDownbeat: false),
+      );
+    } catch (_) {}
 
     // Also keep legacy media directory files updated with the realistic samples
     final dir = await getProjectMediaDirectory();
@@ -228,7 +300,8 @@ class _DawAppState extends State<DawApp> {
       builder: (context, child) {
         _applyThemeColors();
         return MaterialApp(
-          title: 'fyrDAW',
+          title: 'Sound Booth',
+          debugShowCheckedModeBanner: false,
           theme: isDarkMode
               ? ThemeData.dark().copyWith(
                   scaffoldBackgroundColor: bgDark,

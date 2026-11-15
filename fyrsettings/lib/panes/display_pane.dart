@@ -42,32 +42,20 @@ class _DisplayPaneState extends State<DisplayPane> {
       await primaryFile.writeAsString(name);
     } catch (_) {}
 
-    final configFile = File(
-      '${Platform.environment['HOME']}/.config/sway/config',
+    final content = StringBuffer()
+      ..writeln('# PRIMARY OUTPUT SETTINGS')
+      ..writeln('assign [app_id="fyrtaskbar"] output $name')
+      ..writeln('assign [app_id="fyrdock"] output $name')
+      ..writeln('# END PRIMARY OUTPUT SETTINGS');
+    await SwayConfD.removeLegacyMarkerBlock(
+      '# PRIMARY OUTPUT SETTINGS',
+      '# END PRIMARY OUTPUT SETTINGS',
     );
-    if (await configFile.exists()) {
-      var lines = await configFile.readAsLines();
-      bool inBlock = false;
-      var newLines = <String>[];
-      for (var line in lines) {
-        if (line == '# PRIMARY OUTPUT SETTINGS') {
-          inBlock = true;
-          continue;
-        }
-        if (line == '# END PRIMARY OUTPUT SETTINGS') {
-          inBlock = false;
-          continue;
-        }
-        if (!inBlock) {
-          newLines.add(line);
-        }
-      }
-      newLines.add('# PRIMARY OUTPUT SETTINGS');
-      newLines.add('assign [app_id="fyrtaskbar"] output $name');
-      newLines.add('assign [app_id="fyrdock"] output $name');
-      newLines.add('# END PRIMARY OUTPUT SETTINGS');
-      await configFile.writeAsString('${newLines.join('\n')}\n');
-    }
+    await SwayConfD.writeDropIn(
+      '20-primary-output.conf',
+      content.toString(),
+      reload: false,
+    );
 
     await _updateWorkspaceBindings();
     await _restartDesktopStack(name);
@@ -98,15 +86,7 @@ class _DisplayPaneState extends State<DisplayPane> {
   Future<void> _updateSwayConfigDisplays() async {
     if (_outputs.isEmpty) return;
 
-    final configFiles = [
-      '${Platform.environment['HOME']}/.config/sway/config',
-      '${Platform.environment['HOME']}/Code/de/sway/config'
-    ];
-
-    List<String> outputCmds = [];
-    int maxW = 1920;
-    int maxH = 1080;
-    
+    final outputCmds = <String>[];
     for (final out in _outputs) {
       final name = out['name'] ?? 'Unknown';
       final rect = out['rect'] ?? {};
@@ -114,80 +94,50 @@ class _DisplayPaneState extends State<DisplayPane> {
       final h = rect['height'] ?? 1080;
       final x = rect['x'] ?? 0;
       final y = rect['y'] ?? 0;
-      if (w > maxW) maxW = w;
-      if (h > maxH) maxH = h;
       outputCmds.add('output $name resolution ${w}x$h position $x $y');
     }
 
-    for (final path in configFiles) {
-      final file = File(path);
-      if (await file.exists()) {
-        var lines = await file.readAsLines();
-        bool inBlock = false;
-        var newLines = <String>[];
-        for (var line in lines) {
-          if (line == '# DISPLAY OUTPUT SETTINGS') {
-            inBlock = true;
-            continue;
-          }
-          if (line == '# END DISPLAY OUTPUT SETTINGS') {
-            inBlock = false;
-            continue;
-          }
-          if (!inBlock) {
-            newLines.add(line);
-          }
-        }
+    final content = StringBuffer()
+      ..writeln('# DISPLAY OUTPUT SETTINGS')
+      ..writeAll(outputCmds.map((c) => '$c\n'))
+      ..writeln('# END DISPLAY OUTPUT SETTINGS');
 
-        newLines.add('# DISPLAY OUTPUT SETTINGS');
-        newLines.addAll(outputCmds);
-        newLines.add('# END DISPLAY OUTPUT SETTINGS');
-
-        for (int i = 0; i < newLines.length; i++) {
-          newLines[i] = newLines[i].replaceAll(RegExp(r'resize set \d+ \d+'), 'resize set $maxW $maxH');
-        }
-
-        await file.writeAsString('${newLines.join('\n')}\n');
-      }
-    }
+    await SwayConfD.removeLegacyMarkerBlock(
+      '# DISPLAY OUTPUT SETTINGS',
+      '# END DISPLAY OUTPUT SETTINGS',
+    );
+    await SwayConfD.writeDropIn(
+      '22-displays.conf',
+      content.toString(),
+      reload: false,
+    );
   }
 
   Future<void> _updateWorkspaceBindings() async {
     if (_outputs.isEmpty) return;
 
-    List<String> workspaceCmds = [];
-    for (int w = 1; w <= 9; w++) {
-      int monitorIndex = (w - 1) % _outputs.length;
-      String outputName = _outputs[monitorIndex]['name'];
+    final workspaceCmds = <String>[];
+    for (var w = 1; w <= 9; w++) {
+      final monitorIndex = (w - 1) % _outputs.length;
+      final outputName = _outputs[monitorIndex]['name'];
       workspaceCmds.add('workspace $w output $outputName');
       await Process.run('swaymsg', ['workspace', '$w', 'output', outputName]);
     }
 
-    final configFile = File(
-      '${Platform.environment['HOME']}/.config/sway/config',
+    final content = StringBuffer()
+      ..writeln('# WORKSPACE BINDINGS')
+      ..writeAll(workspaceCmds.map((c) => '$c\n'))
+      ..writeln('# END WORKSPACE BINDINGS');
+
+    await SwayConfD.removeLegacyMarkerBlock(
+      '# WORKSPACE BINDINGS',
+      '# END WORKSPACE BINDINGS',
     );
-    if (await configFile.exists()) {
-      var lines = await configFile.readAsLines();
-      bool inBlock = false;
-      var newLines = <String>[];
-      for (var line in lines) {
-        if (line == '# WORKSPACE BINDINGS') {
-          inBlock = true;
-          continue;
-        }
-        if (line == '# END WORKSPACE BINDINGS') {
-          inBlock = false;
-          continue;
-        }
-        if (!inBlock) {
-          newLines.add(line);
-        }
-      }
-      newLines.add('# WORKSPACE BINDINGS');
-      newLines.addAll(workspaceCmds);
-      newLines.add('# END WORKSPACE BINDINGS');
-      await configFile.writeAsString('${newLines.join('\n')}\n');
-    }
+    await SwayConfD.writeDropIn(
+      '21-workspaces.conf',
+      content.toString(),
+      reload: false,
+    );
   }
 
   Future<void> _loadDisplays() async {

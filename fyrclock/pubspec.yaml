@@ -8,6 +8,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  fyr_core:
+    path: ../packages/fyr_core
   window_manager: ^0.3.7
   intl: ^0.18.1
   uuid: ^4.0.0

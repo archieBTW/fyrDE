@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:io';
@@ -6,9 +7,12 @@ import 'package:flutter_soloud/flutter_soloud.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:fyrdaw/main.dart';
 
+import 'package:fyrdaw/models/enums.dart';
 import 'package:fyrdaw/models/sampler_pad.dart';
 import 'package:fyrdaw/models/track.dart';
 import 'package:fyrdaw/ui/dial.dart';
+
+enum SamplerSixteenMode { off, velocity, pitch }
 
 class SamplerEditorWidget extends StatefulWidget {
   final Track track;
@@ -26,16 +30,154 @@ class SamplerEditorWidget extends StatefulWidget {
   State<SamplerEditorWidget> createState() => _SamplerEditorWidgetState();
 }
 
+class _KitMenuSelection {
+  final DrumKitPreset? builtIn;
+  final SavedSamplerKit? saved;
+
+  const _KitMenuSelection.builtIn(this.builtIn) : saved = null;
+  const _KitMenuSelection.saved(this.saved) : builtIn = null;
+}
+
 class _SamplerEditorWidgetState extends State<SamplerEditorWidget> {
   int _selectedPadIndex = 0;
+  SamplerSixteenMode _sixteenMode = SamplerSixteenMode.off;
   Timer? _playbackTimer;
+  List<SavedSamplerKit> _savedKits = [];
+  String? _activeKitName;
 
   @override
   void initState() {
     super.initState();
+    _refreshSavedKits();
     _playbackTimer = Timer.periodic(Duration(milliseconds: 30), (_) {
       if (mounted) setState(() {});
     });
+  }
+
+  Future<void> _refreshSavedKits() async {
+    final kits = await SavedSamplerKitStore.loadAll();
+    if (!mounted) return;
+    setState(() => _savedKits = kits);
+  }
+
+  Future<void> _deleteSavedKit(
+    SavedSamplerKit kit,
+    BuildContext menuContext,
+  ) async {
+    Navigator.of(menuContext).pop();
+    await SavedSamplerKitStore.delete(kit.id);
+    if (_activeKitName == kit.name) {
+      _activeKitName = null;
+    }
+    await _refreshSavedKits();
+  }
+
+  Future<void> _showSaveSamplerDialog() async {
+    final controller = TextEditingController(
+      text: _activeKitName ?? widget.track.name,
+    );
+    controller.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: controller.text.length,
+    );
+
+    final result = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: panelDark,
+        title: Text(
+          'Save Sampler Kit',
+          style: TextStyle(color: textMain, fontSize: 15),
+        ),
+        content: SizedBox(
+          width: 320,
+          child: ValueListenableBuilder<TextEditingValue>(
+            valueListenable: controller,
+            builder: (context, value, _) {
+              final trimmed = value.text.trim();
+              final willOverwrite = trimmed.isNotEmpty &&
+                  _savedKits.any(
+                    (k) => k.name.toLowerCase() == trimmed.toLowerCase(),
+                  );
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    key: const Key('save_sampler_name_field'),
+                    controller: controller,
+                    autofocus: true,
+                    style: TextStyle(color: textMain, fontSize: 13),
+                    decoration: InputDecoration(
+                      labelText: 'Sampler Name',
+                      labelStyle: TextStyle(color: textMuted, fontSize: 12),
+                      hintText: 'e.g. Custom Lo-Fi Kit',
+                      hintStyle: TextStyle(color: textFaint, fontSize: 12),
+                      enabledBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: textFaint),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: lavenderAccent),
+                      ),
+                      isDense: true,
+                    ),
+                    onSubmitted: (text) {
+                      if (text.trim().isNotEmpty) {
+                        Navigator.of(dialogContext).pop(text.trim());
+                      }
+                    },
+                  ),
+                  if (willOverwrite) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'A saved sampler with this name already exists and will be updated.',
+                      style: TextStyle(color: Colors.amberAccent, fontSize: 11),
+                    ),
+                  ],
+                ],
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text('Cancel', style: TextStyle(color: textMuted)),
+          ),
+          ValueListenableBuilder<TextEditingValue>(
+            valueListenable: controller,
+            builder: (context, value, _) {
+              final canSave = value.text.trim().isNotEmpty;
+              return ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: lavenderAccent,
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: canSave
+                    ? () => Navigator.of(dialogContext).pop(value.text.trim())
+                    : null,
+                child: const Text('Save'),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+
+    if (result == null || result.trim().isEmpty) return;
+    final saved = await SavedSamplerKitStore.save(
+      name: result.trim(),
+      samplerPads: widget.track.samplerPads,
+    );
+    await _refreshSavedKits();
+    if (!mounted) return;
+    setState(() => _activeKitName = saved.name);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Saved sampler "${saved.name}"'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   @override
@@ -144,59 +286,365 @@ class _SamplerEditorWidgetState extends State<SamplerEditorWidget> {
       children: [
         Container(
           width: 320,
-          padding: EdgeInsets.all(16),
-          child: GridView.builder(
-            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 4,
-              crossAxisSpacing: 8,
-              mainAxisSpacing: 8,
-            ),
-            itemCount: 16,
-            itemBuilder: (context, index) {
-              bool isSelected = index == _selectedPadIndex;
-              bool hasSample =
-                  widget.track.samplerPads[index]?.filePath != null;
-              return GestureDetector(
-                onTap: () {
-                  setState(() => _selectedPadIndex = index);
-                  var p = widget.track.samplerPads[index];
-                  if (p != null) {
-                    p.play(
-                      127.0,
-                      widget.track.bus,
-                      widget.track.volume,
-                      widget.track.pan,
-                    );
-                  }
-                },
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: isSelected
-                        ? lavenderAccent
-                        : (hasSample ? panelLight : bgDark),
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(
-                      color: isSelected ? textMain : textFaint,
-                    ),
+          padding: EdgeInsets.all(12),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  Text(
+                    'Kit:',
+                    style: TextStyle(color: textMuted, fontSize: 10),
                   ),
-                  child: Center(
-                    child: Text(
-                      'Pad ${index + 1}',
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: isSelected ? Colors.black : Colors.white,
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: PopupMenuButton<_KitMenuSelection>(
+                      tooltip: 'Load Drum Kit or Saved Sampler',
+                      color: panelDark,
+                      onSelected: (selection) async {
+                        if (selection.builtIn != null) {
+                          final kit = selection.builtIn!;
+                          await applyDrumKitToPads(widget.track.samplerPads, kit);
+                          if (mounted) {
+                            setState(() => _activeKitName = kit.name);
+                            widget.onStateChanged();
+                          }
+                        } else if (selection.saved != null) {
+                          final kit = selection.saved!;
+                          await applySavedSamplerKitToPads(
+                            widget.track.samplerPads,
+                            kit,
+                          );
+                          if (mounted) {
+                            setState(() => _activeKitName = kit.name);
+                            widget.onStateChanged();
+                          }
+                        }
+                      },
+                      itemBuilder: (menuContext) => [
+                        PopupMenuItem<_KitMenuSelection>(
+                          enabled: false,
+                          height: 24,
+                          child: Text(
+                            'PRESET KITS',
+                            style: TextStyle(
+                              color: textMuted,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 0.6,
+                            ),
+                          ),
+                        ),
+                        ...kDrumKits.map(
+                          (kit) => PopupMenuItem<_KitMenuSelection>(
+                            value: _KitMenuSelection.builtIn(kit),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  kit.name,
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                Text(
+                                  kit.description,
+                                  style: TextStyle(
+                                    color: textMuted,
+                                    fontSize: 10,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const PopupMenuDivider(),
+                        PopupMenuItem<_KitMenuSelection>(
+                          enabled: false,
+                          height: 24,
+                          child: Text(
+                            'SAVED SAMPLERS',
+                            style: TextStyle(
+                              color: textMuted,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 0.6,
+                            ),
+                          ),
+                        ),
+                        if (_savedKits.isEmpty)
+                          PopupMenuItem<_KitMenuSelection>(
+                            enabled: false,
+                            height: 30,
+                            child: Text(
+                              'No saved samplers yet',
+                              style: TextStyle(
+                                color: textFaint,
+                                fontSize: 11,
+                                fontStyle: FontStyle.italic,
+                              ),
+                            ),
+                          )
+                        else
+                          ..._savedKits.map(
+                            (kit) => PopupMenuItem<_KitMenuSelection>(
+                              value: _KitMenuSelection.saved(kit),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          kit.name,
+                                          style: TextStyle(
+                                            color: lavenderLight,
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        Text(
+                                          '${kit.sampleCount} / 16 pads loaded',
+                                          style: TextStyle(
+                                            color: textMuted,
+                                            fontSize: 10,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Tooltip(
+                                    message: 'Delete Saved Sampler',
+                                    child: InkWell(
+                                      key: Key('delete_saved_kit_${kit.name}'),
+                                      borderRadius: BorderRadius.circular(4),
+                                      onTap: () =>
+                                          _deleteSavedKit(kit, menuContext),
+                                      child: Padding(
+                                        padding: const EdgeInsets.all(4),
+                                        child: Icon(
+                                          Icons.delete_outline,
+                                          size: 16,
+                                          color: textMuted,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                      ],
+                      child: Container(
+                        padding: EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: bgDark,
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: textFaint),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Flexible(
+                              child: Text(
+                                _activeKitName ?? 'Load Drum Kit...',
+                                style: TextStyle(color: lavenderLight, fontSize: 11),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            Icon(Icons.arrow_drop_down, size: 16, color: lavenderLight),
+                          ],
+                        ),
                       ),
                     ),
                   ),
+                  const SizedBox(width: 6),
+                  Tooltip(
+                    message: 'Save Current Sampler',
+                    child: InkWell(
+                      key: const Key('save_sampler_button'),
+                      borderRadius: BorderRadius.circular(4),
+                      onTap: _showSaveSamplerDialog,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: bgDark,
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: textFaint),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.save_outlined,
+                              size: 13,
+                              color: lavenderLight,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Save',
+                              style: TextStyle(
+                                color: lavenderLight,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: 4),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    '16-Level:',
+                    style: TextStyle(color: textMuted, fontSize: 10),
+                  ),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: DropdownButton<SamplerSixteenMode>(
+                      value: _sixteenMode,
+                      isDense: true,
+                      isExpanded: true,
+                      underline: SizedBox(),
+                      dropdownColor: panelDark,
+                      style: TextStyle(color: lavenderLight, fontSize: 11),
+                      items: const [
+                        DropdownMenuItem(
+                          value: SamplerSixteenMode.off,
+                          child: Text('Off (Pads 1-16)', overflow: TextOverflow.ellipsis),
+                        ),
+                        DropdownMenuItem(
+                          value: SamplerSixteenMode.velocity,
+                          child: Text('16-Level Velocity', overflow: TextOverflow.ellipsis),
+                        ),
+                        DropdownMenuItem(
+                          value: SamplerSixteenMode.pitch,
+                          child: Text('16-Level Pitch', overflow: TextOverflow.ellipsis),
+                        ),
+                      ],
+                      onChanged: (m) {
+                        if (m != null) setState(() => _sixteenMode = m);
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: 6),
+              Expanded(
+                child: GridView.builder(
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 4,
+                    crossAxisSpacing: 8,
+                    mainAxisSpacing: 8,
+                  ),
+                  itemCount: 16,
+                  itemBuilder: (context, index) {
+                    bool isSelected = index == _selectedPadIndex;
+                    final padItem = widget.track.samplerPads[index];
+                    bool hasSample = padItem?.filePath != null;
+                    final choke = padItem?.chokeGroup ?? 0;
+                    final label = _sixteenMode == SamplerSixteenMode.velocity
+                        ? 'V${((index + 1) / 16.0 * 127).round()}'
+                        : (_sixteenMode == SamplerSixteenMode.pitch
+                              ? '${(index - 7) >= 0 ? '+' : ''}${index - 7}st'
+                              : (padItem?.name ?? 'Pad ${index + 1}'));
+                    return GestureDetector(
+                      onTap: () {
+                        if (_sixteenMode == SamplerSixteenMode.off) {
+                          setState(() => _selectedPadIndex = index);
+                          var p = widget.track.samplerPads[index];
+                          p?.play(
+                            127.0,
+                            widget.track.bus,
+                            widget.track.volume,
+                            widget.track.pan,
+                            widget.track.samplerPads.values,
+                          );
+                        } else {
+                          var p = widget.track.samplerPads[_selectedPadIndex];
+                          if (p != null) {
+                            final vel = _sixteenMode == SamplerSixteenMode.velocity
+                                ? ((index + 1) / 16.0 * 127.0)
+                                : 120.0;
+                            final pitchMult = _sixteenMode == SamplerSixteenMode.pitch
+                                ? pow(2.0, (index - 7) / 12.0).toDouble()
+                                : 1.0;
+                            p.play(
+                              vel,
+                              widget.track.bus,
+                              widget.track.volume,
+                              widget.track.pan,
+                              widget.track.samplerPads.values,
+                              pitchMult,
+                            );
+                          }
+                        }
+                      },
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: _sixteenMode != SamplerSixteenMode.off
+                              ? panelLight
+                              : (isSelected
+                                    ? lavenderAccent
+                                    : (hasSample ? panelLight : bgDark)),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(
+                            color: isSelected ? textMain : textFaint,
+                          ),
+                        ),
+                        child: Stack(
+                          children: [
+                            Center(
+                              child: Text(
+                                label,
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  color: (_sixteenMode == SamplerSixteenMode.off && isSelected)
+                                      ? Colors.black
+                                      : Colors.white,
+                                ),
+                              ),
+                            ),
+                            if (_sixteenMode == SamplerSixteenMode.off && choke > 0)
+                              Positioned(
+                                top: 2,
+                                right: 4,
+                                child: Text(
+                                  String.fromCharCode(64 + choke),
+                                  style: TextStyle(
+                                    fontSize: 8,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.amberAccent,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
                 ),
-              );
-            },
+              ),
+            ],
           ),
         ),
         VerticalDivider(width: 1, color: textFaint),
         Expanded(
           child: Padding(
-            padding: EdgeInsets.all(16),
+            padding: EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -207,19 +655,12 @@ class _SamplerEditorWidgetState extends State<SamplerEditorWidget> {
                         backgroundColor: panelLight,
                       ),
                       onPressed: () async {
-                        final p = await _pickAudioFile(title: 'Load Audio Sample');
-                        if (p != null) {
-                          pad.filePath = p;
-                          if (SoLoud.instance.isInitialized) {
-                            try {
-                              if (pad.source != null) {
-                                SoLoud.instance.disposeSource(pad.source!);
-                              }
-                              pad.source = await SoLoud.instance.loadFile(p);
-                              pad.source!.filters.pitchShiftFilter.activate();
-                              pad.extractWaveform();
-                            } catch (_) {}
-                          }
+                        final path = await _pickAudioFile(title: 'Load Audio Sample');
+                        if (path != null) {
+                          await pad.loadSample(
+                            path,
+                            label: p.basenameWithoutExtension(path),
+                          );
                           setState(() {});
                           widget.onStateChanged();
                         }
@@ -236,19 +677,12 @@ class _SamplerEditorWidgetState extends State<SamplerEditorWidget> {
                           backgroundColor: panelLight,
                         ),
                         onPressed: () async {
-                          String? p = await widget.onRecordSample!();
-                          if (p != null) {
-                            pad.filePath = p;
-                            if (SoLoud.instance.isInitialized) {
-                              try {
-                                if (pad.source != null) {
-                                  SoLoud.instance.disposeSource(pad.source!);
-                                }
-                                pad.source = await SoLoud.instance.loadFile(p);
-                                pad.source!.filters.pitchShiftFilter.activate();
-                                pad.extractWaveform();
-                              } catch (_) {}
-                            }
+                          String? path = await widget.onRecordSample!();
+                          if (path != null) {
+                            await pad.loadSample(
+                              path,
+                              label: p.basenameWithoutExtension(path),
+                            );
                             setState(() {});
                             widget.onStateChanged();
                           }
@@ -264,7 +698,37 @@ class _SamplerEditorWidgetState extends State<SamplerEditorWidget> {
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    SizedBox(width: 16),
+                    SizedBox(width: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          'Choke Grp',
+                          style: TextStyle(color: textMuted, fontSize: 10),
+                        ),
+                        SizedBox(height: 4),
+                        DropdownButton<int>(
+                          value: pad.chokeGroup.clamp(0, 4),
+                          isDense: true,
+                          dropdownColor: panelDark,
+                          style: TextStyle(color: Colors.amberAccent, fontSize: 11),
+                          items: const [
+                            DropdownMenuItem(value: 0, child: Text('Off')),
+                            DropdownMenuItem(value: 1, child: Text('Grp A')),
+                            DropdownMenuItem(value: 2, child: Text('Grp B')),
+                            DropdownMenuItem(value: 3, child: Text('Grp C')),
+                            DropdownMenuItem(value: 4, child: Text('Grp D')),
+                          ],
+                          onChanged: (v) {
+                            if (v != null) {
+                              setState(() => pad.chokeGroup = v);
+                              widget.onStateChanged();
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                    SizedBox(width: 12),
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
@@ -304,64 +768,67 @@ class _SamplerEditorWidgetState extends State<SamplerEditorWidget> {
                     ),
                   ],
                 ),
-                SizedBox(height: 16),
-                Container(
-                  height: 80,
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    color: bgDark,
-                    border: Border.all(color: textFaint),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Stack(
-                    children: [
-                      if (pad.source != null && pad.waveformData != null)
-                        CustomPaint(
-                          size: Size.infinite,
-                          painter: SamplerWaveformPainter(pad),
-                        ),
-                      if (pad.source != null)
-                        Positioned.fill(
-                          child: SliderTheme(
-                            data: SliderTheme.of(context).copyWith(
-                              activeTrackColor: lavenderAccent.withValues(
-                                alpha: 0.3,
+                SizedBox(height: 10),
+                Expanded(
+                  child: Container(
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      color: bgDark,
+                      border: Border.all(color: textFaint),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Stack(
+                      children: [
+                        if (pad.waveformData != null && pad.waveformData!.isNotEmpty)
+                          CustomPaint(
+                            size: Size.infinite,
+                            painter: SamplerWaveformPainter(pad),
+                          ),
+                        if (pad.source != null)
+                          Positioned.fill(
+                            child: SliderTheme(
+                              data: SliderTheme.of(context).copyWith(
+                                activeTrackColor: lavenderAccent.withValues(
+                                  alpha: 0.3,
+                                ),
+                                inactiveTrackColor: textMuted,
+                                thumbColor: lavenderAccent,
+                                overlayColor: lavenderAccent.withValues(
+                                  alpha: 0.2,
+                                ),
+                                trackHeight: 80,
+                                thumbShape: RoundSliderThumbShape(
+                                  enabledThumbRadius: 6,
+                                ),
                               ),
-                              inactiveTrackColor: textMuted,
-                              thumbColor: lavenderAccent,
-                              overlayColor: lavenderAccent.withValues(
-                                alpha: 0.2,
-                              ),
-                              trackHeight: 80,
-                              thumbShape: RoundSliderThumbShape(
-                                enabledThumbRadius: 6,
+                              child: RangeSlider(
+                                values: RangeValues(pad.trimStart, pad.trimEnd),
+                                min: 0.0,
+                                max: 1.0,
+                                onChanged: (RangeValues values) {
+                                  setState(() {
+                                    pad.trimStart = values.start;
+                                    pad.trimEnd = values.end;
+                                  });
+                                  widget.onStateChanged();
+                                },
                               ),
                             ),
-                            child: RangeSlider(
-                              values: RangeValues(pad.trimStart, pad.trimEnd),
-                              min: 0.0,
-                              max: 1.0,
-                              onChanged: (RangeValues values) {
-                                setState(() {
-                                  pad.trimStart = values.start;
-                                  pad.trimEnd = values.end;
-                                });
-                                widget.onStateChanged();
-                              },
+                          ),
+                        if (pad.source == null &&
+                            (pad.waveformData == null ||
+                                pad.waveformData!.isEmpty))
+                          Center(
+                            child: Text(
+                              'No Audio Data',
+                              style: TextStyle(color: textFaint),
                             ),
                           ),
-                        ),
-                      if (pad.source == null)
-                        Center(
-                          child: Text(
-                            'No Audio Data',
-                            style: TextStyle(color: textFaint),
-                          ),
-                        ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
-                SizedBox(height: 16),
+                SizedBox(height: 10),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [

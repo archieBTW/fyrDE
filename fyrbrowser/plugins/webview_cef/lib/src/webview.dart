@@ -134,6 +134,49 @@ class WebViewController extends ValueNotifier<bool> {
     return _pluginChannel.invokeMethod('goBack', _browserId);
   }
 
+  /// Stops loading the current document.
+  Future<void> stopLoad() async {
+    if (_isDisposed) {
+      return;
+    }
+    assert(value);
+    return _pluginChannel.invokeMethod('stopLoad', _browserId);
+  }
+
+  /// Searches for [searchText] in the active page.
+  Future<void> findInPage(
+    String searchText, {
+    bool forward = true,
+    bool matchCase = false,
+    bool findNext = false,
+  }) async {
+    if (_isDisposed) {
+      return;
+    }
+    assert(value);
+    return _pluginChannel.invokeMethod(
+        'findInPage', [_browserId, searchText, forward, matchCase, findNext]);
+  }
+
+  /// Stops an active find-in-page session.
+  Future<void> stopFinding({bool clearSelection = true}) async {
+    if (_isDisposed) {
+      return;
+    }
+    assert(value);
+    return _pluginChannel.invokeMethod(
+        'stopFinding', [_browserId, clearSelection]);
+  }
+
+  /// Sets CEF browser zoom level (`0.0` is 100%).
+  Future<void> setZoomLevel(double zoomLevel) async {
+    if (_isDisposed) {
+      return;
+    }
+    assert(value);
+    return _pluginChannel.invokeMethod('setZoomLevel', [_browserId, zoomLevel]);
+  }
+
   Future<void> openDevTools() async {
     if (_isDisposed) {
       return;
@@ -311,9 +354,15 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
   String _composingText = '';
   late final _focusNode = FocusNode();
   bool isPrimaryFocus = false;
+  bool _lastClientFocus = false;
   WebviewTooltip? _tooltip;
   MouseCursor _mouseType = SystemMouseCursors.basic;
   int _lastButton = 0;
+
+  Timer? _scrollTimer;
+  double _pendingScrollDx = 0;
+  double _pendingScrollDy = 0;
+  Offset _lastScrollPos = Offset.zero;
 
   WebViewController get _controller => widget.controller;
 
@@ -360,43 +409,103 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
     };
 
     _controller._onImeCompositionRangeChangedMessage = (x, y) {
-      final box = _key.currentContext!.findRenderObject() as RenderBox;
+      if (!mounted) return;
+      final box = _key.currentContext?.findRenderObject() as RenderBox?;
+      if (box == null || !box.hasSize) return;
       updateIMEComposionPosition(
           x.toDouble(), y.toDouble(), box.localToGlobal(Offset.zero));
     };
 
     _controller._onToolTip = (final String text) {
-      _tooltip ??= WebviewTooltip(_key.currentContext!);
+      if (!mounted) return;
+      final ctx = _key.currentContext;
+      if (ctx == null) return;
+      _tooltip ??= WebviewTooltip(ctx);
       _tooltip?.showToolTip(text);
     };
 
     _controller._onCursorChanged = (int type) {
+      if (!mounted) return;
+      final MouseCursor nextCursor;
       switch (type) {
         case 0:
-          _mouseType = SystemMouseCursors.basic;
+          nextCursor = SystemMouseCursors.basic;
           break;
         case 1:
-          _mouseType = SystemMouseCursors.precise;
+          nextCursor = SystemMouseCursors.precise;
           break;
         case 2:
-          _mouseType = SystemMouseCursors.click;
+          nextCursor = SystemMouseCursors.click;
           break;
         case 3:
-          _mouseType = SystemMouseCursors.text;
+          nextCursor = SystemMouseCursors.text;
           break;
         case 4:
-          _mouseType = SystemMouseCursors.wait;
+          nextCursor = SystemMouseCursors.wait;
           break;
         default:
-          _mouseType = SystemMouseCursors.basic;
+          nextCursor = SystemMouseCursors.basic;
           break;
       }
-      setState(() {});
+      if (nextCursor != _mouseType) {
+        setState(() {
+          _mouseType = nextCursor;
+        });
+      }
     };
 
     // Report initial surface size
     WidgetsBinding.instance
         .addPostFrameCallback((_) => _reportSurfaceSize(context));
+  }
+
+  @override
+  void dispose() {
+    _scrollTimer?.cancel();
+    _scrollTimer = null;
+    _focusNode.dispose();
+    _controller._onFocusedNodeChangeMessage = null;
+    _controller._onImeCompositionRangeChangedMessage = null;
+    _controller._onToolTip = null;
+    _controller._onCursorChanged = null;
+    super.dispose();
+  }
+
+  void _startSmoothScrollLoop() {
+    if (_scrollTimer != null) return;
+    _scrollTimer = Timer.periodic(const Duration(milliseconds: 16), (timer) {
+      if (!mounted ||
+          (_pendingScrollDx.abs() < 0.5 && _pendingScrollDy.abs() < 0.5)) {
+        _pendingScrollDx = 0;
+        _pendingScrollDy = 0;
+        timer.cancel();
+        _scrollTimer = null;
+        return;
+      }
+      int stepX = 0;
+      if (_pendingScrollDx.abs() >= 0.5) {
+        double rawX = _pendingScrollDx * 0.35;
+        if (rawX.abs() < 1) rawX = _pendingScrollDx > 0 ? 1 : -1;
+        if (rawX.abs() > _pendingScrollDx.abs()) rawX = _pendingScrollDx;
+        stepX = rawX.round();
+        _pendingScrollDx -= stepX;
+      } else {
+        _pendingScrollDx = 0;
+      }
+      int stepY = 0;
+      if (_pendingScrollDy.abs() >= 0.5) {
+        double rawY = _pendingScrollDy * 0.35;
+        if (rawY.abs() < 1) rawY = _pendingScrollDy > 0 ? 1 : -1;
+        if (rawY.abs() > _pendingScrollDy.abs()) rawY = _pendingScrollDy;
+        stepY = rawY.round();
+        _pendingScrollDy -= stepY;
+      } else {
+        _pendingScrollDy = 0;
+      }
+      if (stepX != 0 || stepY != 0) {
+        _controller.setScrollDelta(_lastScrollPos, stepX, stepY);
+      }
+    });
   }
 
   @override
@@ -408,13 +517,15 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
       debugLabel: "webview_cef",
       onFocusChange: (focused) {
         _composingText = '';
+        if (_lastClientFocus != focused) {
+          _lastClientFocus = focused;
+          _controller.setClientFocus(focused);
+        }
         if (focused) {
-          _controller.setClientFocus(true);
           if (_controller._focusEditable) {
             attachTextInputClient();
           }
         } else {
-          _controller.setClientFocus(false);
           if (_controller._focusEditable) {
             detachTextInputClient();
           }
@@ -438,13 +549,11 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
           },
           onPointerDown: (ev) {
             if (!_focusNode.hasFocus) {
-              _controller._onImeCompositionRangeChangedMessage?.call(0, 0);
               _focusNode.requestFocus();
-              Future.delayed(const Duration(milliseconds: 50), () {
-                if (!_focusNode.hasFocus) {
-                  _focusNode.requestFocus();
-                }
-              });
+            }
+            if (!_lastClientFocus) {
+              _lastClientFocus = true;
+              _controller.setClientFocus(true);
             }
             int button = 0;
             if (ev.buttons & 2 != 0) button = 2; // Right
@@ -455,14 +564,22 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
           onPointerUp: (ev) {
             _controller._cursorClickUp(ev.localPosition, _lastButton);
           },
+          onPointerCancel: (ev) {
+            _controller._cursorClickUp(ev.localPosition, _lastButton);
+          },
           onPointerMove: (ev) {
             _controller._cursorDragging(ev.localPosition);
           },
           onPointerSignal: (signal) {
             if (signal is PointerScrollEvent) {
-              // Apply sensitivity multiplier (0.4x)
-              _controller.setScrollDelta(signal.localPosition,
-                  (signal.scrollDelta.dx * 0.4).round(), (signal.scrollDelta.dy * 0.4).round());
+              GestureBinding.instance.pointerSignalResolver
+                  .register(signal, (event) {
+                final scroll = event as PointerScrollEvent;
+                _pendingScrollDx += scroll.scrollDelta.dx * 0.65;
+                _pendingScrollDy += scroll.scrollDelta.dy * 0.65;
+                _lastScrollPos = scroll.localPosition;
+                _startSmoothScrollLoop();
+              });
             }
           },
           onPointerPanZoomUpdate: (event) {

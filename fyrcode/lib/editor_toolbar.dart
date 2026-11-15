@@ -12,10 +12,14 @@ class LspSelectionToolbarController implements SelectionToolbarController {
     List<dynamic> diagnostics,
   ) getCodeActions;
   final Function(dynamic action) onCodeActionSelected;
+  final VoidCallback? onAiEdit;
+  final VoidCallback? onAskAi;
 
   LspSelectionToolbarController({
     required this.getCodeActions,
     required this.onCodeActionSelected,
+    this.onAiEdit,
+    this.onAskAi,
   });
 
   @override
@@ -118,6 +122,43 @@ class LspSelectionToolbarController implements SelectionToolbarController {
             ],
           ),
         ),
+        if (onAiEdit != null || onAskAi != null) ...[
+          const PopupMenuDivider(),
+          if (onAiEdit != null)
+            PopupMenuItem(
+              onTap: () => Future.delayed(Duration.zero, onAiEdit!),
+              child: Row(
+                children: [
+                  Icon(Icons.auto_fix_high, size: 16, color: FyrTheme.accentColor),
+                  const SizedBox(width: 8),
+                  Text(
+                    'AI Edit (Ctrl+K)',
+                    style: GoogleFonts.jetBrainsMono(
+                      color: FyrTheme.textColor,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          if (onAskAi != null)
+            PopupMenuItem(
+              onTap: () => Future.delayed(Duration.zero, onAskAi!),
+              child: Row(
+                children: [
+                  Icon(Icons.auto_awesome, size: 16, color: FyrTheme.accentColor),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Ask AI about Selection',
+                    style: GoogleFonts.jetBrainsMono(
+                      color: FyrTheme.textColor,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
         const PopupMenuDivider(),
         PopupMenuItem(
           enabled: false,

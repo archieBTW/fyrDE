@@ -6,11 +6,15 @@
 #define CEF_TESTS_CEFSIMPLE_SIMPLE_HANDLER_H_
 
 #include "include/cef_client.h"
+#include "include/cef_find_handler.h"
+#include "include/cef_resource_request_handler.h"
 
 #include <functional>
 #include <set>
 #include <list>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 #include <mutex>
 
 #include "webview_cookieVisitor.h"
@@ -42,7 +46,9 @@ public CefDownloadHandler,
 public CefContextMenuHandler,
 public CefPermissionHandler,
 public CefDialogHandler,
-public CefRequestHandler {
+public CefRequestHandler,
+public CefResourceRequestHandler,
+public CefFindHandler {
 public:
     //Paint callback
     std::function<void(int browserId, const void* buffer, int32_t width, int32_t height)> onPaintCallback;
@@ -58,6 +64,10 @@ public:
     std::function<void(std::string, std::string, std::string, int browserId, std::string)> onJavaScriptChannelMessage;
     std::function<void(int browserId, std::string url)> onLoadStart;
     std::function<void(int browserId, std::string url)> onLoadEnd;
+    std::function<void(int browserId, int errorCode, std::string errorText, std::string failedUrl)> onLoadError;
+    std::function<void(int browserId, bool isLoading, bool canGoBack, bool canGoForward)> onLoadingStateChanged;
+    std::function<void(int browserId, int count, int activeMatchOrdinal, bool finalUpdate)> onFindResult;
+    std::function<void(int browserId, int count)> onAdBlocked;
     
     //download event
     std::function<void(int browserId, std::string suggestedName, std::string url)> onDownloadStart;
@@ -97,6 +107,7 @@ public:
     virtual CefRefPtr<CefPermissionHandler> GetPermissionHandler() override { return this; }
     virtual CefRefPtr<CefDialogHandler> GetDialogHandler() override { return this; }
     virtual CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
+    virtual CefRefPtr<CefFindHandler> GetFindHandler() override { return this; }
 
 	bool OnProcessMessageReceived(
         CefRefPtr<CefBrowser> browser,
@@ -144,6 +155,10 @@ public:
     virtual void OnGotFocus(CefRefPtr<CefBrowser> browser) override;
 
     // CefLoadHandler methods:
+    virtual void OnLoadingStateChange(CefRefPtr<CefBrowser> browser,
+                                      bool isLoading,
+                                      bool canGoBack,
+                                      bool canGoForward) override;
     virtual void OnLoadError(CefRefPtr<CefBrowser> browser,
                              CefRefPtr<CefFrame> frame,
                              ErrorCode errorCode,
@@ -215,6 +230,29 @@ public:
                                 CefRefPtr<CefRequest> request,
                                 bool user_gesture,
                                 bool is_redirect) override;
+    virtual CefRefPtr<CefResourceRequestHandler> GetResourceRequestHandler(
+        CefRefPtr<CefBrowser> browser,
+        CefRefPtr<CefFrame> frame,
+        CefRefPtr<CefRequest> request,
+        bool is_navigation,
+        bool is_download,
+        const CefString& request_initiator,
+        bool& disable_default_handling) override;
+
+    // CefResourceRequestHandler methods:
+    virtual CefResourceRequestHandler::ReturnValue OnBeforeResourceLoad(
+        CefRefPtr<CefBrowser> browser,
+        CefRefPtr<CefFrame> frame,
+        CefRefPtr<CefRequest> request,
+        CefRefPtr<CefCallback> callback) override;
+
+    // CefFindHandler methods:
+    virtual void OnFindResult(CefRefPtr<CefBrowser> browser,
+                              int identifier,
+                              int count,
+                              const CefRect& selectionRect,
+                              int activeMatchOrdinal,
+                              bool finalUpdate) override;
 
     // Request that all existing browser windows close.
     void CloseAllBrowsers(bool force_close);
@@ -234,6 +272,11 @@ public:
     void goForward(int browserId);
     void goBack(int browserId);
     void reload(int browserId);
+    void stopLoad(int browserId);
+    void findInPage(int browserId, const std::string& searchText, bool forward, bool matchCase, bool findNext);
+    void stopFinding(int browserId, bool clearSelection);
+    void setZoomLevel(int browserId, double zoomLevel);
+    void setAdBlockConfig(bool enabled, const std::vector<std::string>& blockedDomains, const std::vector<std::string>& whitelistHosts);
     void openDevTools(int browserId);
 
     void imeSetComposition(int browserId, std::string text);
@@ -258,6 +301,13 @@ private:
     std::unordered_map<int, CefRefPtr<CefFileDialogCallback>> file_dialog_callbacks_;
     int last_callback_id_ = 0;
     std::recursive_mutex m_mutex;
+
+    std::mutex adblock_mutex_;
+    bool adblock_enabled_ = false;
+    std::unordered_set<std::string> adblock_domains_;
+    std::unordered_set<std::string> adblock_whitelist_;
+    std::unordered_map<int, int> adblock_counts_;
+    bool isHostInSet(const std::string& host, const std::unordered_set<std::string>& domainSet) const;
     // Include the default reference counting implementation.
     IMPLEMENT_REFCOUNTING(WebviewHandler);
 

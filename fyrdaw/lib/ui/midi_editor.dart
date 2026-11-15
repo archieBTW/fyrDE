@@ -10,6 +10,34 @@ import 'package:fyrdaw/models/daw_clip.dart';
 import 'package:fyrdaw/models/track.dart';
 import 'package:fyrdaw/models/midi_note.dart';
 import 'package:fyrdaw/ui/painters.dart';
+import 'package:fyrdaw/ui/step_sequencer.dart';
+import 'package:fyrdaw/ui/synth_rack_panel.dart';
+import 'package:fyrdaw/utils/audio_utils.dart';
+
+const Map<String, List<int>> kMidiScales = {
+  'Off': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+  'Major': [0, 2, 4, 5, 7, 9, 11],
+  'Minor': [0, 2, 3, 5, 7, 8, 10],
+  'Harmonic Min': [0, 2, 3, 5, 7, 8, 11],
+  'Dorian': [0, 2, 3, 5, 7, 9, 10],
+  'Pentatonic': [0, 3, 5, 7, 10],
+  'Blues': [0, 3, 5, 6, 7, 10],
+};
+
+const List<String> kRootNames = [
+  'C',
+  'C#',
+  'D',
+  'D#',
+  'E',
+  'F',
+  'F#',
+  'G',
+  'G#',
+  'A',
+  'A#',
+  'B',
+];
 
 class MidiEditorWidget extends StatefulWidget {
   final Track? track;
@@ -20,6 +48,7 @@ class MidiEditorWidget extends StatefulWidget {
   final int bpm;
   final int timeSigTop;
   final List<MidiNote> selectedMidiNotes;
+  final List<MidiNote> ghostNotes;
   final ValueChanged<List<MidiNote>> onSelectionChanged;
   final VoidCallback onNotesChanged;
   final VoidCallback? onChangeStart;
@@ -32,6 +61,10 @@ class MidiEditorWidget extends StatefulWidget {
   final VoidCallback onPaste;
   final VoidCallback onInstrumentDialogRequested;
   final VoidCallback onMidiInputDialogRequested;
+  final VoidCallback? onSynthSettingsChanged;
+  final List<AudioClip> grooveAudioClips;
+  final VoidCallback? onImportMidi;
+  final VoidCallback? onExportMidi;
 
   const MidiEditorWidget({
     super.key,
@@ -43,6 +76,7 @@ class MidiEditorWidget extends StatefulWidget {
     required this.bpm,
     required this.timeSigTop,
     required this.selectedMidiNotes,
+    this.ghostNotes = const [],
     required this.onSelectionChanged,
     required this.onNotesChanged,
     this.onChangeStart,
@@ -55,6 +89,10 @@ class MidiEditorWidget extends StatefulWidget {
     required this.onPaste,
     required this.onInstrumentDialogRequested,
     required this.onMidiInputDialogRequested,
+    this.onSynthSettingsChanged,
+    this.grooveAudioClips = const [],
+    this.onImportMidi,
+    this.onExportMidi,
   });
 
   @override
@@ -71,9 +109,41 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
   double? _selStartX, _selStartY;
   double? _selEndX, _selEndY;
 
+  String _scaleName = 'Off';
+  int _rootPitchClass = 0;
+  bool _scaleLock = false;
+  bool _showGhostNotes = true;
+  bool _showVelocityLane = true;
+  bool _stepSequencerMode = false;
+  bool _showSynthRack = false;
+  bool _showArpBar = false;
+
   final Map<MidiNote, int> _dragInitialPitches = {};
   double _dragTotalDy = 0.0;
   final Map<int, SoundHandle> _previewKeyHandles = {};
+
+  Set<int>? get _activeScalePitchClasses {
+    if (_scaleName == 'Off') return null;
+    final intervals = kMidiScales[_scaleName] ?? kMidiScales['Off']!;
+    return intervals.map((i) => (_rootPitchClass + i) % 12).toSet();
+  }
+
+  int _snapPitchToScale(int midiPitch) {
+    final scaleSet = _activeScalePitchClasses;
+    if (scaleSet == null || !_scaleLock) return midiPitch;
+    if (scaleSet.contains(midiPitch % 12)) return midiPitch;
+    for (int offset = 1; offset <= 6; offset++) {
+      if (midiPitch + offset <= 127 &&
+          scaleSet.contains((midiPitch + offset) % 12)) {
+        return midiPitch + offset;
+      }
+      if (midiPitch - offset >= 0 &&
+          scaleSet.contains((midiPitch - offset) % 12)) {
+        return midiPitch - offset;
+      }
+    }
+    return midiPitch;
+  }
 
   int get _numRows => widget.track?.type == TrackType.sampler ? 16 : 128;
 
@@ -184,6 +254,9 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
     int row = (localPosition.dy / _pitchHeight).floor();
     int midiPitch = _getMidiPitchFromRow(row);
     if (midiPitch == -1) return;
+    if (widget.track?.type != TrackType.sampler) {
+      midiPitch = _snapPitchToScale(midiPitch);
+    }
 
     double start = widget.snapToGrid
         ? (realX / widget.snapResolution).floor() * widget.snapResolution
@@ -281,17 +354,220 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
     }
   }
 
+  void _applyChordOrTransform(String op) {
+    final beatW = 100.0 * 60.0 / widget.bpm;
+    if (op == 'transpose_up' || op == 'transpose_down') {
+      final delta = op == 'transpose_up' ? 12 : -12;
+      final targets = widget.selectedMidiNotes.isNotEmpty
+          ? widget.selectedMidiNotes
+          : widget.clip.notes;
+      if (targets.isEmpty) return;
+      widget.onChangeStart?.call();
+      for (final n in targets) {
+        n.pitch = (n.pitch + delta).clamp(0, 127);
+      }
+      widget.onNotesChanged();
+      return;
+    }
+
+    if (op == 'strum') {
+      final notesToStrum = widget.selectedMidiNotes.isNotEmpty
+          ? List<MidiNote>.from(widget.selectedMidiNotes)
+          : List<MidiNote>.from(widget.clip.notes);
+      if (notesToStrum.isEmpty) return;
+      widget.onChangeStart?.call();
+      // Group notes starting within 5 timeline units and stagger upward by 3 units (~30ms)
+      notesToStrum.sort((a, b) {
+        final dt = a.start.compareTo(b.start);
+        return dt != 0 ? dt : a.pitch.compareTo(b.pitch);
+      });
+      int chordPos = 0;
+      double prevStart = notesToStrum.first.start;
+      for (final n in notesToStrum) {
+        if ((n.start - prevStart).abs() <= 5.0) {
+          n.start = prevStart + chordPos * 3.0;
+          chordPos++;
+        } else {
+          prevStart = n.start;
+          chordPos = 1;
+        }
+      }
+      widget.onNotesChanged();
+      return;
+    }
+
+    if (op.startsWith('prog_')) {
+      widget.onChangeStart?.call();
+      final rootBase = 60 + _rootPitchClass;
+      final barLen = beatW * widget.timeSigTop;
+      final progression = switch (op) {
+        'prog_pop' => [
+          [0, 4, 7],
+          [7, 11, 14],
+          [9, 12, 16],
+          [5, 9, 12],
+        ],
+        'prog_lofi' => [
+          [2, 5, 9, 12],
+          [7, 11, 14, 17],
+          [0, 4, 7, 11],
+          [0, 4, 7, 11],
+        ],
+        'prog_andalusian' => [
+          [9, 12, 16],
+          [7, 11, 14],
+          [5, 9, 12],
+          [4, 8, 11],
+        ],
+        'prog_neosoul' => [
+          [0, 3, 7, 10, 14],
+          [5, 8, 12, 15, 19],
+          [10, 14, 17, 20, 24],
+          [7, 11, 14, 17, 20],
+        ],
+        _ => [
+          [0, 4, 7],
+        ],
+      };
+      for (int c = 0; c < progression.length; c++) {
+        final chordStart = c * barLen;
+        if (chordStart >= widget.clip.length) break;
+        final chordLen = min(barLen * 0.96, widget.clip.length - chordStart);
+        for (final iv in progression[c]) {
+          widget.clip.notes.add(
+            MidiNote(
+              pitch: (rootBase + iv).clamp(0, 127),
+              start: chordStart,
+              length: max(12.0, chordLen),
+              velocity: 92,
+            ),
+          );
+        }
+      }
+      widget.onNotesChanged();
+      return;
+    }
+
+    final intervals = switch (op) {
+      'major' => [0, 4, 7],
+      'minor' => [0, 3, 7],
+      'dom7' => [0, 4, 7, 10],
+      'sus4' => [0, 5, 7],
+      'arp_up' => [0, 4, 7, 12],
+      _ => [0, 4, 7],
+    };
+
+    widget.onChangeStart?.call();
+    if (widget.selectedMidiNotes.isNotEmpty) {
+      final roots = List<MidiNote>.from(widget.selectedMidiNotes);
+      for (final root in roots) {
+        if (op == 'arp_up') {
+          final stepLen = max(12.0, root.length / intervals.length);
+          root.length = stepLen;
+          for (int i = 1; i < intervals.length; i++) {
+            widget.clip.notes.add(
+              MidiNote(
+                pitch: (root.pitch + intervals[i]).clamp(0, 127),
+                start: root.start + stepLen * i,
+                length: stepLen,
+                velocity: root.velocity,
+              ),
+            );
+          }
+        } else {
+          for (int i = 1; i < intervals.length; i++) {
+            widget.clip.notes.add(
+              MidiNote(
+                pitch: (root.pitch + intervals[i]).clamp(0, 127),
+                start: root.start,
+                length: root.length,
+                velocity: root.velocity,
+              ),
+            );
+          }
+        }
+      }
+    } else {
+      final basePitch = 60 + _rootPitchClass;
+      final localPh = (widget.playheadPosition - widget.clip.start)
+          .clamp(0.0, max<double>(0.0, widget.clip.length - beatW))
+          .toDouble();
+      final double start = widget.snapToGrid
+          ? (localPh / widget.snapResolution).round() * widget.snapResolution
+          : localPh;
+      if (op == 'arp_up') {
+        final stepLen = beatW / 2.0;
+        for (int i = 0; i < intervals.length; i++) {
+          widget.clip.notes.add(
+            MidiNote(
+              pitch: (basePitch + intervals[i]).clamp(0, 127),
+              start: start + stepLen * i,
+              length: stepLen,
+              velocity: 95,
+            ),
+          );
+        }
+      } else {
+        for (final iv in intervals) {
+          widget.clip.notes.add(
+            MidiNote(
+              pitch: (basePitch + iv).clamp(0, 127),
+              start: start,
+              length: beatW * 2,
+              velocity: 95,
+            ),
+          );
+        }
+      }
+    }
+    widget.onNotesChanged();
+  }
+
+  void _paintVelocityAt(Offset localPos, double laneHeight) {
+    final xUnits = localPos.dx / widget.zoomX;
+    final newVel =
+        ((1.0 - (localPos.dy / laneHeight)).clamp(0.05, 1.0) * 127.0).round();
+    final tol = max(18.0, widget.snapResolution * 0.65);
+    bool changed = false;
+    for (final n in widget.clip.notes) {
+      if ((n.start - xUnits).abs() <= tol ||
+          (xUnits >= n.start && xUnits <= n.start + n.length)) {
+        if (n.velocity != newVel) {
+          n.velocity = newVel;
+          changed = true;
+        }
+      }
+    }
+    if (changed) widget.onNotesChanged();
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (_stepSequencerMode && widget.track?.type == TrackType.sampler) {
+      return StepSequencerWidget(
+        track: widget.track!,
+        clip: widget.clip,
+        bpm: widget.bpm,
+        timeSigTop: widget.timeSigTop,
+        playheadPosition: widget.playheadPosition,
+        onChangeStart: widget.onChangeStart,
+        onNotesChanged: widget.onNotesChanged,
+        onSwitchToPianoRoll: () => setState(() => _stepSequencerMode = false),
+      );
+    }
     double beatW = 100.0 * 60.0 / widget.bpm * widget.zoomX;
+    final double gridW = max(2000.0, widget.clip.length * widget.zoomX + 100);
     return Column(
       children: [
         Container(
           height: 40,
+          width: double.infinity,
           color: panelDark,
           padding: EdgeInsets.symmetric(horizontal: 16),
-          child: Row(
-            children: [
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
               if (widget.track != null &&
                   widget.track!.type != TrackType.sampler) ...[
                 Text('Instrument: ', style: TextStyle(color: textMuted)),
@@ -352,7 +628,175 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                   ),
                 ),
               ),
-              Spacer(),
+              if (widget.track?.type == TrackType.sampler) ...[
+                TextButton.icon(
+                  onPressed: () => setState(() => _stepSequencerMode = true),
+                  icon: Icon(Icons.grid_view, size: 14, color: lavenderAccent),
+                  label: Text(
+                    'Step Sequencer',
+                    style: TextStyle(color: lavenderLight, fontSize: 11),
+                  ),
+                ),
+                SizedBox(width: 8),
+              ] else ...[
+                DropdownButton<int>(
+                  value: _rootPitchClass,
+                  underline: SizedBox(),
+                  dropdownColor: panelDark,
+                  style: TextStyle(color: textMain, fontSize: 11),
+                  items: List.generate(
+                    12,
+                    (i) => DropdownMenuItem(
+                      value: i,
+                      child: Text(kRootNames[i]),
+                    ),
+                  ),
+                  onChanged: (v) {
+                    if (v != null) setState(() => _rootPitchClass = v);
+                  },
+                ),
+                DropdownButton<String>(
+                  value: _scaleName,
+                  underline: SizedBox(),
+                  dropdownColor: panelDark,
+                  style: TextStyle(color: textMain, fontSize: 11),
+                  items: kMidiScales.keys
+                      .map(
+                        (s) => DropdownMenuItem(value: s, child: Text(s)),
+                      )
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) setState(() => _scaleName = v);
+                  },
+                ),
+                if (_scaleName != 'Off')
+                  Tooltip(
+                    message: 'Snap new & dragged notes to scale',
+                    child: InkWell(
+                      onTap: () => setState(() => _scaleLock = !_scaleLock),
+                      child: Container(
+                        padding: EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: _scaleLock
+                              ? lavenderAccent.withValues(alpha: 0.35)
+                              : panelLight,
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(
+                            color: _scaleLock ? lavenderAccent : borderMain,
+                          ),
+                        ),
+                        child: Text(
+                          'Lock',
+                          style: TextStyle(
+                            color: _scaleLock ? Colors.white : textMuted,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                SizedBox(width: 6),
+                PopupMenuButton<String>(
+                  tooltip: 'Chord & Arp Tools',
+                  onSelected: _applyChordOrTransform,
+                  itemBuilder: (_) => [
+                    PopupMenuItem(value: 'major', child: Text('Stamp Major Chord')),
+                    PopupMenuItem(value: 'minor', child: Text('Stamp Minor Chord')),
+                    PopupMenuItem(value: 'dom7', child: Text('Stamp Dom 7th')),
+                    PopupMenuItem(value: 'sus4', child: Text('Stamp Sus4')),
+                    PopupMenuItem(value: 'arp_up', child: Text('Arpeggiate Up')),
+                    PopupMenuItem(value: 'strum', child: Text('Strum Chords')),
+                    PopupMenuDivider(),
+                    PopupMenuItem(value: 'prog_pop', child: Text('Progression: Pop (I-V-vi-IV)')),
+                    PopupMenuItem(value: 'prog_lofi', child: Text('Progression: Lo-Fi (ii7-V7-Imaj7)')),
+                    PopupMenuItem(value: 'prog_andalusian', child: Text('Progression: Minor Descent')),
+                    PopupMenuItem(value: 'prog_neosoul', child: Text('Progression: Neo-Soul 9ths')),
+                    PopupMenuDivider(),
+                    PopupMenuItem(value: 'transpose_up', child: Text('Transpose +1 Oct')),
+                    PopupMenuItem(value: 'transpose_down', child: Text('Transpose -1 Oct')),
+                  ],
+                  child: Container(
+                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: panelLight,
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: borderMain),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.auto_fix_high, size: 13, color: lavenderAccent),
+                        SizedBox(width: 4),
+                        Text('Chords', style: TextStyle(color: textMain, fontSize: 11)),
+                      ],
+                    ),
+                  ),
+                ),
+                SizedBox(width: 6),
+                Tooltip(
+                  message: 'Toggle Ghost Notes from other MIDI tracks',
+                  child: IconButton(
+                    icon: Icon(
+                      Icons.layers_outlined,
+                      size: 17,
+                      color: _showGhostNotes ? Colors.cyanAccent : textMuted,
+                    ),
+                    onPressed: () =>
+                        setState(() => _showGhostNotes = !_showGhostNotes),
+                  ),
+                ),
+              ],
+              if (widget.track != null &&
+                  widget.track!.type != TrackType.sampler) ...[
+                TextButton.icon(
+                  onPressed: () => setState(() => _showSynthRack = !_showSynthRack),
+                  icon: Icon(
+                    Icons.tune,
+                    size: 14,
+                    color: _showSynthRack ? Colors.cyanAccent : textMuted,
+                  ),
+                  label: Text(
+                    'Synth',
+                    style: TextStyle(
+                      color: _showSynthRack ? Colors.cyanAccent : textMuted,
+                      fontSize: 11,
+                    ),
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: () => setState(() => _showArpBar = !_showArpBar),
+                  icon: Icon(
+                    Icons.grain,
+                    size: 14,
+                    color: (widget.track!.arpSettings.enabled || _showArpBar)
+                        ? Colors.amberAccent
+                        : textMuted,
+                  ),
+                  label: Text(
+                    'Arp',
+                    style: TextStyle(
+                      color: (widget.track!.arpSettings.enabled || _showArpBar)
+                          ? Colors.amberAccent
+                          : textMuted,
+                      fontSize: 11,
+                    ),
+                  ),
+                ),
+                SizedBox(width: 4),
+              ],
+              Tooltip(
+                message: 'Toggle Velocity Lane',
+                child: IconButton(
+                  icon: Icon(
+                    Icons.equalizer,
+                    size: 17,
+                    color: _showVelocityLane ? lavenderAccent : textMuted,
+                  ),
+                  onPressed: () =>
+                      setState(() => _showVelocityLane = !_showVelocityLane),
+                ),
+              ),
+              SizedBox(width: 12),
               if (widget.selectedMidiNotes.isNotEmpty) ...[
                 Text(
                   'Velocity:',
@@ -397,19 +841,66 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
               TextButton(
                 onPressed: () {
                   widget.onChangeStart?.call();
-                  final r = Random();
-                  for (var n in widget.clip.notes) {
-                    n.start += (r.nextDouble() * 10 - 5);
-                    if (n.start < 0) n.start = 0;
-                    n.velocity = (n.velocity + (r.nextInt(20) - 10)).clamp(
-                      0,
-                      127,
-                    );
-                  }
+                  humanizeMidiNotes(widget.clip.notes);
                   widget.onNotesChanged();
                 },
                 child: Text('Humanize', style: TextStyle(color: lavenderLight)),
               ),
+              if (widget.grooveAudioClips.isNotEmpty)
+                PopupMenuButton<AudioClip>(
+                  tooltip: 'Extract Groove from Audio Clip Transients',
+                  color: panelDark,
+                  onSelected: (ac) async {
+                    final transients = await detectAudioTransients(
+                      ac.filePath,
+                      maxSlices: 16,
+                    );
+                    if (transients.isNotEmpty) {
+                      widget.onChangeStart?.call();
+                      applyGrooveToMidiNotes(
+                        widget.clip.notes,
+                        transients,
+                        widget.clip.length,
+                      );
+                      widget.onNotesChanged();
+                    }
+                  },
+                  itemBuilder: (_) => widget.grooveAudioClips
+                      .map(
+                        (ac) => PopupMenuItem<AudioClip>(
+                          value: ac,
+                          child: Text(
+                            ac.name.isNotEmpty ? ac.name : 'Audio Groove',
+                          ),
+                        ),
+                      )
+                      .toList(),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                    child: Text(
+                      'Groove',
+                      style: TextStyle(color: Colors.cyanAccent, fontSize: 12),
+                    ),
+                  ),
+                ),
+              if (widget.onImportMidi != null)
+                TextButton.icon(
+                  onPressed: widget.onImportMidi,
+                  icon: Icon(Icons.file_open, size: 13, color: textMuted),
+                  label: Text(
+                    'Import .mid',
+                    style: TextStyle(color: textMuted, fontSize: 11),
+                  ),
+                ),
+              if (widget.onExportMidi != null)
+                TextButton.icon(
+                  onPressed: widget.onExportMidi,
+                  icon: Icon(Icons.download, size: 13, color: textMuted),
+                  label: Text(
+                    'Export .mid',
+                    style: TextStyle(color: textMuted, fontSize: 11),
+                  ),
+                ),
               SizedBox(width: 8),
               IconButton(
                 icon: Icon(Icons.zoom_out, color: textMuted, size: 20),
@@ -420,123 +911,325 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                 onPressed: widget.onZoomIn,
               ),
             ],
+            ),
           ),
         ),
+        if (_showSynthRack &&
+            widget.track != null &&
+            widget.track!.type != TrackType.sampler)
+          SynthRackPanel(
+            track: widget.track!,
+            onChangeStart: widget.onChangeStart,
+            onChanged: () {
+              widget.onSynthSettingsChanged?.call();
+              widget.onNotesChanged();
+            },
+          ),
+        if (_showArpBar &&
+            widget.track != null &&
+            widget.track!.type != TrackType.sampler)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            color: bgDark,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  Text(
+                    'ARP FX:',
+                    style: TextStyle(
+                      color: Colors.amberAccent,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Switch(
+                    value: widget.track!.arpSettings.enabled,
+                    activeThumbColor: Colors.amberAccent,
+                    onChanged: (v) {
+                      widget.onChangeStart?.call();
+                      setState(() => widget.track!.arpSettings.enabled = v);
+                      widget.onNotesChanged();
+                    },
+                  ),
+                  const SizedBox(width: 8),
+                  DropdownButton<ArpMode>(
+                    value: widget.track!.arpSettings.mode,
+                    isDense: true,
+                    dropdownColor: panelDark,
+                    underline: const SizedBox(),
+                    style: TextStyle(color: textMain, fontSize: 11),
+                    items: const [
+                      DropdownMenuItem(value: ArpMode.up, child: Text('Up')),
+                      DropdownMenuItem(value: ArpMode.down, child: Text('Down')),
+                      DropdownMenuItem(value: ArpMode.upDown, child: Text('Up/Down')),
+                      DropdownMenuItem(value: ArpMode.random, child: Text('Random')),
+                    ],
+                    onChanged: (m) {
+                      if (m != null) {
+                        widget.onChangeStart?.call();
+                        setState(() => widget.track!.arpSettings.mode = m);
+                        widget.onNotesChanged();
+                      }
+                    },
+                  ),
+                  const SizedBox(width: 12),
+                  DropdownButton<double>(
+                    value: [1.0, 0.5, 0.25, 0.125].contains(
+                            widget.track!.arpSettings.rateBeats)
+                        ? widget.track!.arpSettings.rateBeats
+                        : 0.25,
+                    isDense: true,
+                    dropdownColor: panelDark,
+                    underline: const SizedBox(),
+                    style: TextStyle(color: Colors.cyanAccent, fontSize: 11),
+                    items: const [
+                      DropdownMenuItem(value: 1.0, child: Text('1/4')),
+                      DropdownMenuItem(value: 0.5, child: Text('1/8')),
+                      DropdownMenuItem(value: 0.25, child: Text('1/16')),
+                      DropdownMenuItem(value: 0.125, child: Text('1/32')),
+                    ],
+                    onChanged: (r) {
+                      if (r != null) {
+                        widget.onChangeStart?.call();
+                        setState(() => widget.track!.arpSettings.rateBeats = r);
+                        widget.onNotesChanged();
+                      }
+                    },
+                  ),
+                  const SizedBox(width: 12),
+                  DropdownButton<int>(
+                    value: widget.track!.arpSettings.octaves.clamp(1, 3),
+                    isDense: true,
+                    dropdownColor: panelDark,
+                    underline: const SizedBox(),
+                    style: TextStyle(color: lavenderLight, fontSize: 11),
+                    items: const [
+                      DropdownMenuItem(value: 1, child: Text('1 Oct')),
+                      DropdownMenuItem(value: 2, child: Text('2 Oct')),
+                      DropdownMenuItem(value: 3, child: Text('3 Oct')),
+                    ],
+                    onChanged: (o) {
+                      if (o != null) {
+                        widget.onChangeStart?.call();
+                        setState(() => widget.track!.arpSettings.octaves = o);
+                        widget.onNotesChanged();
+                      }
+                    },
+                  ),
+                  const SizedBox(width: 12),
+                  Text('Gate:', style: TextStyle(color: textMuted, fontSize: 10)),
+                  SizedBox(
+                    width: 84,
+                    child: Slider(
+                      value: widget.track!.arpSettings.gate.clamp(0.2, 1.0),
+                      min: 0.2,
+                      max: 1.0,
+                      activeColor: Colors.amberAccent,
+                      onChanged: (g) {
+                        setState(() => widget.track!.arpSettings.gate = g);
+                        widget.onNotesChanged();
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         Expanded(
           child: Row(
             children: [
-              Container(
+              SizedBox(
                 width: 60,
-                color: bgDark,
-                child: SingleChildScrollView(
-                  controller: _verticalController1,
-                  child: Column(
-                    children: List.generate(_numRows, (index) {
-                      int row = index;
-                      int midiPitch = _getMidiPitchFromRow(row);
-                      if (widget.track?.type == TrackType.sampler) {
-                        return Container(
-                          height: _pitchHeight,
-                          decoration: BoxDecoration(
-                            color: panelDark,
-                            border: Border(
-                              bottom: BorderSide(color: Colors.grey, width: 1),
-                            ),
-                          ),
-                          child: Align(
-                            alignment: Alignment.centerRight,
-                            child: Padding(
-                              padding: EdgeInsets.only(right: 4.0),
-                              child: Text(
-                                'Pad ${15 - row + 1}',
-                                style: TextStyle(
-                                  color: textMuted,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ),
-                        );
-                      }
-                      int pitchClass = midiPitch % 12;
-                      bool isBlack = [1, 3, 6, 8, 10].contains(pitchClass);
-                      bool isPressed = _previewKeyHandles.containsKey(midiPitch);
-                      return GestureDetector(
-                        onTapDown: (_) {
-                          _startPreviewKey(midiPitch);
-                          setState(() {});
-                        },
-                        onTapUp: (_) {
-                          _stopPreviewKey(midiPitch);
-                          setState(() {});
-                        },
-                        onTapCancel: () {
-                          _stopPreviewKey(midiPitch);
-                          setState(() {});
-                        },
-                        child: Container(
-                          height: _pitchHeight,
-                          decoration: BoxDecoration(
-                            color: isPressed
-                                ? lavenderAccent
-                                : (isBlack ? Colors.black : Colors.white),
-                            border: Border(
-                              bottom: BorderSide(color: Colors.grey, width: 1),
-                            ),
-                          ),
-                          child: pitchClass == 0
-                              ? Align(
-                                  alignment: Alignment.centerRight,
-                                  child: Padding(
-                                    padding: EdgeInsets.only(right: 4.0),
-                                    child: Text(
-                                      'C${(midiPitch ~/ 12) - 1}',
-                                      style: TextStyle(
-                                        color: isPressed
-                                            ? Colors.white
-                                            : Colors.red,
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.bold,
+                child: Column(
+                  children: [
+                    Expanded(
+                      child: Container(
+                        width: 60,
+                        color: bgDark,
+                        child: SingleChildScrollView(
+                          controller: _verticalController1,
+                          child: Column(
+                            children: List.generate(_numRows, (index) {
+                              int row = index;
+                              int midiPitch = _getMidiPitchFromRow(row);
+                              if (widget.track?.type == TrackType.sampler) {
+                                return Container(
+                                  height: _pitchHeight,
+                                  decoration: BoxDecoration(
+                                    color: panelDark,
+                                    border: Border(
+                                      bottom: BorderSide(
+                                        color: Colors.grey,
+                                        width: 1,
                                       ),
                                     ),
                                   ),
-                                )
-                              : null,
+                                  child: Align(
+                                    alignment: Alignment.centerRight,
+                                    child: Padding(
+                                      padding: EdgeInsets.only(right: 4.0),
+                                      child: Text(
+                                        'Pad ${15 - row + 1}',
+                                        style: TextStyle(
+                                          color: textMuted,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              }
+                              int pitchClass = midiPitch % 12;
+                              bool isBlack = [1, 3, 6, 8, 10].contains(pitchClass);
+                              bool isPressed = _previewKeyHandles.containsKey(
+                                midiPitch,
+                              );
+                              return GestureDetector(
+                                onTapDown: (_) {
+                                  _startPreviewKey(midiPitch);
+                                  setState(() {});
+                                },
+                                onTapUp: (_) {
+                                  _stopPreviewKey(midiPitch);
+                                  setState(() {});
+                                },
+                                onTapCancel: () {
+                                  _stopPreviewKey(midiPitch);
+                                  setState(() {});
+                                },
+                                child: Container(
+                                  height: _pitchHeight,
+                                  decoration: BoxDecoration(
+                                    color: isPressed
+                                        ? lavenderAccent
+                                        : (isBlack ? Colors.black : Colors.white),
+                                    border: Border(
+                                      bottom: BorderSide(
+                                        color: Colors.grey,
+                                        width: 1,
+                                      ),
+                                    ),
+                                  ),
+                                  child: pitchClass == 0
+                                      ? Align(
+                                          alignment: Alignment.centerRight,
+                                          child: Padding(
+                                            padding: EdgeInsets.only(right: 4.0),
+                                            child: Text(
+                                              'C${(midiPitch ~/ 12) - 1}',
+                                              style: TextStyle(
+                                                color: isPressed
+                                                    ? Colors.white
+                                                    : Colors.red,
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ),
+                                        )
+                                      : null,
+                                ),
+                              );
+                            }),
+                          ),
                         ),
-                      );
-                    }),
-                  ),
+                      ),
+                    ),
+                    if (_showVelocityLane)
+                      Container(
+                        width: 60,
+                        height: 68,
+                        decoration: BoxDecoration(
+                          color: panelDark,
+                          border: Border(
+                            top: BorderSide(color: borderMain, width: 1.5),
+                            right: BorderSide(color: borderMain),
+                          ),
+                        ),
+                        child: Center(
+                          child: Text(
+                            'Vel',
+                            style: TextStyle(
+                              color: textMuted,
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
               ),
               Expanded(
                 child: SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
-                  child: SingleChildScrollView(
-                    controller: _verticalController2,
-                    child: Container(
-                      width: max(
-                        2000.0,
-                        widget.clip.length * widget.zoomX + 100,
-                      ),
-                      height: _numRows * _pitchHeight,
-                      color: panelDark,
-                      child: Stack(
-                        children: [
-                          CustomPaint(
-                            painter: GridPainter(
-                              pitchHeight: _pitchHeight,
-                              beatWidth: beatW,
-                              timeSigTop: widget.timeSigTop,
-                            ),
-                            size: Size(
-                              max(
-                                2000.0,
-                                widget.clip.length * widget.zoomX + 100,
-                              ),
-                              _numRows * _pitchHeight,
-                            ),
-                          ),
+                  child: SizedBox(
+                    width: gridW,
+                    child: Column(
+                      children: [
+                        Expanded(
+                          child: SingleChildScrollView(
+                            controller: _verticalController2,
+                            child: Container(
+                              width: gridW,
+                              height: _numRows * _pitchHeight,
+                              color: panelDark,
+                              child: Stack(
+                                children: [
+                                  CustomPaint(
+                                    painter: GridPainter(
+                                      pitchHeight: _pitchHeight,
+                                      beatWidth: beatW,
+                                      timeSigTop: widget.timeSigTop,
+                                      scalePitchClasses:
+                                          _activeScalePitchClasses,
+                                      rootPitchClass: _rootPitchClass,
+                                      isSampler:
+                                          widget.track?.type ==
+                                          TrackType.sampler,
+                                    ),
+                                    size: Size(gridW, _numRows * _pitchHeight),
+                                  ),
+                                  if (_showGhostNotes &&
+                                      widget.ghostNotes.isNotEmpty)
+                                    ...widget.ghostNotes
+                                        .where(
+                                          (n) =>
+                                              _getRowFromMidiPitch(n.pitch) !=
+                                              -1,
+                                        )
+                                        .map(
+                                          (gn) => Positioned(
+                                            left: gn.start * widget.zoomX,
+                                            top:
+                                                _getRowFromMidiPitch(gn.pitch) *
+                                                    _pitchHeight +
+                                                2,
+                                            width: max(
+                                              4.0,
+                                              gn.length * widget.zoomX,
+                                            ),
+                                            height: _pitchHeight - 4,
+                                            child: IgnorePointer(
+                                              child: Container(
+                                                decoration: BoxDecoration(
+                                                  color: Colors.cyanAccent
+                                                      .withValues(alpha: 0.16),
+                                                  borderRadius:
+                                                      BorderRadius.circular(2),
+                                                  border: Border.all(
+                                                    color: Colors.cyanAccent
+                                                        .withValues(alpha: 0.25),
+                                                    width: 0.5,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
                           Positioned(
                             left: 0,
                             top: 0,
@@ -697,6 +1390,12 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                                                   .clamp(0, _numRows - 1);
                                               int newPitch =
                                                   _getMidiPitchFromRow(newRow);
+                                              if (widget.track?.type !=
+                                                  TrackType.sampler) {
+                                                newPitch = _snapPitchToScale(
+                                                  newPitch,
+                                                );
+                                              }
                                               if (newPitch != n.pitch &&
                                                   newPitch != -1) {
                                                 n.pitch = newPitch;
@@ -784,13 +1483,23 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                                       decoration: BoxDecoration(
                                         color: isSel
                                             ? textMain
-                                            : lavenderAccent,
+                                            : (widget.track?.color ??
+                                                    lavenderAccent)
+                                                .withValues(
+                                                  alpha: (0.4 +
+                                                          (note.velocity /
+                                                                  127.0) *
+                                                              0.6)
+                                                      .clamp(0.3, 1.0),
+                                                ),
                                         borderRadius: BorderRadius.circular(2),
                                         border: Border.all(
                                           color: isSel
                                               ? Colors.blueAccent
-                                              : Colors.transparent,
-                                          width: isSel ? 2 : 0,
+                                              : Colors.white.withValues(
+                                                  alpha: 0.25,
+                                                ),
+                                          width: isSel ? 2 : 0.7,
                                         ),
                                       ),
                                       child: Stack(
@@ -892,11 +1601,87 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                     ),
                   ),
                 ),
-              ),
-            ],
+                if (_showVelocityLane)
+                  Container(
+                    height: 68,
+                    width: gridW,
+                    decoration: BoxDecoration(
+                      color: bgDark,
+                      border: Border(
+                        top: BorderSide(color: borderMain, width: 1.5),
+                      ),
+                    ),
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onPanStart: (d) {
+                        widget.onChangeStart?.call();
+                        _paintVelocityAt(d.localPosition, 68.0);
+                      },
+                      onPanUpdate: (d) =>
+                          _paintVelocityAt(d.localPosition, 68.0),
+                      onTapDown: (d) {
+                        widget.onChangeStart?.call();
+                        _paintVelocityAt(d.localPosition, 68.0);
+                      },
+                      child: Stack(
+                        children: [
+                          Positioned(
+                            left: 6,
+                            top: 4,
+                            child: Text(
+                              'VELOCITY (drag to draw)',
+                              style: TextStyle(
+                                color: textFaint,
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          ...widget.clip.notes.map((n) {
+                            final h = ((n.velocity / 127.0) * 56.0).clamp(
+                              4.0,
+                              56.0,
+                            );
+                            final isSel = widget.selectedMidiNotes.contains(n);
+                            final barColor = isSel
+                                ? Colors.cyanAccent
+                                : (widget.track?.color ?? lavenderAccent);
+                            return Positioned(
+                              left: n.start * widget.zoomX,
+                              bottom: 2,
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Container(
+                                    width: 7,
+                                    height: 7,
+                                    decoration: BoxDecoration(
+                                      color: barColor,
+                                      shape: BoxShape.circle,
+                                    ),
+                                  ),
+                                  Container(
+                                    width: 2.5,
+                                    height: h,
+                                    color: barColor.withValues(alpha: 0.85),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
-      ],
-    );
-  }
+      ),
+    ],
+  ),
+),
+],
+);
+}
 }

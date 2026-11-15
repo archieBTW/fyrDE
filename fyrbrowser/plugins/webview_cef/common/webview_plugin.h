@@ -37,6 +37,7 @@ namespace webview_cef {
         CefRefPtr<WebviewHandler> m_handler;
 	    CefRefPtr<WebviewApp> m_app;
     	std::unordered_map<int, std::shared_ptr<WebviewTexture>> m_renderers;
+        int m_focusedBrowserId = -1;
 	    bool m_init = false;
         std::recursive_mutex m_mutex;
     };

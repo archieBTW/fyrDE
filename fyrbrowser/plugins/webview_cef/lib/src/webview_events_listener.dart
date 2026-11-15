@@ -13,6 +13,13 @@ typedef UrlChangeCb = void Function(String url);
  */
 typedef LoadStartCb = void Function(WebViewController controller, String url);
 typedef LoadStopCb = void Function(WebViewController controller, String url);
+typedef LoadErrorCb = void Function(
+    WebViewController controller, int errorCode, String errorText, String failedUrl);
+typedef LoadingStateChangedCb = void Function(
+    bool isLoading, bool canGoBack, bool canGoForward);
+typedef FindResultCb = void Function(
+    int count, int activeMatchOrdinal, bool finalUpdate);
+typedef AdBlockedCb = void Function(int totalCount);
 
 typedef DownloadStartCb = void Function(
     String suggestedName, String url);
@@ -34,6 +41,10 @@ class WebviewEventsListener {
   OnConsoleMessage? onConsoleMessage;
   LoadStartCb? onLoadStart;
   LoadStopCb? onLoadEnd;
+  LoadErrorCb? onLoadError;
+  LoadingStateChangedCb? onLoadingStateChanged;
+  FindResultCb? onFindResult;
+  AdBlockedCb? onAdBlocked;
   DownloadStartCb? onDownloadStart;
   DownloadUpdatedCb? onDownloadUpdated;
   ContextMenuCb? onContextMenu;
@@ -48,6 +59,10 @@ class WebviewEventsListener {
     this.onConsoleMessage,
     this.onLoadStart,
     this.onLoadEnd,
+    this.onLoadError,
+    this.onLoadingStateChanged,
+    this.onFindResult,
+    this.onAdBlocked,
     this.onDownloadStart,
     this.onDownloadUpdated,
     this.onContextMenu,

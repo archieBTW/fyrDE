@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=Sound Booth
-Comment=Digital Audio Workstation for FyrDE
+Comment=Sound Booth Digital Audio Workstation
 Exec=/usr/local/bin/fyrdaw
 Icon=fyrdaw
 Terminal=false

@@ -23,6 +23,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
 
   bool isPlaying = false;
   bool isMetronomeEnabled = false;
+  double metronomeVolume = 0.85;
   bool isRecording = false;
   double? recordingStartPos;
   double playheadPosition = 0.0;
@@ -53,6 +54,74 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   double loopStart = 0.0;
   double loopEnd = 400.0;
 
+  List<SongMarker> songMarkers = [];
+  List<TempoMarker> tempoMarkers = [];
+  bool _showSampleBrowser = false;
+  List<String> _userSampleFolders = [];
+  String? _browserPreviewPath;
+  SoundHandle? _browserPreviewHandle;
+  AudioSource? _browserPreviewSource;
+  List<double> _cachedFftBins = const [];
+  double masterVolume = 1.0;
+  bool masterLimiter = true;
+  Bus? auxReverbBus;
+  Bus? auxDelayBus;
+  double auxReverbMix = 0.85;
+  double auxDelayMix = 0.75;
+
+  bool autoScrollPlayhead = true;
+  int countInBars = 0; // 0, 1, 2
+  bool punchInLoop = false;
+  int _countInBeatsLeft = 0;
+  Timer? _countInTimer;
+
+  AudioData? _masterAudioData;
+  Float32List? _masterVizSamples;
+  Timer? _meterTimer;
+  final Map<String, (double, double)> _trackLevels = {};
+  final Map<String, (double, double)> _trackPeaks = {};
+  (double, double) _masterLevel = (0.0, 0.0);
+  (double, double) _masterPeak = (0.0, 0.0);
+  (double, double) _auxRevLevel = (0.0, 0.0);
+  (double, double) _auxDlyLevel = (0.0, 0.0);
+
+  bool isMusicalTypingEnabled = false;
+  int _qwertyOctave = 4;
+  int _qwertyVelocity = 100;
+  final Set<int> _qwertyActiveNotes = {};
+  bool _tunerEnabled = false;
+  PitchDetectionResult? _detectedPitch;
+  final List<double> _tunerBuffer = [];
+  bool _isBottomPanelMaximized = false;
+  double _masterLufs = -60.0;
+  double _stereoCorrelation = 1.0;
+  final Map<String, double> _sidechainGr = {};
+
+  bool auxReverbSolo = false;
+  bool auxDelaySolo = false;
+  List<DawEffect> masterEffectsChain = [];
+  double masterLufsTarget = -14.0;
+  bool _isMasterFxSelected = false;
+
+  String? _referenceTrackPath;
+  AudioSource? _referenceSource;
+  SoundHandle? _referenceHandle;
+  bool _isAuditioningReference = false;
+  double _referenceGain = 1.0;
+
+  bool _midiLearnActive = false;
+  String? _midiLearnTarget;
+  List<MidiCcMapping> midiMappings = [];
+
+  bool _isSessionView = false;
+  final Set<String> _activeSessionClipIds = {};
+  final Set<String> _queuedSessionClipIds = {};
+
+  Timer? _arpTimer;
+  final Set<int> _heldArpNotes = {};
+  int _arpStepIdx = 0;
+  int? _lastArpTriggeredPitch;
+
   late final AudioRecorder _audioRecorder;
   String? _currentRecordPath;
   StreamSubscription<List<int>>? _micStreamSub;
@@ -69,8 +138,6 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   final ScrollController _timelineScrollController = ScrollController();
   final ScrollController _horizontalScrollController = ScrollController();
   bool _isSyncingScroll = false;
-  int? _draggingAutoPointIndex;
-  String? _draggingAutoTrackId;
 
   List<String> undoStack = [];
   List<String> redoStack = [];
@@ -85,7 +152,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   Future<void> _writeAutoSave() async {
     try {
       final dir = await getApplicationDocumentsDirectory();
-      final dawDir = Directory('${dir.path}/FyrDAW');
+      final dawDir = Directory('${dir.path}/SoundBooth');
       if (!dawDir.existsSync()) dawDir.createSync(recursive: true);
       final file = File('${dawDir.path}/autosave.json');
       await file.writeAsString(_getCurrentStateJson());
@@ -95,7 +162,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   Future<void> _clearAutoSave() async {
     try {
       final dir = await getApplicationDocumentsDirectory();
-      final file = File('${dir.path}/FyrDAW/autosave.json');
+      final file = File('${dir.path}/SoundBooth/autosave.json');
       if (await file.exists()) {
         await file.delete();
       }
@@ -113,7 +180,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
 
   void _checkAutoSave() async {
     final dir = await getApplicationDocumentsDirectory();
-    final file = File('${dir.path}/FyrDAW/autosave.json');
+    final file = File('${dir.path}/SoundBooth/autosave.json');
     if (await file.exists()) {
       showDialog(
         context: context,
@@ -212,6 +279,8 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         }
         tracks.clear();
         trackClips.clear();
+        songMarkers.clear();
+        tempoMarkers.clear();
         selectedTrackIndex = null;
         selectedClip = null;
         multiSelectedClips.clear();
@@ -243,6 +312,13 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       'bpm': bpm,
       'timeSigTop': timeSigTop,
       'timeSigBottom': timeSigBottom,
+      'metronomeVolume': metronomeVolume,
+      'masterVolume': masterVolume,
+      'masterLimiter': masterLimiter,
+      'auxReverbMix': auxReverbMix,
+      'auxDelayMix': auxDelayMix,
+      'markers': songMarkers.map((m) => m.toJson()).toList(),
+      'tempoMarkers': tempoMarkers.map((m) => m.toJson()).toList(),
       'tracks': tracks.map((t) => t.toJson()).toList(),
       'trackClips': trackClips.map(
         (k, v) => MapEntry(k, v.map((c) => c.toJson()).toList()),
@@ -288,6 +364,25 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       bpm = projectData['bpm'] ?? 120;
       timeSigTop = projectData['timeSigTop'] ?? 4;
       timeSigBottom = projectData['timeSigBottom'] ?? 4;
+      metronomeVolume =
+          (projectData['metronomeVolume'] as num?)?.toDouble() ?? 0.85;
+      masterVolume = (projectData['masterVolume'] as num?)?.toDouble() ?? 1.0;
+      masterLimiter = projectData['masterLimiter'] ?? true;
+      auxReverbMix = (projectData['auxReverbMix'] as num?)?.toDouble() ?? 0.85;
+      auxDelayMix = (projectData['auxDelayMix'] as num?)?.toDouble() ?? 0.75;
+
+      songMarkers.clear();
+      if (projectData['markers'] != null) {
+        for (var m in projectData['markers']) {
+          songMarkers.add(SongMarker.fromJson(m));
+        }
+      }
+      tempoMarkers.clear();
+      if (projectData['tempoMarkers'] != null) {
+        for (var tm in projectData['tempoMarkers']) {
+          tempoMarkers.add(TempoMarker.fromJson(tm));
+        }
+      }
 
       tracks.clear();
       trackClips.clear();
@@ -343,12 +438,8 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       }
       if (track.type == TrackType.sampler) {
         for (var pad in track.samplerPads.values) {
-          if (pad.filePath != null && SoLoud.instance.isInitialized) {
-            try {
-              pad.source = await SoLoud.instance.loadFile(pad.filePath!);
-              pad.source!.filters.pitchShiftFilter.activate();
-              pad.extractWaveform();
-            } catch (_) {}
+          if (pad.filePath != null) {
+            await pad.loadSample(pad.filePath!);
           }
         }
       }
@@ -486,127 +577,359 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   }
 
   void _showInstrumentDialog(Track track) {
+    final categories = <String>['All'];
+    for (final inst in kInstrumentPresets) {
+      if (!categories.contains(inst.category)) {
+        categories.add(inst.category);
+      }
+    }
+    String selectedCategory = 'All';
+
     showDialog(
       context: context,
       builder: (context) {
-        return Dialog(
-          backgroundColor: panelDark,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Container(
-            width: 480,
-            padding: EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Select Instrument',
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ),
-                ),
-                SizedBox(height: 4),
-                Text(
-                  'All instruments feature realistic stereo voicing and unlimited sustain.',
-                  style: TextStyle(color: textMuted, fontSize: 12),
-                ),
-                SizedBox(height: 16),
-                SizedBox(
-                  height: 440,
-                  child: ListView.builder(
-                    itemCount: kInstrumentPresets.length,
-                    itemBuilder: (context, index) {
-                      final inst = kInstrumentPresets[index];
-                      final isSelected = track.instrumentIndex == inst.index;
-                      return InkWell(
-                        onTap: () {
-                          Navigator.of(context).pop();
-                          _changeInstrument(track, inst.index);
-                        },
-                        child: Container(
-                          margin: EdgeInsets.only(bottom: 10),
-                          padding: EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: panelLight,
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: isSelected ? lavenderAccent : textFaint,
-                              width: isSelected ? 2 : 1,
-                            ),
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            final filtered = selectedCategory == 'All'
+                ? kInstrumentPresets
+                : kInstrumentPresets
+                      .where((p) => p.category == selectedCategory)
+                      .toList();
+            return Dialog(
+              backgroundColor: panelDark,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Container(
+                width: 540,
+                padding: EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Select Instrument',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
                           ),
-                          child: Row(
-                            children: [
-                              Icon(
-                                inst.icon,
-                                color: lavenderAccent,
-                                size: 30,
+                        ),
+                        Text(
+                          '${filtered.length} sounds',
+                          style: TextStyle(color: textMuted, fontSize: 12),
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      'All instruments feature realistic stereo voicing and unlimited sustain.',
+                      style: TextStyle(color: textMuted, fontSize: 12),
+                    ),
+                    SizedBox(height: 12),
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: categories.map((cat) {
+                          final active = selectedCategory == cat;
+                          return Padding(
+                            padding: const EdgeInsets.only(right: 6),
+                            child: ChoiceChip(
+                              label: Text(
+                                cat,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: active ? Colors.black : Colors.white70,
+                                  fontWeight: active
+                                      ? FontWeight.bold
+                                      : FontWeight.normal,
+                                ),
                               ),
-                              SizedBox(width: 14),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
+                              selected: active,
+                              selectedColor: lavenderAccent,
+                              backgroundColor: panelLight,
+                              side: BorderSide(
+                                color: active ? lavenderAccent : textFaint,
+                              ),
+                              onSelected: (_) {
+                                setModalState(() => selectedCategory = cat);
+                              },
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                    SizedBox(height: 14),
+                    SizedBox(
+                      height: 420,
+                      child: ListView.builder(
+                        itemCount: filtered.length,
+                        itemBuilder: (context, index) {
+                          final inst = filtered[index];
+                          final isSelected = track.instrumentIndex == inst.index;
+                          return InkWell(
+                            onTap: () {
+                              Navigator.of(context).pop();
+                              _changeInstrument(track, inst.index);
+                            },
+                            child: Container(
+                              margin: EdgeInsets.only(bottom: 10),
+                              padding: EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: panelLight,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: isSelected ? lavenderAccent : textFaint,
+                                  width: isSelected ? 2 : 1,
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    inst.icon,
+                                    color: lavenderAccent,
+                                    size: 30,
+                                  ),
+                                  SizedBox(width: 14),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
-                                        Expanded(
-                                          child: Text(
-                                            inst.name,
-                                            style: TextStyle(
-                                              color: Colors.white,
-                                              fontWeight: FontWeight.bold,
-                                              fontSize: 15,
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                inst.name,
+                                                style: TextStyle(
+                                                  color: Colors.white,
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 15,
+                                                ),
+                                              ),
                                             ),
-                                          ),
+                                            Container(
+                                              padding: EdgeInsets.symmetric(
+                                                horizontal: 8,
+                                                vertical: 2,
+                                              ),
+                                              decoration: BoxDecoration(
+                                                color: bgDark,
+                                                borderRadius: BorderRadius.circular(
+                                                  4,
+                                                ),
+                                              ),
+                                              child: Text(
+                                                inst.category,
+                                                style: TextStyle(
+                                                  color: lavenderLight,
+                                                  fontSize: 10,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
                                         ),
-                                        Container(
-                                          padding: EdgeInsets.symmetric(
-                                            horizontal: 8,
-                                            vertical: 2,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color: bgDark,
-                                            borderRadius: BorderRadius.circular(
-                                              4,
-                                            ),
-                                          ),
-                                          child: Text(
-                                            inst.category,
-                                            style: TextStyle(
-                                              color: lavenderLight,
-                                              fontSize: 10,
-                                            ),
+                                        SizedBox(height: 4),
+                                        Text(
+                                          inst.description,
+                                          style: TextStyle(
+                                            color: textMuted,
+                                            fontSize: 12,
                                           ),
                                         ),
                                       ],
                                     ),
-                                    SizedBox(height: 4),
-                                    Text(
-                                      inst.description,
-                                      style: TextStyle(
-                                        color: textMuted,
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                  ],
-                                ),
+                                  ),
+                                ],
                               ),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                  ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-          ),
+              ),
+            );
+          },
         );
       },
     );
+  }
+
+  void _triggerNoteOnTrack(Track track, int note, int velocity) {
+    if (track.type == TrackType.midi) {
+      final preset = getInstrumentPreset(track.instrumentIndex);
+      final handle = triggerInstrumentNote(track, note, velocity);
+      if (handle != null) {
+        _activeMidiNotes.putIfAbsent(note, () => []).add((
+          handle: handle,
+          releaseMs: preset.releaseMs,
+        ));
+        track.activeMidiHandles.removeWhere(
+          (h) => !SoLoud.instance.getIsValidVoiceHandle(h),
+        );
+        track.activeMidiHandles.add(handle);
+      }
+    } else if (track.type == TrackType.sampler) {
+      var pad = track.samplerPads.values
+          .where((p) => p.midiNote == note)
+          .firstOrNull;
+      if (pad != null) {
+        if (_isSoloudReady) {
+          track.bus = ensureActiveBus(track.bus);
+        }
+        pad.play(
+          velocity.toDouble(),
+          track.bus,
+          track.volume,
+          track.pan,
+          track.samplerPads.values,
+        );
+      }
+    }
+  }
+
+  void _syncLiveArpTimer() {
+    if (_heldArpNotes.isEmpty) {
+      _arpTimer?.cancel();
+      _arpTimer = null;
+      if (_lastArpTriggeredPitch != null) {
+        _releaseActiveMidiPitch(_lastArpTriggeredPitch!);
+        _lastArpTriggeredPitch = null;
+      }
+      return;
+    }
+    if (selectedTrackIndex == null || selectedTrackIndex! >= tracks.length) {
+      return;
+    }
+    final track = tracks[selectedTrackIndex!];
+    if (!track.arpSettings.enabled || track.type != TrackType.midi) return;
+    if (_arpTimer != null && _arpTimer!.isActive) return;
+
+    final stepMs =
+        ((track.arpSettings.rateBeats * (60000.0 / bpm)).round()).clamp(40, 2000);
+    _arpStepIdx = 0;
+    void tick() {
+      if (!mounted || _heldArpNotes.isEmpty) {
+        _arpTimer?.cancel();
+        _arpTimer = null;
+        return;
+      }
+      if (selectedTrackIndex == null || selectedTrackIndex! >= tracks.length) {
+        return;
+      }
+      final t = tracks[selectedTrackIndex!];
+      final base = _heldArpNotes.toList()..sort();
+      final pitches = <int>[];
+      for (int o = 0; o < t.arpSettings.octaves.clamp(1, 3); o++) {
+        for (final p in base) {
+          if (p + o * 12 <= 127) pitches.add(p + o * 12);
+        }
+      }
+      if (pitches.isEmpty) return;
+      List<int> seq;
+      switch (t.arpSettings.mode) {
+        case ArpMode.up:
+          seq = pitches;
+        case ArpMode.down:
+          seq = pitches.reversed.toList();
+        case ArpMode.upDown:
+          seq = [
+            ...pitches,
+            if (pitches.length > 2) ...pitches.sublist(1, pitches.length - 1).reversed,
+          ];
+        case ArpMode.random:
+          seq = pitches;
+      }
+      final nextPitch = t.arpSettings.mode == ArpMode.random
+          ? seq[Random().nextInt(seq.length)]
+          : seq[_arpStepIdx % seq.length];
+      _arpStepIdx++;
+      if (_lastArpTriggeredPitch != null) {
+        _releaseActiveMidiPitch(_lastArpTriggeredPitch!);
+      }
+      _triggerNoteOnTrack(t, nextPitch, _qwertyVelocity);
+      _lastArpTriggeredPitch = nextPitch;
+    }
+
+    tick();
+    _arpTimer = Timer.periodic(Duration(milliseconds: stepMs), (_) => tick());
+  }
+
+  void _releaseActiveMidiPitch(int note) {
+    if (_activeMidiNotes.containsKey(note)) {
+      for (var entry in _activeMidiNotes[note]!) {
+        releaseInstrumentNote(entry.handle, releaseMs: entry.releaseMs);
+      }
+      _activeMidiNotes.remove(note);
+    }
+  }
+
+  void _handleMidiCc(int cc, int value, int channel) {
+    if (_midiLearnActive && _midiLearnTarget != null) {
+      final parts = _midiLearnTarget!.split(':');
+      final trackId = parts.first;
+      final param = parts.length > 1 ? parts.sublist(1).join(':') : 'volume';
+      setState(() {
+        midiMappings.removeWhere((m) => m.cc == cc && m.channel == channel);
+        midiMappings.add(
+          MidiCcMapping(
+            cc: cc,
+            channel: channel,
+            trackId: trackId,
+            param: param,
+          ),
+        );
+        _midiLearnActive = false;
+        _midiLearnTarget = null;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Mapped MIDI CC $cc -> $param')),
+        );
+      }
+      return;
+    }
+
+    for (final m in midiMappings) {
+      if (m.cc != cc) continue;
+      if (m.channel != null && m.channel != channel) continue;
+      final scaled = m.mapMidiValue(value);
+      setState(() {
+        if (m.trackId == '__master__' && m.param == 'volume') {
+          masterVolume = scaled.clamp(0.0, 1.0);
+          _syncMasterAndAuxFilters();
+          return;
+        }
+        final track = tracks.where((t) => t.id == m.trackId).firstOrNull;
+        if (track == null) return;
+        if (m.param == 'volume') {
+          track.volume = scaled.clamp(0.0, 1.0);
+          _syncTrackMonitoringHandles();
+        } else if (m.param == 'pan') {
+          track.pan = (scaled * 2.0 - 1.0).clamp(-1.0, 1.0);
+        } else if (m.param == 'reverbSend') {
+          track.reverbSend = scaled.clamp(0.0, 1.0);
+        } else if (m.param == 'delaySend') {
+          track.delaySend = scaled.clamp(0.0, 1.0);
+        } else if (m.param == 'synth:cutoff') {
+          track.synthSettings.filterCutoff = scaled.clamp(0.0, 1.0);
+          _updateTrackFilters(track);
+        } else if (m.param.startsWith('fx:')) {
+          final pParts = m.param.split(':');
+          if (pParts.length >= 3) {
+            final fxIdx = int.tryParse(pParts[1]);
+            if (fxIdx != null && fxIdx >= 0 && fxIdx < track.effectsChain.length) {
+              track.effectsChain[fxIdx].parameters[pParts[2]] = scaled.clamp(0.0, 1.0);
+              _updateTrackFilters(track);
+            }
+          }
+        }
+      });
+    }
   }
 
   void _handleMidiNoteOn(int note, int velocity, String? deviceId) {
@@ -655,36 +978,19 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
 
     for (var track in tracksToPlay) {
       if (track.midiInputId != null && track.midiInputId != deviceId) continue;
-      if (track.type == TrackType.midi) {
-        final preset = getInstrumentPreset(track.instrumentIndex);
-        final handle = triggerInstrumentNote(track, note, velocity);
-        if (handle != null) {
-          _activeMidiNotes.putIfAbsent(note, () => []).add((
-            handle: handle,
-            releaseMs: preset.releaseMs,
-          ));
-          track.activeMidiHandles.removeWhere(
-            (h) => !SoLoud.instance.getIsValidVoiceHandle(h),
-          );
-          track.activeMidiHandles.add(handle);
-        }
-      } else if (track.type == TrackType.sampler) {
-        var pad = track.samplerPads.values
-            .where((p) => p.midiNote == note)
-            .firstOrNull;
-        if (pad != null) {
-          pad.play(
-            velocity.toDouble(),
-            track.bus,
-            track.volume,
-            track.pan,
-          );
-        }
+      if (track.type == TrackType.midi && track.arpSettings.enabled) {
+        _heldArpNotes.add(note);
+        _syncLiveArpTimer();
+        continue;
       }
+      _triggerNoteOnTrack(track, note, velocity);
     }
   }
 
   void _handleMidiNoteOff(int note) {
+    if (_heldArpNotes.remove(note)) {
+      _syncLiveArpTimer();
+    }
     if (isRecording && _recordingMidiNotes.containsKey(note)) {
       var r = _recordingMidiNotes[note]!;
       double len = playheadPosition - r.absoluteStartPlayhead;
@@ -693,12 +999,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       _recordingMidiNotes.remove(note);
     }
 
-    if (_activeMidiNotes.containsKey(note)) {
-      for (var entry in _activeMidiNotes[note]!) {
-        releaseInstrumentNote(entry.handle, releaseMs: entry.releaseMs);
-      }
-      _activeMidiNotes.remove(note);
-    }
+    _releaseActiveMidiPitch(note);
   }
 
   void _tapTempo() {
@@ -721,73 +1022,101 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   }
 
   Future<void> _exportAudio() async {
+    String? format = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        backgroundColor: panelDark,
+        title: Text('Export Full Mixdown', style: TextStyle(color: textMain)),
+        children: [
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, 'wav'),
+            child: ListTile(
+              leading: Icon(Icons.audio_file, color: lavenderAccent),
+              title: Text('WAV (16-bit / 44.1 kHz)', style: TextStyle(color: textMain)),
+              subtitle: Text('Uncompressed lossless master', style: TextStyle(color: textMuted, fontSize: 11)),
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, 'flac'),
+            child: ListTile(
+              leading: Icon(Icons.high_quality, color: Colors.cyanAccent),
+              title: Text('FLAC (Lossless Compressed)', style: TextStyle(color: textMain)),
+              subtitle: Text('Encoded via ffmpeg', style: TextStyle(color: textMuted, fontSize: 11)),
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, 'mp3'),
+            child: ListTile(
+              leading: Icon(Icons.music_note, color: Colors.amberAccent),
+              title: Text('MP3 (320 kbps)', style: TextStyle(color: textMain)),
+              subtitle: Text('Ready for sharing', style: TextStyle(color: textMuted, fontSize: 11)),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (format == null) return;
+
     try {
       final dir = await getApplicationDocumentsDirectory();
-      final outPath =
-          '${dir.path}/export_${DateTime.now().millisecondsSinceEpoch}.wav';
-      List<String> inputs = [];
-      List<String> filterComplex = [];
-      int inputIndex = 0;
-
-      for (var t in tracks) {
-        if (t.type == TrackType.audio && !t.isMuted) {
-          for (var c in trackClips[t.id] ?? []) {
-            if (c is AudioClip) {
-              inputs.add('-i');
-              inputs.add(c.filePath);
-              int delayMs = (c.start * 10).toInt();
-              filterComplex.add(
-                '[$inputIndex]adelay=$delayMs|$delayMs[a$inputIndex];',
-              );
-              inputIndex++;
-            }
-          }
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final wavPath = '${dir.path}/mixdown_$ts.wav';
+      final ok = await MixdownRenderer.renderToWav(
+        tracks: tracks,
+        trackClips: trackClips,
+        outWavPath: wavPath,
+        bpm: bpm,
+        beatWidth: beatWidth,
+        masterVolume: masterVolume,
+        masterLimiter: masterLimiter,
+        auxReverbMix: auxReverbMix,
+        auxDelayMix: auxDelayMix,
+        auxReverbSolo: auxReverbSolo,
+        auxDelaySolo: auxDelaySolo,
+        masterEffectsChain: masterEffectsChain,
+        tempoMarkers: tempoMarkers,
+      );
+      if (!ok) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Nothing to export — add audio or MIDI clips first!')),
+          );
         }
-      }
-      if (inputIndex == 0) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('No audio clips to export!')));
         return;
       }
-      String mixArgs = '';
-      for (int i = 0; i < inputIndex; i++) {
-        mixArgs += '[a$i]';
-      }
-      mixArgs += 'amix=inputs=$inputIndex:duration=longest[out]';
-      filterComplex.add(mixArgs);
 
-      List<String> args = [
-        ...inputs,
-        '-filter_complex',
-        filterComplex.join(' '),
-        '-map',
-        '[out]',
-        outPath,
-      ];
-      final res = await Process.run('ffmpeg', args);
-      if (res.exitCode == 0) {
+      String finalPath = wavPath;
+      if (format == 'mp3' || format == 'flac') {
+        final target = '${dir.path}/mixdown_$ts.$format';
+        final args = format == 'mp3'
+            ? ['-y', '-i', wavPath, '-b:a', '320k', target]
+            : ['-y', '-i', wavPath, target];
+        final res = await Process.run('ffmpeg', args);
+        if (res.exitCode == 0 && File(target).existsSync()) {
+          finalPath = target;
+          try {
+            File(wavPath).deleteSync();
+          } catch (_) {}
+        }
+      }
+
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Exported to $outPath'),
+            content: Text('Exported mixdown to $finalPath'),
             backgroundColor: Colors.green,
-          ),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Export failed: ${res.stderr}'),
-            backgroundColor: Colors.red,
           ),
         );
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Export error: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Export error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -804,7 +1133,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       List<String> args = [
         '--file-selection',
         '--save',
-        '--title=Save fyrDAW Project',
+        '--title=Save Sound Booth Project',
         '--file-filter=*.adaw',
       ];
       final result = await Process.run('zenity', args);
@@ -832,7 +1161,8 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           Map<String, dynamic> newPads = {};
           (j['samplerPads'] as Map).forEach((k, v) {
             Map<String, dynamic> padData = Map<String, dynamic>.from(v);
-            if (padData['filePath'] != null) {
+            if (padData['filePath'] != null &&
+                !padData['filePath'].toString().startsWith('assets/')) {
               padData['filePath'] = p.basename(padData['filePath']);
             }
             newPads[k] = padData;
@@ -857,6 +1187,17 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         'bpm': bpm,
         'timeSigTop': timeSigTop,
         'timeSigBottom': timeSigBottom,
+        'metronomeVolume': metronomeVolume,
+        'masterVolume': masterVolume,
+        'masterLimiter': masterLimiter,
+        'masterLufsTarget': masterLufsTarget,
+        'masterEffectsChain':
+            masterEffectsChain.map((e) => e.toJson()).toList(),
+        'midiMappings': midiMappings.map((m) => m.toJson()).toList(),
+        'auxReverbMix': auxReverbMix,
+        'auxDelayMix': auxDelayMix,
+        'markers': songMarkers.map((m) => m.toJson()).toList(),
+        'tempoMarkers': tempoMarkers.map((m) => m.toJson()).toList(),
         'tracks': tracksJson,
         'trackClips': clipsJson,
       };
@@ -891,7 +1232,9 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       for (var t in tracks) {
         if (t.type == TrackType.sampler) {
           for (var pad in t.samplerPads.values) {
-            if (pad.filePath != null && !addedFiles.contains(pad.filePath!)) {
+            if (pad.filePath != null &&
+                !pad.filePath!.startsWith('assets/') &&
+                !addedFiles.contains(pad.filePath!)) {
               final f = File(pad.filePath!);
               if (f.existsSync()) {
                 final bytes = f.readAsBytesSync();
@@ -964,6 +1307,39 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           bpm = projectData['bpm'] ?? 120;
           timeSigTop = projectData['timeSigTop'] ?? 4;
           timeSigBottom = projectData['timeSigBottom'] ?? 4;
+          metronomeVolume =
+              (projectData['metronomeVolume'] as num?)?.toDouble() ?? 0.85;
+          masterVolume = (projectData['masterVolume'] as num?)?.toDouble() ?? 1.0;
+          masterLimiter = projectData['masterLimiter'] ?? true;
+          masterLufsTarget =
+              (projectData['masterLufsTarget'] as num?)?.toDouble() ?? -14.0;
+          masterEffectsChain.clear();
+          if (projectData['masterEffectsChain'] != null) {
+            for (final fx in projectData['masterEffectsChain']) {
+              masterEffectsChain.add(DawEffect.fromJson(fx));
+            }
+          }
+          midiMappings.clear();
+          if (projectData['midiMappings'] != null) {
+            for (final m in projectData['midiMappings']) {
+              midiMappings.add(MidiCcMapping.fromJson(m));
+            }
+          }
+          auxReverbMix = (projectData['auxReverbMix'] as num?)?.toDouble() ?? 0.85;
+          auxDelayMix = (projectData['auxDelayMix'] as num?)?.toDouble() ?? 0.75;
+
+          songMarkers.clear();
+          if (projectData['markers'] != null) {
+            for (var m in projectData['markers']) {
+              songMarkers.add(SongMarker.fromJson(m));
+            }
+          }
+          tempoMarkers.clear();
+          if (projectData['tempoMarkers'] != null) {
+            for (var tm in projectData['tempoMarkers']) {
+              tempoMarkers.add(TempoMarker.fromJson(tm));
+            }
+          }
 
           tracks.clear();
           if (projectData['tracks'] != null) {
@@ -972,8 +1348,9 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                   t['samplerPads'] != null) {
                 (t['samplerPads'] as Map).forEach((k, v) {
                   if (v['filePath'] != null) {
-                    if (!v['filePath'].startsWith('/')) {
-                      v['filePath'] = '${mediaDir.path}/${v['filePath']}';
+                    final fp = v['filePath'].toString();
+                    if (!fp.startsWith('/') && !fp.startsWith('assets/')) {
+                      v['filePath'] = '${mediaDir.path}/$fp';
                     }
                   }
                 });
@@ -1026,12 +1403,8 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           }
           if (t.type == TrackType.sampler) {
             for (var pad in t.samplerPads.values) {
-              if (pad.filePath != null && SoLoud.instance.isInitialized) {
-                try {
-                  pad.source = await SoLoud.instance.loadFile(pad.filePath!);
-                  pad.source!.filters.pitchShiftFilter.activate();
-                  pad.extractWaveform();
-                } catch (_) {}
+              if (pad.filePath != null) {
+                await pad.loadSample(pad.filePath!);
               }
             }
           }
@@ -1173,10 +1546,13 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         String path = result.stdout.toString().trim();
         if (path.isEmpty) return;
 
+        final trackColor =
+            kTrackColorPalette[tracks.length % kTrackColorPalette.length];
         final newTrack = Track(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
           name: path.split('/').last,
           type: TrackType.audio,
+          colorValue: trackColor.toARGB32(),
         );
 
         final src = await SoLoud.instance.loadFile(path);
@@ -1184,7 +1560,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         final clip = AudioClip(
           start: playheadPosition,
           length: lengthSecs.inMilliseconds * 100.0 / 1000.0,
-          color: lavenderAccent,
+          color: newTrack.color,
           filePath: path,
           id: UniqueKey().toString(),
         );
@@ -1214,65 +1590,660 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       await Directory(folderPath).create();
 
       bool anyExported = false;
+      final bool anySolo = tracks.any((t) => t.isSolo);
 
       for (var t in tracks) {
-        if (t.type == TrackType.audio && !t.isMuted) {
-          List<String> inputs = [];
-          List<String> filterComplex = [];
-          int inputIndex = 0;
-          for (var c in trackClips[t.id] ?? []) {
-            if (c is AudioClip) {
-              inputs.add('-i');
-              inputs.add(c.filePath);
-              int delayMs = (c.start * 10).toInt();
-              filterComplex.add(
-                '[$inputIndex]adelay=$delayMs|$delayMs[a$inputIndex];',
-              );
-              inputIndex++;
-            }
-          }
-          if (inputIndex > 0) {
-            String mixArgs = '';
-            for (int i = 0; i < inputIndex; i++) {
-              mixArgs += '[a$i]';
-            }
-            mixArgs += 'amix=inputs=$inputIndex:duration=longest[out]';
-            filterComplex.add(mixArgs);
-            final outPath = '$folderPath/${t.name.replaceAll(' ', '_')}.wav';
-            List<String> args = [
-              ...inputs,
-              '-filter_complex',
-              filterComplex.join(' '),
-              '-map',
-              '[out]',
-              outPath,
-            ];
-            await Process.run('ffmpeg', args);
-            anyExported = true;
-          }
-        }
+        if (t.isMuted) continue;
+        if (anySolo && !t.isSolo) continue;
+        final safeName = t.name.replaceAll(RegExp(r'[^a-zA-Z0-9_-]+'), '_');
+        final outPath = '$folderPath/$safeName.wav';
+        final ok = await MixdownRenderer.renderToWav(
+          tracks: tracks,
+          trackClips: trackClips,
+          outWavPath: outPath,
+          bpm: bpm,
+          onlyTrack: t,
+          masterVolume: 1.0,
+          masterLimiter: false,
+          tempoMarkers: tempoMarkers,
+        );
+        if (ok) anyExported = true;
       }
 
-      if (anyExported) {
+      if (mounted) {
+        if (anyExported) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Stems exported to $folderPath'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('No active tracks with clips to export!')),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Stems exported to $folderPath'),
+            content: Text('Export Stems error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _bounceTrackToAudio(Track track) async {
+    try {
+      final dir = await getProjectMediaDirectory();
+      final outPath =
+          '${dir.path}/bounce_${track.id}_${DateTime.now().millisecondsSinceEpoch}.wav';
+      final ok = await MixdownRenderer.renderToWav(
+        tracks: tracks,
+        trackClips: trackClips,
+        outWavPath: outPath,
+        bpm: bpm,
+        onlyTrack: track,
+        masterVolume: 1.0,
+        masterLimiter: false,
+        tempoMarkers: tempoMarkers,
+      );
+      if (!ok) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('No clips on "${track.name}" to bounce!')),
+          );
+        }
+        return;
+      }
+      final wav = await decodeWavFile(outPath);
+      final clipLen = (wav?.durationSeconds ?? 4.0) * 100.0;
+      AudioSource? src;
+      if (SoLoud.instance.isInitialized) {
+        src = await SoLoud.instance.loadFile(outPath);
+      }
+      _saveState();
+      final bouncedTrack = Track(
+        id: 'bounce_${DateTime.now().millisecondsSinceEpoch}',
+        name: '${track.name} (Audio)',
+        type: TrackType.audio,
+        colorValue: track.colorValue,
+      );
+      final bouncedClip = AudioClip(
+        id: UniqueKey().toString(),
+        name: '${track.name} Mix',
+        start: 0.0,
+        length: clipLen,
+        color: track.color,
+        filePath: outPath,
+      )..source = src;
+      setState(() {
+        tracks.add(bouncedTrack);
+        trackClips[bouncedTrack.id] = [bouncedClip];
+        selectedTrackIndex = tracks.length - 1;
+        selectedClip = bouncedClip;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Bounced "${track.name}" to new Audio track'),
             backgroundColor: Colors.green,
           ),
         );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('No active audio tracks to export!')),
-        );
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Export Stems error: $e'),
-          backgroundColor: Colors.red,
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Bounce error: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  Future<void> _sliceClipToSampler(AudioClip clip) async {
+    final slices = await detectAudioTransients(clip.filePath, maxSlices: 16);
+    if (slices.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not detect transients in audio clip.')),
+        );
+      }
+      return;
+    }
+
+    _saveState();
+    final samplerTrack = Track(
+      id: 'sliced_${DateTime.now().millisecondsSinceEpoch}',
+      name: '${clip.name.isNotEmpty ? clip.name : "Sliced"} Kit',
+      type: TrackType.sampler,
+      colorValue: clip.color.toARGB32(),
+    );
+
+    AudioSource? sharedSrc;
+    if (SoLoud.instance.isInitialized) {
+      try {
+        sharedSrc = await SoLoud.instance.loadFile(clip.filePath);
+        sharedSrc.filters.pitchShiftFilter.activate();
+      } catch (_) {}
+    }
+
+    final stepLen = (clip.length / slices.length).clamp(15.0, beatWidth);
+    final notes = <MidiNote>[];
+    for (int i = 0; i < slices.length && i < 16; i++) {
+      final (s, e) = slices[i];
+      final pad = samplerTrack.samplerPads[i]!;
+      pad.filePath = clip.filePath;
+      pad.trimStart = s;
+      pad.trimEnd = e;
+      pad.fadeIn = 0.004;
+      pad.fadeOut = 0.012;
+      pad.source = sharedSrc;
+      pad.extractWaveform();
+
+      notes.add(
+        MidiNote(
+          pitch: pad.midiNote,
+          start: i * stepLen,
+          length: max(12.0, stepLen * 0.9),
+          velocity: 105,
         ),
       );
     }
+
+    final midiClip = MidiClip(
+      id: UniqueKey().toString(),
+      name: 'Sliced Pattern',
+      start: clip.start,
+      length: max(clip.length, slices.length * stepLen),
+      color: samplerTrack.color,
+      notes: notes,
+    );
+
+    setState(() {
+      tracks.add(samplerTrack);
+      trackClips[samplerTrack.id] = [midiClip];
+      selectedTrackIndex = tracks.length - 1;
+      selectedClip = midiClip;
+      selectedBottomTab = 3;
+      isBottomPanelExpanded = true;
+      if (_bottomPanelHeight < 400) _bottomPanelHeight = 400;
+    });
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Sliced into ${slices.length} Sampler pads!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
+  }
+
+  Future<void> _openTemplates() async {
+    final res = await showTemplatesDialog(context);
+    if (res == null) return;
+    _saveState();
+    setState(() {
+      for (final t in tracks) {
+        try {
+          t.bus?.dispose();
+        } catch (_) {}
+      }
+      tracks = res.tracks;
+      trackClips = res.trackClips;
+      songMarkers = res.markers;
+      tempoMarkers.clear();
+      bpm = res.bpm;
+      playheadPosition = 0.0;
+      selectedTrackIndex = tracks.isNotEmpty ? 0 : null;
+      selectedClip = tracks.isNotEmpty && (trackClips[tracks.first.id]?.isNotEmpty ?? false)
+          ? trackClips[tracks.first.id]!.first
+          : null;
+      for (final t in tracks) {
+        if (t.type == TrackType.midi) {
+          t.synthSourcePath = getInstrumentPreset(t.instrumentIndex).assetPath;
+          t.synthSource = globalInstrumentSounds[t.instrumentIndex];
+        }
+        _updateTrackFilters(t);
+      }
+    });
+  }
+
+  void _playMetronomeClick(bool isDownbeat) {
+    if (!SoLoud.instance.isInitialized) return;
+    final src = isDownbeat
+        ? (globalMetronomeAccentSound ?? globalSawSound)
+        : (globalMetronomeBeatSound ?? globalSawSound);
+    if (src == null) return;
+    final vol = MetronomeSynth.computeClickVolume(
+      metronomeVolume,
+      isDownbeat: isDownbeat,
+    );
+    if (vol <= 0.005) return;
+    try {
+      final h = SoLoud.instance.play(src, volume: vol);
+      if (src == globalSawSound) {
+        SoLoud.instance.setRelativePlaySpeed(h, isDownbeat ? 4.0 : 2.0);
+        Timer(const Duration(milliseconds: 45), () {
+          if (SoLoud.instance.getIsValidVoiceHandle(h)) {
+            SoLoud.instance.stop(h);
+          }
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _loadUserSampleFolders() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getStringList('sb_sample_folders') ?? [];
+      final metVol = prefs.getDouble('sb_metronome_volume');
+      if (mounted) {
+        setState(() {
+          _userSampleFolders = saved;
+          if (metVol != null) metronomeVolume = metVol.clamp(0.0, 1.5);
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveMetronomeVolumePref(double v) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble('sb_metronome_volume', v);
+    } catch (_) {}
+  }
+
+  Future<void> _addUserSampleFolder() async {
+    try {
+      final res = await Process.run('zenity', [
+        '--file-selection',
+        '--directory',
+        '--title=Select Sample / MIDI Folder',
+      ]);
+      if (res.exitCode != 0) return;
+      final dirPath = res.stdout.toString().trim();
+      if (dirPath.isEmpty || _userSampleFolders.contains(dirPath)) return;
+      final next = [..._userSampleFolders, dirPath];
+      setState(() => _userSampleFolders = next);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList('sb_sample_folders', next);
+    } catch (_) {}
+  }
+
+  Future<void> _removeUserSampleFolder(String folder) async {
+    final next = _userSampleFolders.where((f) => f != folder).toList();
+    setState(() => _userSampleFolders = next);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList('sb_sample_folders', next);
+    } catch (_) {}
+  }
+
+  Future<void> _ensureAudioClipProcessed(AudioClip clip) async {
+    if (!clip.needsTimeStretchProcessing) {
+      if (clip.processedFilePath != null) {
+        clip.processedFilePath = null;
+        clip.processedCacheKey = null;
+        if (SoLoud.instance.isInitialized && File(clip.filePath).existsSync()) {
+          try {
+            if (clip.source != null) SoLoud.instance.disposeSource(clip.source!);
+            clip.source = await SoLoud.instance.loadFile(clip.filePath);
+          } catch (_) {}
+        }
+      }
+      return;
+    }
+    final sig =
+        '${clip.filePath}|${clip.pitchSemitones.toStringAsFixed(2)}|${clip.stretchFactor.toStringAsFixed(3)}|${clip.preservePitch}';
+    if (clip.processedCacheKey == sig &&
+        clip.processedFilePath != null &&
+        File(clip.processedFilePath!).existsSync()) {
+      return;
+    }
+    try {
+      final dir = await getProjectMediaDirectory();
+      final outPath =
+          '${dir.path}/ts_${clip.id.hashCode}_${DateTime.now().millisecondsSinceEpoch}.wav';
+      final ok = await TimeStretchEngine.processWavFile(
+        inputPath: clip.filePath,
+        outputPath: outPath,
+        stretchFactor: clip.stretchFactor,
+        pitchSemitones: clip.pitchSemitones,
+        preservePitch: clip.preservePitch,
+      );
+      if (!ok) return;
+      clip.processedFilePath = outPath;
+      clip.processedCacheKey = sig;
+      if (SoLoud.instance.isInitialized) {
+        if (clip.source != null) {
+          try {
+            SoLoud.instance.disposeSource(clip.source!);
+          } catch (_) {}
+        }
+        clip.source = await SoLoud.instance.loadFile(outPath);
+      }
+      if (mounted) setState(() {});
+    } catch (_) {}
+  }
+
+  Future<void> _toggleBrowserPreview(SampleBrowserItem item) async {
+    try {
+      if (_browserPreviewHandle != null &&
+          SoLoud.instance.isInitialized &&
+          SoLoud.instance.getIsValidVoiceHandle(_browserPreviewHandle!)) {
+        SoLoud.instance.stop(_browserPreviewHandle!);
+      }
+    } catch (_) {}
+    if (_browserPreviewPath == item.path) {
+      setState(() {
+        _browserPreviewPath = null;
+        _browserPreviewHandle = null;
+      });
+      return;
+    }
+    setState(() => _browserPreviewPath = item.path);
+    if (!SoLoud.instance.isInitialized) return;
+    try {
+      if (_browserPreviewSource != null) {
+        SoLoud.instance.disposeSource(_browserPreviewSource!);
+      }
+      _browserPreviewSource = item.isAsset
+          ? await SoLoud.instance.loadAsset(item.path)
+          : await SoLoud.instance.loadFile(item.path);
+      _browserPreviewHandle = SoLoud.instance.play(
+        _browserPreviewSource!,
+        volume: 0.85,
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _addBrowserItemToTrack(
+    SampleBrowserItem item, {
+    Track? targetTrack,
+    double? startPos,
+  }) async {
+    final double insertStart = max(
+      0.0,
+      snapToGrid && startPos != null
+          ? (startPos / snapResolution).round() * snapResolution
+          : (startPos ?? playheadPosition),
+    );
+    if (item.isMidi) {
+      try {
+        final bytes = await File(item.path).readAsBytes();
+        final imported = MidiFileCodec.decodeBytes(bytes, beatWidth: beatWidth);
+        if (imported.notes.isEmpty) return;
+        final double maxEnd = imported.notes
+            .map((n) => n.start + n.length)
+            .fold(beatWidth * timeSigTop, max);
+        Track t;
+        if (targetTrack != null &&
+            (targetTrack.type == TrackType.midi ||
+                targetTrack.type == TrackType.sampler)) {
+          t = targetTrack;
+        } else {
+          t = Track(
+            id: UniqueKey().toString(),
+            name: imported.trackName,
+            type: TrackType.midi,
+            colorValue: kTrackColorPalette[tracks.length % kTrackColorPalette.length]
+                .toARGB32(),
+          );
+          if (globalInstrumentSounds.isNotEmpty) {
+            t.synthSource = globalInstrumentSounds[t.instrumentIndex];
+          }
+          tracks.add(t);
+        }
+        final clip = MidiClip(
+          id: UniqueKey().toString(),
+          name: p.basenameWithoutExtension(item.name),
+          start: insertStart,
+          length: max(beatWidth, maxEnd),
+          color: t.color,
+          notes: imported.notes,
+        );
+        _saveState();
+        setState(() {
+          trackClips.putIfAbsent(t.id, () => []).add(clip);
+          selectedTrackIndex = tracks.indexOf(t);
+          selectedClip = clip;
+          selectedBottomTab = 0;
+        });
+      } catch (_) {}
+      return;
+    }
+
+    try {
+      String resolvedPath = item.path;
+      if (item.isAsset) {
+        final dir = await getProjectMediaDirectory();
+        final dstPath = '${dir.path}/${p.basename(item.path)}';
+        final data = await rootBundle.load(item.path);
+        await File(dstPath).writeAsBytes(data.buffer.asUint8List(), flush: true);
+        resolvedPath = dstPath;
+      }
+      final wav = await decodeWavFile(resolvedPath);
+      final double durUnits = max(beatWidth, (wav?.durationSeconds ?? 2.0) * 100.0);
+      Track t;
+      if (targetTrack != null && targetTrack.type == TrackType.audio) {
+        t = targetTrack;
+      } else {
+        t = Track(
+          id: UniqueKey().toString(),
+          name: p.basenameWithoutExtension(item.name),
+          type: TrackType.audio,
+          colorValue: kTrackColorPalette[tracks.length % kTrackColorPalette.length]
+              .toARGB32(),
+        );
+        tracks.add(t);
+      }
+      AudioSource? src;
+      if (SoLoud.instance.isInitialized) {
+        try {
+          src = await SoLoud.instance.loadFile(resolvedPath);
+        } catch (_) {}
+      }
+      final clip = AudioClip(
+        id: UniqueKey().toString(),
+        name: p.basenameWithoutExtension(item.name),
+        start: insertStart,
+        length: durUnits,
+        color: t.color,
+        filePath: resolvedPath,
+      )..source = src;
+      _saveState();
+      setState(() {
+        trackClips.putIfAbsent(t.id, () => []).add(clip);
+        selectedTrackIndex = tracks.indexOf(t);
+        selectedClip = clip;
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _importMidiFile({Track? targetTrack, double? startPos}) async {
+    try {
+      final result = await Process.run('zenity', [
+        '--file-selection',
+        '--title=Import Standard MIDI File (.mid)',
+        '--file-filter=MIDI Files (*.mid, *.midi) | *.mid *.midi',
+      ]);
+      if (result.exitCode != 0) return;
+      final path = result.stdout.toString().trim();
+      if (path.isEmpty) return;
+      await _addBrowserItemToTrack(
+        SampleBrowserItem(
+          name: p.basename(path),
+          path: path,
+          isAsset: false,
+          isMidi: true,
+          category: 'MIDI',
+        ),
+        targetTrack: targetTrack,
+        startPos: startPos,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('MIDI import failed: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  Future<void> _exportSelectedMidiClip() async {
+    if (selectedClip is! MidiClip) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Select a MIDI clip to export as .mid')),
+      );
+      return;
+    }
+    final mc = selectedClip as MidiClip;
+    try {
+      final result = await Process.run('zenity', [
+        '--file-selection',
+        '--save',
+        '--title=Export MIDI Clip (.mid)',
+        '--file-filter=*.mid',
+      ]);
+      if (result.exitCode != 0) return;
+      String path = result.stdout.toString().trim();
+      if (path.isEmpty) return;
+      if (!path.toLowerCase().endsWith('.mid')) path += '.mid';
+      final bytes = MidiFileCodec.encodeNotes(
+        mc.notes,
+        bpm: bpm.toDouble(),
+        timeSigNum: timeSigTop,
+        timeSigDen: timeSigBottom,
+        beatWidth: beatWidth,
+        trackName: mc.name.isNotEmpty ? mc.name : 'Sound Booth MIDI',
+      );
+      await File(path).writeAsBytes(bytes, flush: true);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Exported MIDI to $path'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('MIDI export failed: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  void _showExternalPluginBrowserDialog(Track fxTrack, VoidCallback syncFx) {
+    final plugins = PluginHost.scanInstalledPlugins();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: panelDark,
+        title: Row(
+          children: [
+            const Icon(Icons.extension, color: Colors.tealAccent, size: 18),
+            const SizedBox(width: 8),
+            Text(
+              'External LV2 / VST3 Plugins (${plugins.length})',
+              style: TextStyle(color: textMain, fontSize: 15),
+            ),
+          ],
+        ),
+        content: SizedBox(
+          width: 440,
+          height: 290,
+          child: plugins.isEmpty
+              ? Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.folder_off, color: textMuted, size: 32),
+                    const SizedBox(height: 10),
+                    Text(
+                      'No external LV2 or VST3 bundles found.',
+                      style: TextStyle(
+                        color: textMain,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Searched paths:\n${PluginHost.searchPaths.join('\n')}',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: textMuted, fontSize: 11),
+                    ),
+                  ],
+                )
+              : ListView.builder(
+                  itemCount: plugins.length,
+                  itemBuilder: (_, idx) {
+                    final pl = plugins[idx];
+                    return ListTile(
+                      dense: true,
+                      leading: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.tealAccent.withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: Colors.tealAccent),
+                        ),
+                        child: Text(
+                          pl.format,
+                          style: const TextStyle(
+                            color: Colors.tealAccent,
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      title: Text(
+                        pl.name,
+                        style: TextStyle(color: textMain, fontSize: 12),
+                      ),
+                      subtitle: Text(
+                        pl.category,
+                        style: TextStyle(color: textMuted, fontSize: 10),
+                      ),
+                      onTap: () {
+                        _saveState();
+                        final params = <String, double>{};
+                        for (final c in pl.controls.take(6)) {
+                          final span = (c.max - c.min).abs();
+                          final norm = span > 1e-6
+                              ? ((c.defaultVal - c.min) / span).clamp(0.0, 1.0)
+                              : 0.5;
+                          params[c.name] = norm;
+                        }
+                        if (params.isEmpty) params['Mix'] = 1.0;
+                        setState(() {
+                          fxTrack.effectsChain.add(
+                            DawEffect(
+                              pl.name,
+                              params,
+                              pluginFormat: pl.format,
+                              pluginUri: pl.id,
+                            ),
+                          );
+                          syncFx();
+                        });
+                        Navigator.pop(ctx);
+                      },
+                    );
+                  },
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Close', style: TextStyle(color: textMuted)),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -1281,7 +2252,9 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     windowManager.addListener(this);
     _audioRecorder = AudioRecorder();
     _initInputDevices();
+    _loadUserSampleFolders();
     _checkAutoSave();
+    _initAudioVisualizationAndBuses();
     _headerScrollController.addListener(() {
       if (_isSyncingScroll) return;
       if (_timelineScrollController.hasClients) {
@@ -1328,7 +2301,9 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       }
 
       int status = lastStatus & 0xF0;
-      if (status == 0x90 && velocity > 0) {
+      if (status == 0xB0) {
+        _handleMidiCc(note, velocity, lastStatus & 0x0F);
+      } else if (status == 0x90 && velocity > 0) {
         _handleMidiNoteOn(note, velocity, packet.device.id);
       } else if (status == 0x80 || (status == 0x90 && velocity == 0)) {
         _handleMidiNoteOff(note);
@@ -1348,9 +2323,457 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     } catch (_) {}
   }
 
+  void _initAudioVisualizationAndBuses() {
+    bool soloudAvailable = false;
+    try {
+      soloudAvailable = SoLoud.instance.isInitialized;
+      if (soloudAvailable) {
+        SoLoud.instance.setVisualizationEnabled(true);
+        _masterAudioData = AudioData(GetSamplesKind.linear);
+
+        auxReverbBus = ensureActiveBus(auxReverbBus, name: 'AuxReverb');
+        auxReverbBus!.filters.freeverbFilter.activate();
+        auxReverbBus!.filters.freeverbFilter.wet().value = 1.0;
+        auxReverbBus!.filters.freeverbFilter.roomSize().value = 0.78;
+        auxReverbBus!.filters.freeverbFilter.damp().value = 0.32;
+
+        auxDelayBus = ensureActiveBus(auxDelayBus, name: 'AuxDelay');
+        auxDelayBus!.filters.echoFilter.activate();
+        auxDelayBus!.filters.echoFilter.wet().value = 1.0;
+        auxDelayBus!.filters.echoFilter.delay().value = 0.34;
+        auxDelayBus!.filters.echoFilter.decay().value = 0.45;
+        auxDelayBus!.filters.echoFilter.filter().value = 0.4;
+
+        _syncMasterAndAuxFilters();
+      }
+    } catch (e) {
+      debugPrint('Aux/Viz init error: $e');
+      return;
+    }
+    if (!soloudAvailable) return;
+
+    bool busHasActiveVoices(Bus? b) {
+      if (b == null) return false;
+      try {
+        return b.getActiveVoiceCount() > 0;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    _meterTimer = Timer.periodic(const Duration(milliseconds: 33), (_) {
+      try {
+        if (!mounted || !SoLoud.instance.isInitialized) return;
+      } catch (_) {
+        return;
+      }
+      final bool activeAudio =
+          isPlaying ||
+          tracks.any((t) => t.isMonitoring || busHasActiveVoices(t.bus)) ||
+          busHasActiveVoices(auxReverbBus) ||
+          busHasActiveVoices(auxDelayBus) ||
+          _activeMidiNotes.isNotEmpty;
+
+      try {
+        if (_masterAudioData != null && activeAudio) {
+          _masterAudioData!.updateSamples();
+          _masterVizSamples = _masterAudioData!.getAudioData(
+            alwaysReturnData: false,
+          );
+          _cachedFftBins = ParametricEqDsp.computeFftBinsFromSamples(
+            _masterVizSamples,
+          );
+        } else if (!activeAudio && _masterVizSamples != null) {
+          // Decay spectrum gracefully when stopped
+          bool nonZero = false;
+          for (int i = 0; i < _masterVizSamples!.length; i++) {
+            _masterVizSamples![i] *= 0.75;
+            if (_masterVizSamples![i].abs() > 0.005) nonZero = true;
+          }
+          if (!nonZero) {
+            _masterVizSamples = null;
+            _cachedFftBins = const [];
+          } else {
+            _cachedFftBins = ParametricEqDsp.computeFftBinsFromSamples(
+              _masterVizSamples,
+            );
+          }
+        }
+      } catch (_) {}
+
+      double decay(double prev, double cur) =>
+          cur > prev ? cur : (prev * 0.88).clamp(0.0, 1.0);
+      double peakDecay(double prev, double cur) =>
+          cur > prev ? cur : (prev - 0.012).clamp(0.0, 1.0);
+
+      bool anyMeterActive = activeAudio || _masterVizSamples != null;
+      final Map<String, (double, double)> rawTrackAmps = {};
+
+      // Measure individual non-group tracks first so Group buses can aggregate them.
+      for (final t in tracks) {
+        if (t.type == TrackType.group) continue;
+        double rawL = 0.0;
+        double rawR = 0.0;
+        if (t.bus != null &&
+            !t.isMuted &&
+            (activeAudio || busHasActiveVoices(t.bus))) {
+          try {
+            enableBusVisualization(t.bus!);
+            rawL = t.bus!.getChannelVolume(0);
+            rawR = t.bus!.getChannelVolume(1);
+          } catch (_) {}
+        }
+        rawTrackAmps[t.id] = (rawL, rawR);
+
+        final double l = linearAmpToDbMeter(rawL);
+        final double r = linearAmpToDbMeter(rawR);
+        final prev = _trackLevels[t.id] ?? (0.0, 0.0);
+        final nextL = decay(prev.$1, l);
+        final nextR = decay(prev.$2, r);
+        _trackLevels[t.id] = (nextL, nextR);
+
+        final prevP = _trackPeaks[t.id] ?? (0.0, 0.0);
+        final nextPL = peakDecay(prevP.$1, nextL);
+        final nextPR = peakDecay(prevP.$2, nextR);
+        _trackPeaks[t.id] = (nextPL, nextPR);
+
+        if (prev.$1 > 0.001 ||
+            prev.$2 > 0.001 ||
+            prevP.$1 > 0.001 ||
+            prevP.$2 > 0.001 ||
+            nextL > 0.001 ||
+            nextR > 0.001) {
+          anyMeterActive = true;
+        }
+      }
+
+      // Group bus tracks aggregate amplitudes from their unmuted member tracks.
+      for (final g in tracks) {
+        if (g.type != TrackType.group) continue;
+        double rawL = 0.0;
+        double rawR = 0.0;
+        if (!g.isMuted) {
+          if (g.bus != null && (activeAudio || busHasActiveVoices(g.bus))) {
+            try {
+              enableBusVisualization(g.bus!);
+              rawL += g.bus!.getChannelVolume(0);
+              rawR += g.bus!.getChannelVolume(1);
+            } catch (_) {}
+          }
+          for (final child in tracks) {
+            if (child.groupTrackId == g.id &&
+                child.type != TrackType.group &&
+                !child.isMuted) {
+              final childRaw = rawTrackAmps[child.id];
+              if (childRaw != null) {
+                rawL += childRaw.$1 * g.volume;
+                rawR += childRaw.$2 * g.volume;
+              }
+            }
+          }
+        }
+        final double l = linearAmpToDbMeter(rawL);
+        final double r = linearAmpToDbMeter(rawR);
+        final prev = _trackLevels[g.id] ?? (0.0, 0.0);
+        final nextL = decay(prev.$1, l);
+        final nextR = decay(prev.$2, r);
+        _trackLevels[g.id] = (nextL, nextR);
+
+        final prevP = _trackPeaks[g.id] ?? (0.0, 0.0);
+        final nextPL = peakDecay(prevP.$1, nextL);
+        final nextPR = peakDecay(prevP.$2, nextR);
+        _trackPeaks[g.id] = (nextPL, nextPR);
+
+        if (prev.$1 > 0.001 ||
+            prev.$2 > 0.001 ||
+            prevP.$1 > 0.001 ||
+            prevP.$2 > 0.001 ||
+            nextL > 0.001 ||
+            nextR > 0.001) {
+          anyMeterActive = true;
+        }
+      }
+
+      double mL = 0.0, mR = 0.0;
+      double revL = 0.0, revR = 0.0;
+      double dlyL = 0.0, dlyR = 0.0;
+      try {
+        if (activeAudio) {
+          mL = linearAmpToDbMeter(SoLoud.instance.getApproximateVolume(0));
+          mR = linearAmpToDbMeter(SoLoud.instance.getApproximateVolume(1));
+          if (auxReverbBus != null) {
+            enableBusVisualization(auxReverbBus!);
+            revL = linearAmpToDbMeter(auxReverbBus!.getChannelVolume(0));
+            revR = linearAmpToDbMeter(auxReverbBus!.getChannelVolume(1));
+          }
+          if (auxDelayBus != null) {
+            enableBusVisualization(auxDelayBus!);
+            dlyL = linearAmpToDbMeter(auxDelayBus!.getChannelVolume(0));
+            dlyR = linearAmpToDbMeter(auxDelayBus!.getChannelVolume(1));
+          }
+        }
+      } catch (_) {}
+
+      final prevMaster = _masterLevel;
+      final prevMasterPeak = _masterPeak;
+      _masterLevel = (decay(_masterLevel.$1, mL), decay(_masterLevel.$2, mR));
+      _masterPeak = (
+        peakDecay(_masterPeak.$1, _masterLevel.$1),
+        peakDecay(_masterPeak.$2, _masterLevel.$2),
+      );
+      final prevRev = _auxRevLevel;
+      final prevDly = _auxDlyLevel;
+      _auxRevLevel = (decay(_auxRevLevel.$1, revL), decay(_auxRevLevel.$2, revR));
+      _auxDlyLevel = (decay(_auxDlyLevel.$1, dlyL), decay(_auxDlyLevel.$2, dlyR));
+
+      if (prevMaster.$1 > 0.001 ||
+          prevMaster.$2 > 0.001 ||
+          prevMasterPeak.$1 > 0.001 ||
+          prevMasterPeak.$2 > 0.001 ||
+          _masterLevel.$1 > 0.001 ||
+          _masterLevel.$2 > 0.001 ||
+          prevRev.$1 > 0.001 ||
+          prevRev.$2 > 0.001 ||
+          prevDly.$1 > 0.001 ||
+          prevDly.$2 > 0.001) {
+        anyMeterActive = true;
+      }
+
+      _masterLufs = activeAudio
+          ? estimateLufsFromWaveform(_masterVizSamples)
+          : -60.0;
+      final targetCorr = activeAudio
+          ? (1.0 - (mL - mR).abs() * 1.4).clamp(-1.0, 1.0)
+          : 1.0;
+      _stereoCorrelation = _stereoCorrelation * 0.8 + targetCorr * 0.2;
+
+      for (final track in tracks) {
+        final compFx = track.effectsChain
+            .where(
+              (f) =>
+                  !f.isBypassed &&
+                  f.name == 'Compressor' &&
+                  f.sidechainTrackId != null,
+            )
+            .firstOrNull;
+        if (compFx == null) {
+          _sidechainGr.remove(track.id);
+          continue;
+        }
+        final scLvl = _trackLevels[compFx.sidechainTrackId];
+        final trig = scLvl == null ? 0.0 : max(scLvl.$1, scLvl.$2);
+        final thresh = compFx.parameters['Thresh'] ?? 0.5;
+        final ratio = compFx.parameters['Ratio'] ?? 0.4;
+        final drive = (trig - (1.0 - thresh) * 0.45).clamp(0.0, 1.0);
+        final gr = (drive * (0.35 + ratio * 0.65) * 1.35).clamp(0.0, 0.9);
+        final prevGr = _sidechainGr[track.id] ?? 0.0;
+        final smoothedGr = gr > prevGr ? gr : prevGr * 0.82;
+        _sidechainGr[track.id] = smoothedGr;
+
+        final scGain = (1.0 - smoothedGr).clamp(0.08, 1.0);
+        for (final c in trackClips[track.id] ?? const <DawClip>[]) {
+          if (c is AudioClip &&
+              c.currentHandle != null &&
+              SoLoud.instance.getIsValidVoiceHandle(c.currentHandle!)) {
+            final baseEnv = _computeClipEnvelope(c, playheadPosition);
+            try {
+              SoLoud.instance.setVolume(
+                c.currentHandle!,
+                (track.volume * baseEnv * scGain).clamp(0.0, 2.5),
+              );
+            } catch (_) {}
+          }
+        }
+        for (final h in track.activeMidiHandles) {
+          if (SoLoud.instance.getIsValidVoiceHandle(h)) {
+            try {
+              SoLoud.instance.setVolume(
+                h,
+                (track.volume * scGain).clamp(0.0, 1.5),
+              );
+            } catch (_) {}
+          }
+        }
+      }
+
+      if (anyMeterActive) {
+        setState(() {});
+      }
+    });
+  }
+
+  bool get _isSoloudReady {
+    try {
+      return SoLoud.instance.isInitialized;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Track? _groupForTrack(Track t) {
+    if (t.groupTrackId == null) return null;
+    return tracks
+        .where((g) => g.id == t.groupTrackId && g.type == TrackType.group)
+        .firstOrNull;
+  }
+
+  double _effectiveTrackVolume(Track t) {
+    final g = _groupForTrack(t);
+    return (t.volume * (g?.volume ?? 1.0)).clamp(0.0, 1.5);
+  }
+
+  bool _isTrackAudible(Track t, bool anySolo) {
+    if (_isAuditioningReference) return false;
+    final g = _groupForTrack(t);
+    if (t.isMuted || (g != null && g.isMuted)) return false;
+    if (anySolo && !t.isSolo && (g == null || !g.isSolo)) return false;
+    if (auxReverbSolo || auxDelaySolo) return false;
+    return true;
+  }
+
+  Future<void> _loadReferenceTrack() async {
+    try {
+      final result = await Process.run('zenity', [
+        '--file-selection',
+        '--title=Load Reference Track',
+        '--file-filter=*.wav *.mp3 *.flac *.ogg',
+      ]);
+      if (result.exitCode != 0) return;
+      final path = result.stdout.toString().trim();
+      if (path.isEmpty) return;
+      double offsetGain = 1.0;
+      if (path.toLowerCase().endsWith('.wav')) {
+        final refLufs = await estimateWavIntegratedLufs(path);
+        final dbDiff = masterLufsTarget - refLufs;
+        offsetGain = pow(10.0, dbDiff.clamp(-18.0, 12.0) / 20.0).toDouble();
+      }
+      if (_referenceSource != null && _isSoloudReady) {
+        try {
+          SoLoud.instance.disposeSource(_referenceSource!);
+        } catch (_) {}
+      }
+      AudioSource? src;
+      if (_isSoloudReady) {
+        src = await SoLoud.instance.loadFile(path);
+      }
+      setState(() {
+        _referenceTrackPath = path;
+        _referenceSource = src;
+        _referenceGain = offsetGain;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Loaded reference: ${p.basename(path)}')),
+        );
+      }
+    } catch (e) {
+      debugPrint('Reference load error: $e');
+    }
+  }
+
+  void _toggleReferenceAB() {
+    if (_referenceTrackPath == null) {
+      _loadReferenceTrack();
+      return;
+    }
+    setState(() {
+      _isAuditioningReference = !_isAuditioningReference;
+    });
+    if (_isSoloudReady) {
+      try {
+        if (_isAuditioningReference && _referenceSource != null && isPlaying) {
+          _referenceHandle = SoLoud.instance.play(
+            _referenceSource!,
+            volume: (_referenceGain * masterVolume).clamp(0.0, 1.5),
+            paused: true,
+          );
+          final seekMs = ((playheadPosition / 100.0) * 1000.0).round();
+          if (seekMs > 0) {
+            SoLoud.instance.seek(_referenceHandle!, Duration(milliseconds: seekMs));
+          }
+          SoLoud.instance.setPause(_referenceHandle!, false);
+        } else if (_referenceHandle != null) {
+          if (SoLoud.instance.getIsValidVoiceHandle(_referenceHandle!)) {
+            SoLoud.instance.stop(_referenceHandle!);
+          }
+          _referenceHandle = null;
+        }
+      } catch (_) {}
+    }
+    _syncMasterAndAuxFilters();
+  }
+
+  void _syncMasterAndAuxFilters() {
+    if (!_isSoloudReady) return;
+    try {
+      SoLoud.instance.setGlobalVolume(masterVolume.clamp(0.0, 1.5));
+      final filters = SoLoud.instance.filters;
+      final lim = filters.limiterFilter;
+      final activeMasterFx =
+          masterEffectsChain.where((f) => !f.isBypassed).toList();
+      final masterLimFx = activeMasterFx
+          .where((f) => f.name == 'Compressor')
+          .firstOrNull;
+      final masterEqFx =
+          activeMasterFx.where((f) => f.name == 'EQ').firstOrNull;
+
+      if (masterLimiter || masterLimFx != null) {
+        if (!lim.isActive) lim.activate();
+        lim.wet.value = 1.0;
+        lim.threshold.value = masterLimFx != null
+            ? -((masterLimFx.parameters['Thresh'] ?? 0.5) * 12.0 + 1.0)
+            : -1.0;
+      } else if (lim.isActive) {
+        lim.deactivate();
+      }
+      if (masterEqFx != null) {
+        if (!filters.biquadResonantFilter.isActive) {
+          filters.biquadResonantFilter.activate();
+        }
+        final high = masterEqFx.parameters['High'] ?? 0.5;
+        filters.biquadResonantFilter.frequency.value =
+            (2500.0 + high * 14000.0).clamp(1500.0, 18000.0);
+        filters.biquadResonantFilter.wet.value = 0.6;
+      } else if (filters.biquadResonantFilter.isActive) {
+        filters.biquadResonantFilter.deactivate();
+      }
+
+      final bool anyAuxSolo = auxReverbSolo || auxDelaySolo;
+      final double revVol = _isAuditioningReference
+          ? 0.0
+          : (anyAuxSolo && !auxReverbSolo ? 0.0 : auxReverbMix.clamp(0.0, 1.5));
+      final double dlyVol = _isAuditioningReference
+          ? 0.0
+          : (anyAuxSolo && !auxDelaySolo ? 0.0 : auxDelayMix.clamp(0.0, 1.5));
+
+      if (auxReverbBus?.soundHandle != null) {
+        SoLoud.instance.setVolume(auxReverbBus!.soundHandle!, revVol);
+      }
+      if (auxDelayBus?.soundHandle != null) {
+        SoLoud.instance.setVolume(auxDelayBus!.soundHandle!, dlyVol);
+      }
+    } catch (_) {}
+  }
+
   @override
   void dispose() {
     windowManager.removeListener(this);
+    _meterTimer?.cancel();
+    _countInTimer?.cancel();
+    _arpTimer?.cancel();
+    try {
+      if (_referenceSource != null) {
+        SoLoud.instance.disposeSource(_referenceSource!);
+      }
+      if (_browserPreviewSource != null) {
+        SoLoud.instance.disposeSource(_browserPreviewSource!);
+      }
+      _masterAudioData?.dispose();
+    } catch (_) {}
+    try {
+      auxReverbBus?.dispose();
+      auxDelayBus?.dispose();
+    } catch (_) {}
     playTimer?.cancel();
     _playStopwatch.stop();
     _micStreamSub?.cancel();
@@ -1389,36 +2812,53 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   }
 
   void _updateTrackFilters(Track track, {double? atPlayhead}) {
-    if (!SoLoud.instance.isInitialized) return;
-    track.bus ??= Bus()..playOnEngine();
+    if (!_isSoloudReady) return;
+    track.bus = ensureActiveBus(track.bus);
     final filters = track.bus!.filters;
+    final activeFx = track.effectsChain.where((f) => !f.isBypassed).toList();
 
-    final hasReverb = track.effectsChain.any((f) => f.name == 'Reverb');
-    final hasCompressor = track.effectsChain.any(
+    final hasReverb = activeFx.any((f) => f.name == 'Reverb');
+    final hasCompressor = activeFx.any(
       (f) => f.name == 'Compressor' || f.name == 'GuitarAmp',
     );
-    final hasEq = track.effectsChain.any(
+    final hasEq = activeFx.any(
       (f) =>
           f.name == 'EQ' ||
           f.name == 'TubeScreamer' ||
           f.name == 'GuitarAmp',
     );
-    final hasWaveShaper = track.effectsChain.any(
+    final hasWaveShaper = activeFx.any(
       (f) => f.name == 'TubeScreamer' || f.name == 'GuitarAmp',
     );
-    final hasBiquad = track.effectsChain.any(
+    final cutoffAuto = atPlayhead != null
+        ? track.getInterpolatedAutomation('Synth Cutoff', atPlayhead)
+        : -1.0;
+    final resoAuto = atPlayhead != null
+        ? track.getInterpolatedAutomation('Synth Reso', atPlayhead)
+        : -1.0;
+    final effCutoff = cutoffAuto >= 0.0
+        ? cutoffAuto.clamp(0.0, 1.0)
+        : track.synthSettings.filterCutoff;
+    final effReso = resoAuto >= 0.0
+        ? resoAuto.clamp(0.0, 1.0)
+        : track.synthSettings.filterResonance;
+    final hasSynthFilter = track.type == TrackType.midi &&
+        (effCutoff < 0.99 || cutoffAuto >= 0.0 || resoAuto >= 0.0);
+    final hasBiquad =
+        hasSynthFilter ||
+        activeFx.any(
+          (f) => f.name == 'TubeScreamer' || f.name == 'GuitarAmp',
+        );
+    final hasLimiter = activeFx.any(
       (f) => f.name == 'TubeScreamer' || f.name == 'GuitarAmp',
     );
-    final hasLimiter = track.effectsChain.any(
-      (f) => f.name == 'TubeScreamer' || f.name == 'GuitarAmp',
-    );
-    final hasEcho = track.effectsChain.any((f) => f.name == 'Echo');
-    final hasFlanger = track.effectsChain.any(
+    final hasEcho = activeFx.any((f) => f.name == 'Echo');
+    final hasFlanger = activeFx.any(
       (f) => f.name == 'Flanger' || f.name == 'Chorus',
     );
-    final hasLofi = track.effectsChain.any((f) => f.name == 'Lofi');
-    final hasRobotize = track.effectsChain.any((f) => f.name == 'Robotize');
-    final hasBassBoost = track.effectsChain.any((f) => f.name == 'BassBoost');
+    final hasLofi = activeFx.any((f) => f.name == 'Lofi');
+    final hasRobotize = activeFx.any((f) => f.name == 'Robotize');
+    final hasBassBoost = activeFx.any((f) => f.name == 'BassBoost');
 
     void setFilterActive(dynamic filter, bool active) {
       try {
@@ -1445,7 +2885,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     DawEffect? tsFx;
     DawEffect? ampFx;
     DawEffect? eqFx;
-    for (final fx in track.effectsChain) {
+    for (final fx in activeFx) {
       if (fx.name == 'TubeScreamer') tsFx = fx;
       if (fx.name == 'GuitarAmp') ampFx = fx;
       if (fx.name == 'EQ') eqFx = fx;
@@ -1613,7 +3053,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
 
         // GuitarAmp power-tube sag & compression (unless overridden by standalone Compressor)
         if (ampFx != null &&
-            !track.effectsChain.any((f) => f.name == 'Compressor')) {
+            !activeFx.any((f) => f.name == 'Compressor')) {
           filters.compressorFilter.wet().value = 1.0;
           filters.compressorFilter.threshold().value =
               (-14.0 - ampDrive * 18.0).clamp(-45.0, -5.0);
@@ -1631,7 +3071,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     }
 
     // 2. Remaining effects in chain
-    for (var fx in track.effectsChain) {
+    for (var fx in activeFx) {
       try {
         if (fx.name == 'Reverb') {
           final mix = _getEffectiveEffectParam(
@@ -1907,6 +3347,18 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         debugPrint('Error updating filter: $e');
       }
     }
+
+    if (hasSynthFilter &&
+        !activeFx.any((f) => f.name == 'TubeScreamer' || f.name == 'GuitarAmp')) {
+      try {
+        final hz = 120.0 * pow(140.0, effCutoff.clamp(0.0, 1.0)).toDouble();
+        filters.biquadFilter.type().value = 0; // Lowpass
+        filters.biquadFilter.frequency().value = hz.clamp(100.0, 18000.0);
+        filters.biquadFilter.resonance().value =
+            (0.7 + effReso * 4.5).clamp(0.5, 6.0);
+        filters.biquadFilter.wet().value = 1.0;
+      } catch (_) {}
+    }
   }
 
   void _zoomIn() => setState(() => _zoomX = min(5.0, _zoomX + 0.2));
@@ -1934,6 +3386,144 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     });
   }
 
+  double _computeClipEnvelope(
+    AudioClip clip,
+    double atPlayhead, {
+    Track? track,
+  }) {
+    final localPos = atPlayhead - clip.start;
+    double env = clip.gain.clamp(0.0, 2.5);
+    if (clip.fadeIn > 0.0 && localPos < clip.fadeIn) {
+      env *= (localPos / clip.fadeIn).clamp(0.0, 1.0);
+    }
+    final remaining = clip.length - localPos;
+    if (clip.fadeOut > 0.0 && remaining < clip.fadeOut) {
+      env *= (remaining / clip.fadeOut).clamp(0.0, 1.0);
+    }
+    if (track != null) {
+      final siblings = (trackClips[track.id] ?? const <DawClip>[])
+          .whereType<AudioClip>()
+          .toList();
+      for (final other in siblings) {
+        if (identical(other, clip)) continue;
+        final ovStart = max(clip.start, other.start);
+        final ovEnd = min(clip.start + clip.length, other.start + other.length);
+        if (ovEnd > ovStart && atPlayhead >= ovStart && atPlayhead <= ovEnd) {
+          final frac = ((atPlayhead - ovStart) / (ovEnd - ovStart)).clamp(0.0, 1.0);
+          if (other.start <= clip.start) {
+            // Incoming clip cosine fade-in across overlap
+            env *= 0.5 * (1.0 - cos(pi * frac));
+          } else {
+            // Outgoing clip cosine fade-out across overlap
+            env *= 0.5 * (1.0 + cos(pi * frac));
+          }
+        }
+      }
+    }
+    return env;
+  }
+
+  void _playAudioClipWithSends(Track track, AudioClip clip, double atPlayhead) {
+    if (clip.source == null || !SoLoud.instance.isInitialized) return;
+    track.bus = ensureActiveBus(track.bus);
+    final env = _computeClipEnvelope(clip, atPlayhead, track: track);
+    final trackEffVol = _effectiveTrackVolume(track);
+    final effVol = (trackEffVol * env).clamp(0.0, 2.5);
+    final revVol = ((track.reverbPreFader ? env : effVol) * track.reverbSend)
+        .clamp(0.0, 2.5);
+    final dlyVol = ((track.delayPreFader ? env : effVol) * track.delaySend)
+        .clamp(0.0, 2.5);
+    final bool usingCachedWsola =
+        clip.preservePitch && clip.processedFilePath != null;
+    final speed = usingCachedWsola
+        ? 1.0
+        : (pow(2.0, clip.pitchSemitones / 12.0).toDouble() * clip.stretchFactor)
+            .clamp(0.25, 4.0);
+    final rawOffsetMs =
+        ((atPlayhead - clip.start + clip.startOffset) * 10.0 * speed).round();
+    final int loopUnitMs = max(1, (clip.originalLength * 10.0).round());
+    final offsetMs = clip.isLooped ? (rawOffsetMs % loopUnitMs) : rawOffsetMs;
+
+    clip.currentHandle = track.bus!.play(
+      clip.source!,
+      volume: (_isAuditioningReference || auxReverbSolo || auxDelaySolo)
+          ? 0.0
+          : effVol,
+      pan: track.pan.clamp(-1.0, 1.0),
+      paused: true,
+      looping: clip.isLooped,
+    );
+    try {
+      SoLoud.instance.setRelativePlaySpeed(clip.currentHandle!, speed);
+      if (offsetMs > 0) {
+        SoLoud.instance.seek(
+          clip.currentHandle!,
+          Duration(milliseconds: offsetMs),
+        );
+      }
+      SoLoud.instance.setPause(clip.currentHandle!, false);
+    } catch (_) {}
+
+    if (track.reverbSend > 0.01 && auxReverbBus != null) {
+      try {
+        clip.reverbSendHandle = auxReverbBus!.play(
+          clip.source!,
+          volume: revVol,
+          pan: track.pan.clamp(-1.0, 1.0),
+          paused: true,
+          looping: clip.isLooped,
+        );
+        SoLoud.instance.setRelativePlaySpeed(clip.reverbSendHandle!, speed);
+        if (offsetMs > 0) {
+          SoLoud.instance.seek(
+            clip.reverbSendHandle!,
+            Duration(milliseconds: offsetMs),
+          );
+        }
+        SoLoud.instance.setPause(clip.reverbSendHandle!, false);
+      } catch (_) {}
+    }
+
+    if (track.delaySend > 0.01 && auxDelayBus != null) {
+      try {
+        clip.delaySendHandle = auxDelayBus!.play(
+          clip.source!,
+          volume: dlyVol,
+          pan: track.pan.clamp(-1.0, 1.0),
+          paused: true,
+          looping: clip.isLooped,
+        );
+        SoLoud.instance.setRelativePlaySpeed(clip.delaySendHandle!, speed);
+        if (offsetMs > 0) {
+          SoLoud.instance.seek(
+            clip.delaySendHandle!,
+            Duration(milliseconds: offsetMs),
+          );
+        }
+        SoLoud.instance.setPause(clip.delaySendHandle!, false);
+      } catch (_) {}
+    }
+  }
+
+  void _stopAudioClipHandles(AudioClip clip) {
+    for (final h in [
+      clip.currentHandle,
+      clip.reverbSendHandle,
+      clip.delaySendHandle,
+    ]) {
+      if (h != null) {
+        try {
+          if (SoLoud.instance.getIsValidVoiceHandle(h)) {
+            SoLoud.instance.stop(h);
+          }
+        } catch (_) {}
+      }
+    }
+    clip.currentHandle = null;
+    clip.reverbSendHandle = null;
+    clip.delaySendHandle = null;
+  }
+
   Future<void> _togglePlay() async {
     if (!isPlaying) {
       for (var track in tracks) {
@@ -1949,28 +3539,34 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     setState(() {
       isPlaying = !isPlaying;
       if (isPlaying) {
+        if (_isAuditioningReference &&
+            _referenceSource != null &&
+            _isSoloudReady) {
+          try {
+            _referenceHandle = SoLoud.instance.play(
+              _referenceSource!,
+              volume: (_referenceGain * masterVolume).clamp(0.0, 1.5),
+              paused: true,
+            );
+            final seekMs = ((playheadPosition / 100.0) * 1000.0).round();
+            if (seekMs > 0) {
+              SoLoud.instance.seek(_referenceHandle!, Duration(milliseconds: seekMs));
+            }
+            SoLoud.instance.setPause(_referenceHandle!, false);
+          } catch (_) {}
+        }
         bool anySolo = tracks.any((t) => t.isSolo);
         for (var track in tracks) {
-          track.bus ??= Bus()..playOnEngine();
+          if (track.type == TrackType.group) continue;
+          track.bus = ensureActiveBus(track.bus);
           _updateTrackFilters(track, atPlayhead: playheadPosition);
-          if (track.isMuted) continue;
-          if (anySolo && !track.isSolo) continue;
+          if (!_isTrackAudible(track, anySolo)) continue;
 
           for (var clip in trackClips[track.id] ?? []) {
             if (clip is AudioClip && clip.source != null) {
               if (playheadPosition >= clip.start &&
                   playheadPosition < clip.start + clip.length) {
-                double offsetMs =
-                    (playheadPosition - clip.start + clip.startOffset) * 10.0;
-                clip.currentHandle = track.bus!.play(
-                  clip.source!,
-                  volume: track.volume,
-                  pan: track.pan.clamp(-1.0, 1.0),
-                );
-                SoLoud.instance.seek(
-                  clip.currentHandle!,
-                  Duration(milliseconds: offsetMs.toInt()),
-                );
+                _playAudioClipWithSends(track, clip, playheadPosition);
               }
             }
           }
@@ -1990,49 +3586,72 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
 
           setState(() {
             double oldPos = playheadPosition;
-            playheadPosition += dtSec * 100.0;
+            final double curBpm = TempoMarker.effectiveBpmAt(
+              playheadPosition,
+              tempoMarkers,
+              bpm.toDouble(),
+            );
+            playheadPosition += dtSec * 100.0 * (curBpm / max(20, bpm));
 
-            if (isMetronomeEnabled &&
-                globalSawSound != null &&
-                SoLoud.instance.isInitialized) {
+            // Punch-in / Punch-out auto stop when leaving loopEnd
+            if (isRecording &&
+                punchInLoop &&
+                isLooping &&
+                playheadPosition >= loopEnd) {
+              Future.microtask(() {
+                if (isRecording) _toggleRecord();
+              });
+            }
+
+            final curMeter = TempoMarker.effectiveMeterAt(
+              playheadPosition,
+              tempoMarkers,
+              timeSigTop,
+              timeSigBottom,
+            );
+            if (isMetronomeEnabled && SoLoud.instance.isInitialized) {
               int oldBeat = (oldPos / beatWidth).floor();
               int newBeat = (playheadPosition / beatWidth).floor();
               if (newBeat > oldBeat) {
-                bool isDownbeat = newBeat % timeSigTop == 0;
-                double speed = isDownbeat ? 4.0 : 2.0;
-                double volume = isDownbeat ? 0.3 : 0.1;
-                try {
-                  final h = SoLoud.instance.play(
-                    globalSawSound!,
-                    volume: volume,
-                  );
-                  SoLoud.instance.setRelativePlaySpeed(h, speed);
-                  Timer(const Duration(milliseconds: 50), () {
-                    if (SoLoud.instance.getIsValidVoiceHandle(h)) {
-                      SoLoud.instance.stop(h);
-                    }
-                  });
-                } catch (_) {}
+                bool isDownbeat = newBeat % max(1, curMeter.numerator) == 0;
+                _playMetronomeClick(isDownbeat);
               }
+            }
+
+            // Quantized next-bar Session Launcher clip promotions
+            final double barLen = beatWidth * max(1, curMeter.numerator);
+            if (barLen > 0 &&
+                (playheadPosition / barLen).floor() > (oldPos / barLen).floor() &&
+                _queuedSessionClipIds.isNotEmpty) {
+              for (final qId in _queuedSessionClipIds.toList()) {
+                for (final t in tracks) {
+                  final match = (trackClips[t.id] ?? [])
+                      .where((c) => c.id == qId)
+                      .firstOrNull;
+                  if (match != null) {
+                    _activeSessionClipIds.removeWhere(
+                      (id) => (trackClips[t.id] ?? []).any((c) => c.id == id),
+                    );
+                    _activeSessionClipIds.add(match.id);
+                    playheadPosition = match.start;
+                    isLooping = true;
+                    loopStart = match.start;
+                    loopEnd = match.start + match.length;
+                  }
+                }
+              }
+              _queuedSessionClipIds.clear();
             }
 
             bool anySolo = tracks.any((t) => t.isSolo);
             for (var track in tracks) {
+              if (track.type == TrackType.group) continue;
               double autoVol = track.getInterpolatedAutomation(
                 'Volume',
                 playheadPosition,
               );
               if (autoVol >= 0.0) {
                 track.volume = autoVol;
-                for (var c in trackClips[track.id] ?? []) {
-                  if (c is AudioClip &&
-                      c.currentHandle != null &&
-                      SoLoud.instance.getIsValidVoiceHandle(c.currentHandle!)) {
-                    try {
-                      SoLoud.instance.setVolume(c.currentHandle!, track.volume);
-                    } catch (_) {}
-                  }
-                }
               }
               double autoPan = track.getInterpolatedAutomation(
                 'Pan',
@@ -2040,22 +3659,63 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
               );
               if (autoPan >= 0.0) {
                 track.pan = (autoPan * 2.0) - 1.0;
-                for (var c in trackClips[track.id] ?? []) {
-                  if (c is AudioClip &&
-                      c.currentHandle != null &&
-                      SoLoud.instance.getIsValidVoiceHandle(c.currentHandle!)) {
-                    try {
-                      SoLoud.instance.setPan(
-                        c.currentHandle!,
-                        track.pan.clamp(-1.0, 1.0),
-                      );
-                    } catch (_) {}
-                  }
+              }
+              double autoRevSend = track.getInterpolatedAutomation(
+                'Reverb Send',
+                playheadPosition,
+              );
+              if (autoRevSend >= 0.0) {
+                track.reverbSend = autoRevSend.clamp(0.0, 1.0);
+              }
+              double autoDlySend = track.getInterpolatedAutomation(
+                'Delay Send',
+                playheadPosition,
+              );
+              if (autoDlySend >= 0.0) {
+                track.delaySend = autoDlySend.clamp(0.0, 1.0);
+              }
+
+              // Keep audio clip fade/gain/automation envelopes live
+              for (var c in trackClips[track.id] ?? []) {
+                if (c is AudioClip &&
+                    c.currentHandle != null &&
+                    SoLoud.instance.getIsValidVoiceHandle(c.currentHandle!)) {
+                  final env = _computeClipEnvelope(c, playheadPosition, track: track);
+                  final trackEffVol = _effectiveTrackVolume(track);
+                  final effVol = (trackEffVol * env).clamp(0.0, 2.5);
+                  final dryPlayVol =
+                      (_isAuditioningReference || auxReverbSolo || auxDelaySolo)
+                          ? 0.0
+                          : effVol;
+                  final revVol =
+                      ((track.reverbPreFader ? env : effVol) * track.reverbSend)
+                          .clamp(0.0, 2.5);
+                  final dlyVol =
+                      ((track.delayPreFader ? env : effVol) * track.delaySend)
+                          .clamp(0.0, 2.5);
+                  try {
+                    SoLoud.instance.setVolume(c.currentHandle!, dryPlayVol);
+                    SoLoud.instance.setPan(
+                      c.currentHandle!,
+                      track.pan.clamp(-1.0, 1.0),
+                    );
+                    if (c.reverbSendHandle != null &&
+                        SoLoud.instance.getIsValidVoiceHandle(
+                          c.reverbSendHandle!,
+                        )) {
+                      SoLoud.instance.setVolume(c.reverbSendHandle!, revVol);
+                    }
+                    if (c.delaySendHandle != null &&
+                        SoLoud.instance.getIsValidVoiceHandle(
+                          c.delaySendHandle!,
+                        )) {
+                      SoLoud.instance.setVolume(c.delaySendHandle!, dlyVol);
+                    }
+                  } catch (_) {}
                 }
               }
 
-              if (track.isMuted) continue;
-              if (anySolo && !track.isSolo) continue;
+              if (!_isTrackAudible(track, anySolo)) continue;
 
               bool hasEffectAutomation = false;
               for (var fx in track.effectsChain) {
@@ -2075,14 +3735,8 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
               for (var clip in trackClips[track.id] ?? []) {
                 if (clip.start + clip.length >= oldPos &&
                     clip.start + clip.length < playheadPosition) {
-                  if (clip is AudioClip &&
-                      clip.currentHandle != null &&
-                      SoLoud.instance.getIsValidVoiceHandle(
-                        clip.currentHandle!,
-                      )) {
-                    try {
-                      SoLoud.instance.stop(clip.currentHandle!);
-                    } catch (_) {}
+                  if (clip is AudioClip) {
+                    _stopAudioClipHandles(clip);
                   }
                 }
 
@@ -2092,26 +3746,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                         !SoLoud.instance.getIsValidVoiceHandle(
                           clip.currentHandle!,
                         )) {
-                      clip.currentHandle = track.bus!.play(
-                        clip.source!,
-                        volume: track.volume,
-                        pan: track.pan.clamp(-1.0, 1.0),
-                        paused: true,
-                      );
-                      double offsetMs =
-                          (playheadPosition - clip.start + clip.startOffset) *
-                          10.0;
-                      if (offsetMs > 0) {
-                        try {
-                          SoLoud.instance.seek(
-                            clip.currentHandle!,
-                            Duration(milliseconds: offsetMs.toInt()),
-                          );
-                        } catch (_) {}
-                      }
-                      try {
-                        SoLoud.instance.setPause(clip.currentHandle!, false);
-                      } catch (_) {}
+                      _playAudioClipWithSends(track, clip, playheadPosition);
                     }
                   }
                 }
@@ -2123,7 +3758,11 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                   double maxLocal = clip.startOffset + clip.length;
                   if (localNew > maxLocal) localNew = maxLocal;
                   if (localNew >= 0 && localOld <= maxLocal) {
-                    for (var note in clip.notes) {
+                    final playNotes = (track.type == TrackType.midi &&
+                            track.arpSettings.enabled)
+                        ? track.arpSettings.expandNotes(clip.notes, beatWidth)
+                        : clip.notes;
+                    for (var note in playNotes) {
                       if (note.start >= localOld && note.start < localNew) {
                         if (track.type == TrackType.sampler) {
                           var pad = track.samplerPads.values
@@ -2135,7 +3774,26 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                               track.bus,
                               track.volume,
                               track.pan,
+                              track.samplerPads.values,
                             );
+                            if (track.reverbSend > 0.01 &&
+                                auxReverbBus != null) {
+                              pad.play(
+                                note.velocity.toDouble(),
+                                auxReverbBus,
+                                track.volume * track.reverbSend,
+                                track.pan,
+                              );
+                            }
+                            if (track.delaySend > 0.01 &&
+                                auxDelayBus != null) {
+                              pad.play(
+                                note.velocity.toDouble(),
+                                auxDelayBus,
+                                track.volume * track.delaySend,
+                                track.pan,
+                              );
+                            }
                           }
                         } else {
                           track.activeMidiHandles.removeWhere(
@@ -2149,6 +3807,27 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                             note.pitch,
                             note.velocity,
                           );
+                          SoundHandle? revHandle;
+                          SoundHandle? dlyHandle;
+                          if (track.reverbSend > 0.01 &&
+                              auxReverbBus != null) {
+                            revHandle = triggerInstrumentNote(
+                              track,
+                              note.pitch,
+                              note.velocity,
+                              volumeScale: track.reverbSend,
+                              targetBus: auxReverbBus,
+                            );
+                          }
+                          if (track.delaySend > 0.01 && auxDelayBus != null) {
+                            dlyHandle = triggerInstrumentNote(
+                              track,
+                              note.pitch,
+                              note.velocity,
+                              volumeScale: track.delaySend,
+                              targetBus: auxDelayBus,
+                            );
+                          }
                           if (handle != null) {
                             track.activeMidiHandles.add(handle);
                             final int noteMs = max(
@@ -2161,6 +3840,18 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                                 handle,
                                 releaseMs: preset.releaseMs,
                               );
+                              if (revHandle != null) {
+                                releaseInstrumentNote(
+                                  revHandle,
+                                  releaseMs: preset.releaseMs,
+                                );
+                              }
+                              if (dlyHandle != null) {
+                                releaseInstrumentNote(
+                                  dlyHandle,
+                                  releaseMs: preset.releaseMs,
+                                );
+                              }
                             });
                           }
                         }
@@ -2174,14 +3865,8 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
               playheadPosition = loopStart;
               for (var track in tracks) {
                 for (var clip in trackClips[track.id] ?? []) {
-                  if (clip is AudioClip &&
-                      clip.currentHandle != null &&
-                      SoLoud.instance.getIsValidVoiceHandle(
-                        clip.currentHandle!,
-                      )) {
-                    try {
-                      SoLoud.instance.stop(clip.currentHandle!);
-                    } catch (_) {}
+                  if (clip is AudioClip) {
+                    _stopAudioClipHandles(clip);
                   }
                 }
               }
@@ -2200,7 +3885,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
               }
             }
 
-            if (_horizontalScrollController.hasClients) {
+            if (autoScrollPlayhead && _horizontalScrollController.hasClients) {
               double playheadX = playheadPosition * _zoomX;
               double offset = _horizontalScrollController.offset;
               double width = MediaQuery.of(context).size.width - 250;
@@ -2217,10 +3902,8 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         _playStopwatch.stop();
         for (var track in tracks) {
           for (var clip in trackClips[track.id] ?? []) {
-            if (clip is AudioClip && clip.currentHandle != null) {
-              if (SoLoud.instance.getIsValidVoiceHandle(clip.currentHandle!)) {
-                SoLoud.instance.stop(clip.currentHandle!);
-              }
+            if (clip is AudioClip) {
+              _stopAudioClipHandles(clip);
             }
           }
           final releaseMs = getInstrumentPreset(
@@ -2243,6 +3926,12 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           }
         }
         _activeMidiNotes.clear();
+        if (_referenceHandle != null) {
+          try {
+            SoLoud.instance.stop(_referenceHandle!);
+          } catch (_) {}
+          _referenceHandle = null;
+        }
       }
     });
   }
@@ -2253,7 +3942,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     for (final t in tracks) {
       if (t.type != TrackType.audio) continue;
       if (t.isMonitoring) {
-        t.bus ??= Bus()..playOnEngine();
+        t.bus = ensureActiveBus(t.bus);
         if (t.monitorSource == null) {
           try {
             t.monitorSource = SoLoud.instance.setBufferStream(
@@ -2333,15 +4022,72 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       _micRemainderBytes = combined;
       return;
     }
-    final Uint8List alignedBytes = combined.length == alignedLen
+    final Uint8List rawAlignedBytes = combined.length == alignedLen
         ? combined
         : Uint8List.sublistView(combined, 0, alignedLen);
     _micRemainderBytes = combined.length > alignedLen
         ? Uint8List.fromList(combined.sublist(alignedLen))
         : Uint8List(0);
 
+    // Convert s16le PCM to float samples for gate, tuner & monitoring
+    final int numSamples = alignedLen >> 1;
+    final ByteData bdIn = ByteData.sublistView(rawAlignedBytes);
+    final Float32List floatSamples = Float32List(numSamples);
+    double peak = 0.0;
+    for (int i = 0; i < numSamples; i++) {
+      final s = bdIn.getInt16(i << 1, Endian.little) * (1.0 / 32768.0);
+      floatSamples[i] = s;
+      final a = s.abs();
+      if (a > peak) peak = a;
+    }
+
+    // Apply Input Noise Gate when active audio track has gate > 0
+    double activeGate = 0.0;
+    for (final t in tracks) {
+      if (t.type == TrackType.audio && (t.isArmed || t.isMonitoring)) {
+        if (activeGate == 0.0 ||
+            (t.noiseGateThreshold > 0.0 && t.noiseGateThreshold < activeGate)) {
+          activeGate = t.noiseGateThreshold;
+        }
+      }
+    }
+    if (activeGate == 0.0 &&
+        selectedTrackIndex != null &&
+        selectedTrackIndex! < tracks.length) {
+      activeGate = tracks[selectedTrackIndex!].noiseGateThreshold;
+    }
+
+    Uint8List outBytes = rawAlignedBytes;
+    if (activeGate > 0.001 && peak < activeGate) {
+      final attenuated = Uint8List(alignedLen);
+      final bdOut = ByteData.sublistView(attenuated);
+      for (int i = 0; i < numSamples; i++) {
+        floatSamples[i] *= 0.02;
+        bdOut.setInt16(
+          i << 1,
+          (floatSamples[i] * 32767.0).round().clamp(-32768, 32767),
+          Endian.little,
+        );
+      }
+      outBytes = attenuated;
+    }
+
+    // Feed real-time pitch detector when Guitar Tuner is open
+    if (_tunerEnabled) {
+      for (int i = 0; i + 1 < numSamples; i += 2) {
+        _tunerBuffer.add((floatSamples[i] + floatSamples[i + 1]) * 0.5);
+      }
+      if (_tunerBuffer.length >= 2048) {
+        final slice = Float64List.fromList(
+          _tunerBuffer.sublist(_tunerBuffer.length - 2048),
+        );
+        _detectedPitch = detectPitchHz(slice, 44100);
+        _tunerBuffer.removeRange(0, _tunerBuffer.length - 1024);
+      }
+    }
+
     if (isRecording && _wavWriter != null) {
-      _wavWriter!.write(alignedBytes);
+      _wavWriter!.write(outBytes);
     }
 
     if (!SoLoud.instance.isInitialized) return;
@@ -2350,13 +4096,6 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     );
     if (!anyMonitoring) return;
 
-    // Convert s16le PCM to f32le PCM for SoLoud BufferStream
-    final int numSamples = alignedLen >> 1;
-    final ByteData bd = ByteData.sublistView(alignedBytes);
-    final Float32List floatSamples = Float32List(numSamples);
-    for (int i = 0; i < numSamples; i++) {
-      floatSamples[i] = bd.getInt16(i << 1, Endian.little) * (1.0 / 32768.0);
-    }
     final Uint8List floatBytes = floatSamples.buffer.asUint8List();
 
     final bool anySolo = tracks.any((t) => t.isSolo);
@@ -2380,7 +4119,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
             (t.isMuted || (anySolo && !t.isSolo)) ? 0.0 : t.volume;
         if (t.monitorHandle == null ||
             !SoLoud.instance.getIsValidVoiceHandle(t.monitorHandle!)) {
-          t.bus ??= Bus()..playOnEngine();
+          t.bus = ensureActiveBus(t.bus);
           t.monitorHandle = t.bus!.play(
             src,
             volume: effVol,
@@ -2418,7 +4157,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     final bool wantsMonitor = tracks.any(
       (t) => t.type == TrackType.audio && t.isMonitoring,
     );
-    final bool needsMic = wantsRecord || wantsMonitor;
+    final bool needsMic = wantsRecord || wantsMonitor || _tunerEnabled;
 
     _syncTrackMonitoringHandles();
 
@@ -2507,11 +4246,11 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           }
 
           List<AudioClip> newClips = [];
-          for (var _ in armedTracks) {
+          for (final armedTrack in armedTracks) {
             final clip = AudioClip(
               start: recordingStartPos!,
               length: length,
-              color: lavenderAccent,
+              color: armedTrack.color,
               filePath: _currentRecordPath!,
               id: UniqueKey().toString(),
             );
@@ -2524,8 +4263,32 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           setState(() {
             for (int i = 0; i < armedTracks.length; i++) {
               var t = armedTracks[i];
-              if (!trackClips.containsKey(t.id)) trackClips[t.id] = [];
-              trackClips[t.id]!.add(newClips[i]);
+              final existingClips = trackClips.putIfAbsent(t.id, () => []);
+              final newClip = newClips[i];
+              final overlapping = existingClips
+                  .whereType<AudioClip>()
+                  .where(
+                    (c) =>
+                        c.start < newClip.start + newClip.length &&
+                        c.start + c.length > newClip.start,
+                  )
+                  .firstOrNull;
+              if (overlapping != null) {
+                final takeNum = overlapping.takes.isEmpty
+                    ? 2
+                    : overlapping.takes.length + 1;
+                overlapping.addTake(
+                  AudioTake(
+                    id: UniqueKey().toString(),
+                    name: 'Take $takeNum',
+                    filePath: _currentRecordPath!,
+                  ),
+                );
+                overlapping.source = newClip.source;
+                selectedClip = overlapping;
+              } else {
+                existingClips.add(newClip);
+              }
             }
           });
         }
@@ -2551,15 +4314,51 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
             _wavWriter = WavWriter(_currentRecordPath!);
           }
 
-          _saveState();
-          setState(() {
-            isRecording = true;
-            // Start recording at the exact current playhead position so recorded audio is sample-aligned
-            recordingStartPos = playheadPosition;
-            if (!isPlaying) _togglePlay();
-          });
-          if (hasArmedAudio) {
-            await _updateMicState();
+          if (punchInLoop && isLooping) {
+            setState(() => playheadPosition = loopStart);
+          }
+
+          Future<void> beginRecordNow() async {
+            _saveState();
+            setState(() {
+              isRecording = true;
+              _countInBeatsLeft = 0;
+              recordingStartPos = playheadPosition;
+              if (!isPlaying) _togglePlay();
+            });
+            if (hasArmedAudio) {
+              await _updateMicState();
+            }
+          }
+
+          if (countInBars > 0 && !isPlaying) {
+            _countInTimer?.cancel();
+            int remaining = countInBars * timeSigTop;
+            setState(() => _countInBeatsLeft = remaining);
+
+            void playClick(bool accent) {
+              _playMetronomeClick(accent);
+            }
+
+            playClick(true);
+            final beatMs = (60000 / bpm).round();
+            _countInTimer = Timer.periodic(Duration(milliseconds: beatMs), (t) async {
+              remaining--;
+              if (!mounted) {
+                t.cancel();
+                return;
+              }
+              if (remaining <= 0) {
+                t.cancel();
+                await beginRecordNow();
+              } else {
+                final beatIdx = (countInBars * timeSigTop) - remaining;
+                playClick(beatIdx % timeSigTop == 0);
+                setState(() => _countInBeatsLeft = remaining);
+              }
+            });
+          } else {
+            await beginRecordNow();
           }
         } else {
           if (_wavWriter != null) {
@@ -2662,17 +4461,23 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   }
 
   void _addTrack(TrackType type) async {
+    final trackColor =
+        kTrackColorPalette[tracks.length % kTrackColorPalette.length];
+    final trackName = switch (type) {
+      TrackType.audio => 'Audio Track ${tracks.length + 1}',
+      TrackType.midi => 'MIDI Track ${tracks.length + 1}',
+      TrackType.sampler => 'Sampler Track ${tracks.length + 1}',
+      TrackType.group => 'Group Bus ${tracks.length + 1}',
+    };
     final newTrack = Track(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
-      name: type == TrackType.audio
-          ? 'Audio Track ${tracks.length + 1}'
-          : (type == TrackType.sampler
-                ? 'Sampler Track ${tracks.length + 1}'
-                : 'MIDI Track ${tracks.length + 1}'),
+      name: trackName,
       type: type,
+      colorValue: trackColor.toARGB32(),
     );
-    newTrack.bus = Bus();
-    newTrack.bus!.playOnEngine();
+    if (_isSoloudReady) {
+      newTrack.bus = ensureActiveBus(newTrack.bus);
+    }
 
     if (type == TrackType.midi) {
       final preset = getInstrumentPreset(0);
@@ -2686,15 +4491,17 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       if (type == TrackType.midi || type == TrackType.sampler) {
         final newClip = MidiClip(
           id: UniqueKey().toString(),
+          name: type == TrackType.sampler ? 'Beat 1' : 'Pattern 1',
           start: 0.0,
           length: beatWidth * timeSigTop * 4,
-          color: lavenderAccent,
+          color: newTrack.color,
         );
         trackClips[newTrack.id]!.add(newClip);
         selectedClip = newClip;
       }
       selectedTrackIndex = tracks.length - 1;
-      if (type == TrackType.audio && selectedBottomTab == 0) {
+      if ((type == TrackType.audio || type == TrackType.group) &&
+          selectedBottomTab == 0) {
         selectedBottomTab = 2;
       } else if (type == TrackType.midi) {
         selectedBottomTab = 0;
@@ -2706,6 +4513,12 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         }
       }
     });
+    if (type == TrackType.sampler) {
+      await applyDrumKitToPads(newTrack.samplerPads, kDrumKits.first);
+      if (mounted) {
+        setState(() {});
+      }
+    }
   }
 
   void _executeDeleteTrack(Track track) {
@@ -2797,17 +4610,313 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     }
   }
 
+  Future<void> _showRenameClipDialog(DawClip clip) async {
+    final ctrl = TextEditingController(text: clip.name);
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: panelDark,
+        title: Text('Rename Clip', style: TextStyle(color: textMain)),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          style: TextStyle(color: textMain),
+          decoration: InputDecoration(
+            hintText: 'Clip name...',
+            filled: true,
+            fillColor: bgDark,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              _saveState();
+              setState(() => clip.name = ctrl.text.trim());
+              Navigator.pop(ctx);
+            },
+            child: Text('Save', style: TextStyle(color: lavenderAccent)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showClipGainPitchDialog(AudioClip clip) async {
+    double tmpGain = clip.gain;
+    double tmpPitch = clip.pitchSemitones;
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) => AlertDialog(
+          backgroundColor: panelDark,
+          title: Text('Clip Gain & Pitch', style: TextStyle(color: textMain)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('Gain', style: TextStyle(color: textMuted)),
+                  Text('${(tmpGain * 100).round()}%', style: TextStyle(color: textMain)),
+                ],
+              ),
+              Slider(
+                value: tmpGain.clamp(0.0, 2.0),
+                min: 0.0,
+                max: 2.0,
+                activeColor: lavenderAccent,
+                onChanged: (v) => setModalState(() => tmpGain = v),
+              ),
+              SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('Pitch Shift', style: TextStyle(color: textMuted)),
+                  Text(
+                    '${tmpPitch >= 0 ? "+" : ""}${tmpPitch.round()} st',
+                    style: TextStyle(color: textMain),
+                  ),
+                ],
+              ),
+              Slider(
+                value: tmpPitch.clamp(-12.0, 12.0),
+                min: -12.0,
+                max: 12.0,
+                divisions: 24,
+                activeColor: Colors.cyanAccent,
+                onChanged: (v) => setModalState(() => tmpPitch = v.roundToDouble()),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                _saveState();
+                setState(() {
+                  clip.gain = tmpGain;
+                  clip.pitchSemitones = tmpPitch;
+                });
+                Navigator.pop(ctx);
+              },
+              child: Text('Apply', style: TextStyle(color: lavenderAccent)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _syncLinkedMidiClips(MidiClip edited) {
+    final groupId = edited.patternGroupId;
+    if (groupId == null) return;
+    for (final list in trackClips.values) {
+      for (final c in list) {
+        if (c is MidiClip && c.patternGroupId == groupId && !identical(c, edited)) {
+          c.notes = edited.notes
+              .map(
+                (n) => MidiNote(
+                  pitch: n.pitch,
+                  start: n.start,
+                  length: n.length,
+                  velocity: n.velocity,
+                ),
+              )
+              .toList();
+          c.length = edited.length;
+        }
+      }
+    }
+  }
+
+  Future<void> _showStretchClipDialog(AudioClip clip) async {
+    int targetBars = max(1, (clip.length / (beatWidth * timeSigTop)).round());
+    double stretch = clip.stretchFactor;
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlgState) => AlertDialog(
+          backgroundColor: panelDark,
+          title: Text('Stretch / Fit Clip', style: TextStyle(color: textMain)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Speed Multiplier: ${stretch.toStringAsFixed(2)}x',
+                style: TextStyle(color: textMuted, fontSize: 12),
+              ),
+              Slider(
+                value: stretch.clamp(0.5, 2.0),
+                min: 0.5,
+                max: 2.0,
+                divisions: 30,
+                activeColor: lavenderAccent,
+                onChanged: (v) => setDlgState(() => stretch = v),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                children: [1, 2, 4, 8].map((bars) {
+                  return ActionChip(
+                    label: Text('Fit $bars Bar${bars > 1 ? 's' : ''}'),
+                    onPressed: () {
+                      final desiredPx = bars * timeSigTop * beatWidth;
+                      setDlgState(() {
+                        targetBars = bars;
+                        stretch = (clip.originalLength / desiredPx).clamp(0.5, 2.0);
+                      });
+                    },
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Target: $targetBars bar(s) at $bpm BPM',
+                style: TextStyle(color: textFaint, fontSize: 11),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                _saveState();
+                setState(() {
+                  clip.stretchFactor = stretch;
+                  clip.length = (clip.originalLength / stretch).clamp(20.0, 20000.0);
+                });
+                Navigator.pop(ctx);
+              },
+              child: const Text('Apply'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _autoMatchClipBpm(AudioClip clip) async {
+    double? detectedBpm;
+    try {
+      final file = File(clip.filePath);
+      if (file.existsSync()) {
+        final decoded = decodeWavBytes(await file.readAsBytes());
+        if (decoded != null && decoded.left.isNotEmpty) {
+          final durSec = decoded.left.length / decoded.sampleRate;
+          final transients = detectTransientsFromSamples(
+            decoded.left,
+            decoded.right,
+            decoded.sampleRate,
+            maxSlices: 32,
+          );
+          if (transients.length >= 2) {
+            final deltas = <double>[];
+            for (int i = 1; i < transients.length; i++) {
+              final dt = (transients[i].$1 - transients[i - 1].$1) * durSec;
+              if (dt >= 0.25 && dt <= 1.5) deltas.add(dt);
+            }
+            if (deltas.isNotEmpty) {
+              deltas.sort();
+              final medBeatSec = deltas[deltas.length ~/ 2];
+              detectedBpm = (60.0 / medBeatSec).clamp(60.0, 190.0);
+            }
+          }
+          if (detectedBpm == null && durSec > 0.5) {
+            // Fallback: fit nearest power-of-2 bar count to project BPM
+            final rawBars = (durSec * (bpm / 60.0)) / timeSigTop;
+            final snappedBars = max(1, rawBars.round());
+            final targetDurSec = (snappedBars * timeSigTop * 60.0) / bpm;
+            final ratio = (durSec / targetDurSec).clamp(0.5, 2.0);
+            _saveState();
+            setState(() {
+              clip.stretchFactor = ratio;
+              clip.length = snappedBars * timeSigTop * beatWidth;
+            });
+            return;
+          }
+        }
+      }
+    } catch (_) {}
+
+    if (detectedBpm != null) {
+      final ratio = (bpm / detectedBpm).clamp(0.5, 2.0);
+      _saveState();
+      setState(() {
+        clip.stretchFactor = ratio;
+        clip.length = (clip.originalLength / ratio).clamp(20.0, 20000.0);
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Detected ~${detectedBpm.round()} BPM -> stretched ${ratio.toStringAsFixed(2)}x to $bpm BPM',
+            ),
+          ),
+        );
+      }
+    }
+  }
+
   void _showClipMenu(Offset pos, String trackId, DawClip clip) async {
     final result = await showMenu<String>(
       context: context,
       position: RelativeRect.fromLTRB(pos.dx, pos.dy, pos.dx, pos.dy),
       items: [
+        PopupMenuItem(value: 'rename', child: Text('Rename Clip')),
         PopupMenuItem(value: 'copy', child: Text('Copy')),
+        PopupMenuItem(value: 'duplicate', child: Text('Duplicate')),
+        if (clip is MidiClip) ...[
+          PopupMenuItem(
+            value: 'duplicate_linked',
+            child: Text('Duplicate as Linked Alias'),
+          ),
+          if (clip.patternGroupId != null)
+            PopupMenuItem(value: 'make_unique', child: Text('Make Unique')),
+        ],
         PopupMenuDivider(),
         PopupMenuItem(value: 'delete', child: Text('Delete Clip')),
         PopupMenuItem(value: 'split', child: Text('Split at Playhead')),
-        if (clip is AudioClip)
+        if (clip is AudioClip) ...[
+          PopupMenuItem(value: 'gain_pitch', child: Text('Gain & Pitch...')),
+          PopupMenuItem(value: 'stretch_bars', child: Text('Stretch / Fit to Bars...')),
+          PopupMenuItem(value: 'auto_bpm', child: Text('Auto-Match Project BPM')),
+          PopupMenuItem(value: 'normalize', child: Text('Normalize (-1 dBFS)')),
+          PopupMenuItem(value: 'strip_silence', child: Text('Strip Silence')),
+          PopupMenuItem(value: 'audio_to_midi', child: Text('Extract Melody to MIDI Track')),
           PopupMenuItem(value: 'reverse', child: Text('Reverse Audio')),
+          PopupMenuItem(value: 'slice_sampler', child: Text('Slice to Sampler Track')),
+          if (clip.takes.isNotEmpty) ...[
+            const PopupMenuDivider(),
+            for (int ti = 0; ti < clip.takes.length; ti++)
+              PopupMenuItem(
+                value: 'take_$ti',
+                child: Row(
+                  children: [
+                    Icon(
+                      ti == clip.activeTakeIndex
+                          ? Icons.radio_button_checked
+                          : Icons.radio_button_unchecked,
+                      size: 14,
+                      color: ti == clip.activeTakeIndex ? Colors.cyanAccent : textMuted,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(clip.takes[ti].name),
+                  ],
+                ),
+              ),
+          ],
+        ],
         PopupMenuDivider(),
         PopupMenuItem(value: 'color_blue', child: Text('Color: Blue')),
         PopupMenuItem(value: 'color_red', child: Text('Color: Red')),
@@ -2815,8 +4924,66 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         PopupMenuItem(value: 'color_purple', child: Text('Color: Purple')),
       ],
     );
-    if (result == 'copy') {
+    if (result == 'rename') {
+      await _showRenameClipDialog(clip);
+    } else if (result == 'copy') {
       _copy();
+    } else if (result == 'duplicate') {
+      _saveState();
+      final json = clip.toJson();
+      final dup = DawClip.fromJson(json);
+      dup.id = UniqueKey().toString();
+      if (dup is MidiClip) dup.patternGroupId = null;
+      dup.start = clip.start + clip.length;
+      if (dup is AudioClip && SoLoud.instance.isInitialized) {
+        try {
+          dup.source = await SoLoud.instance.loadFile(dup.filePath);
+        } catch (_) {}
+      }
+      setState(() {
+        trackClips[trackId]?.add(dup);
+        selectedClip = dup;
+      });
+    } else if (result == 'duplicate_linked' && clip is MidiClip) {
+      _saveState();
+      clip.patternGroupId ??= UniqueKey().toString();
+      final dup = DawClip.fromJson(clip.toJson()) as MidiClip;
+      dup.id = UniqueKey().toString();
+      dup.start = clip.start + clip.length;
+      dup.patternGroupId = clip.patternGroupId;
+      setState(() {
+        trackClips[trackId]?.add(dup);
+        selectedClip = dup;
+      });
+    } else if (result == 'make_unique' && clip is MidiClip) {
+      _saveState();
+      setState(() => clip.patternGroupId = null);
+    } else if (result == 'gain_pitch' && clip is AudioClip) {
+      await _showClipGainPitchDialog(clip);
+    } else if (result == 'stretch_bars' && clip is AudioClip) {
+      await _showStretchClipDialog(clip);
+    } else if (result == 'auto_bpm' && clip is AudioClip) {
+      await _autoMatchClipBpm(clip);
+    } else if (result != null && result.startsWith('take_') && clip is AudioClip) {
+      final idx = int.tryParse(result.substring(5));
+      if (idx != null) {
+        _saveState();
+        clip.selectTake(idx);
+        if (SoLoud.instance.isInitialized) {
+          try {
+            clip.source = await SoLoud.instance.loadFile(clip.filePath);
+          } catch (_) {}
+        }
+        setState(() {});
+      }
+    } else if (result == 'normalize' && clip is AudioClip) {
+      await _normalizeAudioClip(clip);
+    } else if (result == 'strip_silence' && clip is AudioClip) {
+      await _stripSilenceAudioClip(trackId, clip);
+    } else if (result == 'audio_to_midi' && clip is AudioClip) {
+      await _extractMelodyFromClip(clip);
+    } else if (result == 'slice_sampler' && clip is AudioClip) {
+      await _sliceClipToSampler(clip);
     } else if (result == 'delete') {
       _saveState();
       setState(() {
@@ -2834,70 +5001,288 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         if (selectedClip == clip) selectedClip = null;
       });
     } else if (result == 'split') {
-      double splitPoint = playheadPosition;
-      if (splitPoint > clip.start && splitPoint < clip.start + clip.length) {
-        double newLen1 = splitPoint - clip.start;
-        double newLen2 = clip.length - newLen1;
-        DawClip newClip;
-        if (clip is AudioClip) {
-          newClip = AudioClip(
-            id: UniqueKey().toString(),
-            start: splitPoint,
-            length: newLen2,
-            color: clip.color,
-            filePath: clip.filePath,
-            originalLength: clip.originalLength,
-            startOffset: clip.startOffset + newLen1,
-          );
-          if (clip.source != null) {
-            (newClip as AudioClip).source = clip.source;
-          }
-        } else {
-          newClip = MidiClip(
-            id: UniqueKey().toString(),
-            start: splitPoint,
-            length: newLen2,
-            color: clip.color,
-            notes: [],
-            originalLength: clip.originalLength,
-            startOffset: clip.startOffset + newLen1,
-          );
-          for (var n in List.from((clip as MidiClip).notes)) {
-            if (n.start >= clip.startOffset + newLen1) {
-              (newClip as MidiClip).notes.add(n);
-              clip.notes.remove(n);
-            }
-          }
-        }
-        _saveState();
-        setState(() {
-          clip.length = newLen1;
-          trackClips[trackId]?.add(newClip);
-        });
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Playhead must be intersecting the clip to split it',
-              ),
+      final ok = _splitClipAtTimelinePos(trackId, clip, playheadPosition);
+      if (!ok && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Playhead must be intersecting the clip to split it',
             ),
-          );
-        }
+          ),
+        );
       }
     } else if (result == 'reverse' && clip is AudioClip) {
       _saveState();
       await clip.toggleReverse();
       setState(() {});
     } else if (result == 'color_blue') {
-      setState(() => clip.color = Colors.blueAccent);
+      _applyTrackColorById(trackId, Colors.blueAccent);
     } else if (result == 'color_red') {
-      setState(() => clip.color = Colors.redAccent);
+      _applyTrackColorById(trackId, Colors.redAccent);
     } else if (result == 'color_green') {
-      setState(() => clip.color = Colors.green);
+      _applyTrackColorById(trackId, Colors.green);
     } else if (result == 'color_purple') {
-      setState(() => clip.color = lavenderAccent);
+      _applyTrackColorById(trackId, kTrackColorPalette[0]);
     }
+  }
+
+  /// Splits [clip] on [trackId] at [splitPoint] in timeline units.
+  /// Returns true if the split succeeded.
+  bool _splitClipAtTimelinePos(String trackId, DawClip clip, double splitPoint) {
+    if (splitPoint <= clip.start || splitPoint >= clip.start + clip.length) {
+      return false;
+    }
+    final double newLen1 = splitPoint - clip.start;
+    final double newLen2 = clip.length - newLen1;
+    DawClip newClip;
+    if (clip is AudioClip) {
+      newClip = AudioClip(
+        id: UniqueKey().toString(),
+        name: clip.name,
+        start: splitPoint,
+        length: newLen2,
+        color: clip.color,
+        filePath: clip.filePath,
+        originalLength: clip.originalLength,
+        startOffset: clip.startOffset + newLen1,
+        fadeIn: 0.0,
+        fadeOut: clip.fadeOut,
+        gain: clip.gain,
+        pitchSemitones: clip.pitchSemitones,
+        stretchFactor: clip.stretchFactor,
+        reversed: clip.reversed,
+        originalFilePath: clip.originalFilePath,
+      );
+      clip.fadeOut = 0.0;
+      clip.fadeIn = clip.fadeIn.clamp(0.0, newLen1);
+      if (clip.source != null) {
+        (newClip as AudioClip).source = clip.source;
+      }
+    } else {
+      newClip = MidiClip(
+        id: UniqueKey().toString(),
+        name: clip.name,
+        start: splitPoint,
+        length: newLen2,
+        color: clip.color,
+        notes: [],
+        originalLength: clip.originalLength,
+        startOffset: clip.startOffset + newLen1,
+      );
+      for (var n in List.from((clip as MidiClip).notes)) {
+        if (n.start >= clip.startOffset + newLen1) {
+          (newClip as MidiClip).notes.add(n);
+          clip.notes.remove(n);
+        }
+      }
+    }
+    _saveState();
+    setState(() {
+      clip.length = newLen1;
+      trackClips[trackId]?.add(newClip);
+    });
+    return true;
+  }
+
+  Future<void> _normalizeAudioClip(AudioClip clip) async {
+    final normPath = await normalizeWavPeak(clip.filePath);
+    if (normPath == null) return;
+    _saveState();
+    clip.filePath = normPath;
+    if (SoLoud.instance.isInitialized) {
+      try {
+        clip.source = await SoLoud.instance.loadFile(normPath);
+      } catch (_) {}
+    }
+    clip.refreshWaveform();
+    setState(() {});
+  }
+
+  Future<void> _stripSilenceAudioClip(String trackId, AudioClip clip) async {
+    final ranges = await detectAudioNonSilentRanges(clip.filePath);
+    if (ranges.length <= 1 &&
+        (ranges.isEmpty || (ranges.first.$1 < 0.02 && ranges.first.$2 > 0.98))) {
+      return;
+    }
+    _saveState();
+    final replacement = <DawClip>[];
+    for (final (sFrac, eFrac) in ranges) {
+      final segStart = clip.start + sFrac * clip.length;
+      final segLen = (eFrac - sFrac) * clip.length;
+      final segOffset = clip.startOffset + sFrac * clip.length;
+      final seg = AudioClip(
+        id: UniqueKey().toString(),
+        name: '${clip.name} ${replacement.length + 1}',
+        start: segStart,
+        length: segLen,
+        originalLength: clip.originalLength,
+        startOffset: segOffset,
+        color: clip.color,
+        filePath: clip.filePath,
+        gain: clip.gain,
+        pitchSemitones: clip.pitchSemitones,
+        stretchFactor: clip.stretchFactor,
+      )..source = clip.source;
+      replacement.add(seg);
+    }
+    setState(() {
+      final list = trackClips[trackId];
+      if (list != null) {
+        list.remove(clip);
+        list.addAll(replacement);
+        selectedClip = replacement.isNotEmpty ? replacement.first : null;
+      }
+    });
+  }
+
+  Future<void> _extractMelodyFromClip(AudioClip clip) async {
+    final notes = await extractMelodyMidiNotes(clip.filePath, clip.length);
+    if (notes.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No clear pitched melody detected in ${clip.name}')),
+        );
+      }
+      return;
+    }
+    _saveState();
+    final trackColor = kTrackColorPalette[tracks.length % kTrackColorPalette.length];
+    final midiTrack = Track(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      name: '${clip.name} MIDI',
+      type: TrackType.midi,
+      colorValue: trackColor.toARGB32(),
+    );
+    if (_isSoloudReady) {
+      midiTrack.bus = ensureActiveBus(midiTrack.bus);
+      final preset = getInstrumentPreset(0);
+      midiTrack.synthSourcePath = preset.assetPath;
+      midiTrack.synthSource = globalInstrumentSounds[0];
+    }
+    final newClip = MidiClip(
+      id: UniqueKey().toString(),
+      name: '${clip.name} Melody',
+      start: clip.start,
+      length: clip.length,
+      color: midiTrack.color,
+      notes: notes,
+    );
+    setState(() {
+      tracks.add(midiTrack);
+      trackClips[midiTrack.id] = [newClip];
+      selectedTrackIndex = tracks.length - 1;
+      selectedClip = newClip;
+      selectedBottomTab = 0;
+    });
+  }
+
+  bool _isTrackVisibleInArrange(Track track) {
+    if (track.groupTrackId == null) return true;
+    final grp = _groupForTrack(track);
+    return grp == null || !grp.isGroupCollapsed;
+  }
+
+  void _assignTrackToGroupDialog(Track track) {
+    final groups = tracks.where((t) => t.type == TrackType.group).toList();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: panelDark,
+        title: Text('Route ${track.name} to Group Bus'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: Text('Direct to Master Bus'),
+              trailing: track.groupTrackId == null
+                  ? Icon(Icons.check, color: Colors.cyanAccent)
+                  : null,
+              onTap: () {
+                _saveState();
+                setState(() => track.groupTrackId = null);
+                Navigator.pop(ctx);
+              },
+            ),
+            for (final g in groups)
+              ListTile(
+                leading: CircleAvatar(radius: 6, backgroundColor: g.color),
+                title: Text(g.name),
+                trailing: track.groupTrackId == g.id
+                    ? Icon(Icons.check, color: Colors.cyanAccent)
+                    : null,
+                onTap: () {
+                  _saveState();
+                  setState(() => track.groupTrackId = g.id);
+                  Navigator.pop(ctx);
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _triggerSessionClip(Track track, DawClip clip) {
+    setState(() {
+      final trackClipIds =
+          (trackClips[track.id] ?? const <DawClip>[]).map((c) => c.id).toSet();
+      if (!isPlaying) {
+        _activeSessionClipIds.removeAll(trackClipIds);
+        _queuedSessionClipIds.removeAll(trackClipIds);
+        _activeSessionClipIds.add(clip.id);
+        playheadPosition = clip.start;
+        loopStart = clip.start;
+        loopEnd = clip.start + max(beatWidth, clip.length);
+        isLooping = true;
+      } else {
+        _queuedSessionClipIds.removeAll(trackClipIds);
+        _queuedSessionClipIds.add(clip.id);
+      }
+    });
+    if (!isPlaying) _togglePlay();
+  }
+
+  void _triggerSessionScene(int sceneIndex) {
+    final sceneClips = <DawClip>[];
+    for (final t in tracks) {
+      if (t.type == TrackType.group) continue;
+      final list = trackClips[t.id] ?? const <DawClip>[];
+      if (sceneIndex < list.length) sceneClips.add(list[sceneIndex]);
+    }
+    if (sceneClips.isEmpty) return;
+    setState(() {
+      if (!isPlaying) {
+        _activeSessionClipIds
+          ..clear()
+          ..addAll(sceneClips.map((c) => c.id));
+        _queuedSessionClipIds.clear();
+        double minStart = sceneClips.first.start;
+        double maxEnd = sceneClips.first.start + sceneClips.first.length;
+        for (final c in sceneClips) {
+          if (c.start < minStart) minStart = c.start;
+          if (c.start + c.length > maxEnd) maxEnd = c.start + c.length;
+        }
+        playheadPosition = minStart;
+        loopStart = minStart;
+        loopEnd = max(minStart + beatWidth, maxEnd);
+        isLooping = true;
+      } else {
+        _queuedSessionClipIds
+          ..clear()
+          ..addAll(sceneClips.map((c) => c.id));
+      }
+    });
+    if (!isPlaying) _togglePlay();
+  }
+
+  void _stopSessionTrack(Track track) {
+    setState(() {
+      for (final c in trackClips[track.id] ?? const <DawClip>[]) {
+        _activeSessionClipIds.remove(c.id);
+        _queuedSessionClipIds.remove(c.id);
+        if (c is AudioClip) _stopAudioClipHandles(c);
+      }
+    });
   }
 
   Widget _buildTopBar() {
@@ -2925,11 +5310,11 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
             ),
           ),
           Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16),
+            padding: EdgeInsets.symmetric(horizontal: 14),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     GestureDetector(
                       onTap: () => windowManager.close(),
@@ -2970,9 +5355,9 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                         ),
                       ),
                     ),
-                    SizedBox(width: 24),
+                    SizedBox(width: 18),
                     Text(
-                      'fyrDAW',
+                      'Sound Booth',
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
@@ -2981,30 +5366,298 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                     ),
                   ],
                 ),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Center(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: Icon(
+                              isPlaying ? Icons.pause : Icons.play_arrow,
+                              color: textMuted,
+                            ),
+                            onPressed: _togglePlay,
+                          ),
+                          IconButton(
+                            icon: Icon(Icons.stop, color: textMuted),
+                            onPressed: () {
+                              if (isRecording) _toggleRecord();
+                              setState(() {
+                                if (isPlaying) _togglePlay();
+                                playheadPosition = isLooping ? loopStart : 0.0;
+                                try {
+                                  SoLoud.instance.filters.echoFilter.deactivate();
+                                } catch (_) {}
+                                try {
+                                  SoLoud.instance.filters.robotizeFilter.deactivate();
+                                } catch (_) {}
+                                try {
+                                  SoLoud.instance.filters.compressorFilter.deactivate();
+                                } catch (_) {}
+                                try {
+                                  SoLoud.instance.filters.biquadResonantFilter.deactivate();
+                                } catch (_) {}
+                                for (var track in tracks) {
+                                  for (var clip in trackClips[track.id] ?? []) {
+                                    if (clip is AudioClip && clip.currentHandle != null) {
+                                      SoLoud.instance.stop(clip.currentHandle!);
+                                    }
+                                  }
+                                }
+                              });
+                            },
+                          ),
+                          IconButton(
+                            icon: Icon(
+                              isRecording
+                                  ? Icons.radio_button_checked
+                                  : Icons.radio_button_unchecked,
+                              color: _countInBeatsLeft > 0
+                                  ? Colors.amberAccent
+                                  : activeRecord,
+                            ),
+                            tooltip: 'Record (R)',
+                            onPressed: _toggleRecord,
+                          ),
+                          if (_countInBeatsLeft > 0)
+                            Container(
+                              padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.amberAccent,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                '$_countInBeatsLeft',
+                                style: TextStyle(
+                                  color: Colors.black,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                          SizedBox(width: 4),
+                          Tooltip(
+                            message: 'Count-In Bars before recording (Off / 1 Bar / 2 Bars)',
+                            child: InkWell(
+                              onTap: () => setState(() => countInBars = (countInBars + 1) % 3),
+                              child: Container(
+                                padding: EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: countInBars > 0
+                                      ? Colors.amberAccent.withValues(alpha: 0.22)
+                                      : textFaint,
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(
+                                    color: countInBars > 0 ? Colors.amberAccent : borderMain,
+                                  ),
+                                ),
+                                child: Text(
+                                  countInBars == 0 ? '1-2' : '${countInBars}B',
+                                  style: TextStyle(
+                                    color: countInBars > 0 ? Colors.amberAccent : textMuted,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          SizedBox(width: 4),
+                          Tooltip(
+                            message: 'Loop Punch-In/Out (Records inside loop brace)',
+                            child: InkWell(
+                              onTap: () => setState(() => punchInLoop = !punchInLoop),
+                              child: Container(
+                                padding: EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: punchInLoop
+                                      ? activeRecord.withValues(alpha: 0.25)
+                                      : textFaint,
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(
+                                    color: punchInLoop ? activeRecord : borderMain,
+                                  ),
+                                ),
+                                child: Text(
+                                  'PUNCH',
+                                  style: TextStyle(
+                                    color: punchInLoop ? activeRecord : textMuted,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          SizedBox(width: 10),
+                          Container(
+                            padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: textFaint,
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(color: textFaint),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(Icons.timer, size: 14, color: textMuted),
+                                SizedBox(width: 6),
+                                SizedBox(
+                                  width: 28,
+                                  child: TextField(
+                                    controller: TextEditingController(
+                                      text: bpm.toString(),
+                                    ),
+                                    focusNode: _bpmFocus,
+                                    style: TextStyle(
+                                      color: textMain,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                    keyboardType: TextInputType.number,
+                                    decoration: InputDecoration(
+                                      isDense: true,
+                                      border: InputBorder.none,
+                                      contentPadding: EdgeInsets.zero,
+                                    ),
+                                    onSubmitted: (v) {
+                                      int? nb = int.tryParse(v);
+                                      if (nb != null && nb > 20 && nb < 300) {
+                                        _changeTempo(nb);
+                                      }
+                                      _focusNode.requestFocus();
+                                    },
+                                    onTapOutside: (e) => _focusNode.requestFocus(),
+                                  ),
+                                ),
+                                Text(
+                                  'BPM',
+                                  style: TextStyle(color: textMuted, fontSize: 10),
+                                ),
+                                TextButton(
+                                  onPressed: _tapTempo,
+                                  child: Text(
+                                    'Tap',
+                                    style: TextStyle(color: lavenderLight, fontSize: 10),
+                                  ),
+                                ),
+                                SizedBox(width: 6),
+                                Tooltip(
+                                  message: 'Toggle Metronome',
+                                  child: InkWell(
+                                    onTap: () {
+                                      setState(() {
+                                        isMetronomeEnabled = !isMetronomeEnabled;
+                                      });
+                                    },
+                                    child: Icon(
+                                      Icons.notifications_active,
+                                      size: 16,
+                                      color: isMetronomeEnabled
+                                          ? lavenderAccent
+                                          : textMuted,
+                                    ),
+                                  ),
+                                ),
+                                Tooltip(
+                                  message:
+                                      'Metronome Volume (${(metronomeVolume * 100).round()}%)',
+                                  child: SizedBox(
+                                    width: 58,
+                                    height: 22,
+                                    child: SliderTheme(
+                                      data: SliderTheme.of(context).copyWith(
+                                        trackHeight: 2.5,
+                                        thumbShape: const RoundSliderThumbShape(
+                                          enabledThumbRadius: 5,
+                                        ),
+                                        overlayShape:
+                                            const RoundSliderOverlayShape(
+                                              overlayRadius: 9,
+                                            ),
+                                      ),
+                                      child: Slider(
+                                        key: const Key('metronome_volume_slider'),
+                                        value: metronomeVolume.clamp(0.0, 1.5),
+                                        min: 0.0,
+                                        max: 1.5,
+                                        activeColor: lavenderAccent,
+                                        inactiveColor: borderMain,
+                                        onChanged: (v) {
+                                          setState(() => metronomeVolume = v);
+                                        },
+                                        onChangeEnd: _saveMetronomeVolumePref,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                SizedBox(width: 6),
+                                DropdownButton<int>(
+                                  value: timeSigTop,
+                                  underline: SizedBox(),
+                                  dropdownColor: panelDark,
+                                  icon: SizedBox(),
+                                  items: [3, 4, 5, 6, 7]
+                                      .map(
+                                        (i) => DropdownMenuItem(
+                                          value: i,
+                                          child: Text(
+                                            '$i / $timeSigBottom',
+                                            style: TextStyle(
+                                              color: textMain,
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ),
+                                      )
+                                      .toList(),
+                                  onChanged: (v) {
+                                    if (v != null) setState(() => timeSigTop = v);
+                                  },
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                SizedBox(width: 8),
                 Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     IconButton(
                       icon: Icon(Icons.undo, color: textMuted),
                       onPressed: _undo,
                       tooltip: 'Undo (Ctrl+Z)',
+                      constraints: BoxConstraints(minWidth: 32, minHeight: 32),
+                      padding: EdgeInsets.all(4),
                     ),
                     IconButton(
                       icon: Icon(Icons.redo, color: textMuted),
                       onPressed: _redo,
                       tooltip: 'Redo (Ctrl+Shift+Z)',
+                      constraints: BoxConstraints(minWidth: 32, minHeight: 32),
+                      padding: EdgeInsets.all(4),
                     ),
-                    SizedBox(width: 8),
                     IconButton(
                       icon: Icon(Icons.zoom_out, color: textMuted),
                       onPressed: _zoomOut,
                       tooltip: 'Zoom Out (Ctrl-)',
+                      constraints: BoxConstraints(minWidth: 32, minHeight: 32),
+                      padding: EdgeInsets.all(4),
                     ),
                     IconButton(
                       icon: Icon(Icons.zoom_in, color: textMuted),
                       onPressed: _zoomIn,
                       tooltip: 'Zoom In (Ctrl+)',
+                      constraints: BoxConstraints(minWidth: 32, minHeight: 32),
+                      padding: EdgeInsets.all(4),
                     ),
-                    SizedBox(width: 16),
                     IconButton(
                       icon: Icon(
                         snapToGrid ? Icons.grid_on : Icons.grid_off,
@@ -3012,15 +5665,101 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                       ),
                       tooltip: 'Snap to Grid',
                       onPressed: () => setState(() => snapToGrid = !snapToGrid),
+                      constraints: BoxConstraints(minWidth: 32, minHeight: 32),
+                      padding: EdgeInsets.all(4),
                     ),
-                    SizedBox(width: 8),
+                    IconButton(
+                      icon: Icon(
+                        Icons.center_focus_strong,
+                        size: 18,
+                        color: autoScrollPlayhead ? Colors.cyanAccent : textMuted,
+                      ),
+                      tooltip: 'Auto-Follow Playhead',
+                      onPressed: () => setState(
+                        () => autoScrollPlayhead = !autoScrollPlayhead,
+                      ),
+                      constraints: BoxConstraints(minWidth: 32, minHeight: 32),
+                      padding: EdgeInsets.all(4),
+                    ),
+                    IconButton(
+                      icon: Icon(
+                        Icons.keyboard,
+                        size: 18,
+                        color: isMusicalTypingEnabled
+                            ? lavenderAccent
+                            : textMuted,
+                      ),
+                      tooltip: 'QWERTY Musical Typing Keyboard',
+                      onPressed: () => setState(
+                        () => isMusicalTypingEnabled = !isMusicalTypingEnabled,
+                      ),
+                      constraints: BoxConstraints(minWidth: 32, minHeight: 32),
+                      padding: EdgeInsets.all(4),
+                    ),
+                    IconButton(
+                      icon: Icon(
+                        _isSessionView ? Icons.view_timeline : Icons.grid_view,
+                        size: 18,
+                        color: _isSessionView ? Colors.cyanAccent : textMuted,
+                      ),
+                      tooltip: _isSessionView
+                          ? 'Switch to Timeline View'
+                          : 'Switch to Session Clip Launcher',
+                      onPressed: () =>
+                          setState(() => _isSessionView = !_isSessionView),
+                      constraints: BoxConstraints(minWidth: 32, minHeight: 32),
+                      padding: EdgeInsets.all(4),
+                    ),
+                    IconButton(
+                      key: const Key('toggle_sample_browser'),
+                      icon: Icon(
+                        Icons.library_music,
+                        size: 18,
+                        color: _showSampleBrowser
+                            ? Colors.cyanAccent
+                            : textMuted,
+                      ),
+                      tooltip: 'Toggle Sample & MIDI Browser',
+                      onPressed: () => setState(
+                        () => _showSampleBrowser = !_showSampleBrowser,
+                      ),
+                      constraints: BoxConstraints(minWidth: 32, minHeight: 32),
+                      padding: EdgeInsets.all(4),
+                    ),
+                    IconButton(
+                      icon: Icon(
+                        Icons.sensors,
+                        size: 18,
+                        color: _midiLearnActive ? Colors.amberAccent : textMuted,
+                      ),
+                      tooltip: _midiLearnActive
+                          ? 'MIDI Learn Active (Click mixer control then move HW knob/fader)'
+                          : 'MIDI Learn Mode (${midiMappings.length} mapped)',
+                      onPressed: () => setState(() {
+                        _midiLearnActive = !_midiLearnActive;
+                        if (!_midiLearnActive) _midiLearnTarget = null;
+                      }),
+                      constraints: BoxConstraints(minWidth: 32, minHeight: 32),
+                      padding: EdgeInsets.all(4),
+                    ),
+                    SizedBox(width: 4),
+                    MasterSpectrumWidget(
+                      samples: _masterVizSamples,
+                      width: 96,
+                      height: 28,
+                      accentColor: lavenderAccent,
+                    ),
+                    SizedBox(width: 4),
                     PopupMenuButton<String>(
                       icon: Icon(Icons.settings, color: textMuted),
                       onSelected: (val) {
                         if (val == 'new') _newProject();
+                        if (val == 'templates') _openTemplates();
                         if (val == 'open') _openProject();
                         if (val == 'save') _saveProject();
                         if (val == 'save_as') _saveProjectAs();
+                        if (val == 'import_midi') _importMidiFile();
+                        if (val == 'export_midi') _exportSelectedMidiClip();
                         if (val == 'export') _exportAudio();
                         if (val == 'export_stems') _exportStems();
                         if (val == 'preferences') _openPreferences();
@@ -3029,6 +5768,10 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                         PopupMenuItem(
                           value: 'new',
                           child: Text('New Project'),
+                        ),
+                        PopupMenuItem(
+                          value: 'templates',
+                          child: Text('New from Template...'),
                         ),
                         PopupMenuItem(
                           value: 'open',
@@ -3044,8 +5787,17 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                           child: Text('Save As...'),
                         ),
                         PopupMenuItem(
+                          value: 'import_midi',
+                          child: Text('Import MIDI (.mid)...'),
+                        ),
+                        PopupMenuItem(
+                          value: 'export_midi',
+                          enabled: selectedClip is MidiClip,
+                          child: Text('Export Selected Clip as .mid'),
+                        ),
+                        PopupMenuItem(
                           value: 'export',
-                          child: Text('Export to WAV'),
+                          child: Text('Export Mixdown (WAV/FLAC/MP3)'),
                         ),
                         PopupMenuItem(
                           value: 'export_stems',
@@ -3062,155 +5814,60 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
               ],
             ),
           ),
-          Align(
-            alignment: Alignment.center,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: Icon(
-                    isPlaying ? Icons.pause : Icons.play_arrow,
-                    color: textMuted,
-                  ),
-                  onPressed: _togglePlay,
-                ),
-                IconButton(
-                  icon: Icon(Icons.stop, color: textMuted),
-                  onPressed: () {
-                    if (isRecording) _toggleRecord();
-                    setState(() {
-                      if (isPlaying) _togglePlay();
-                      playheadPosition = isLooping ? loopStart : 0.0;
-                      try {
-                        SoLoud.instance.filters.echoFilter.deactivate();
-                      } catch (_) {}
-                      try {
-                        SoLoud.instance.filters.robotizeFilter.deactivate();
-                      } catch (_) {}
-                      try {
-                        SoLoud.instance.filters.compressorFilter.deactivate();
-                      } catch (_) {}
-                      try {
-                        SoLoud.instance.filters.biquadResonantFilter
-                            .deactivate();
-                      } catch (_) {}
-                      for (var track in tracks) {
-                        for (var clip in trackClips[track.id] ?? []) {
-                          if (clip is AudioClip && clip.currentHandle != null) {
-                            SoLoud.instance.stop(clip.currentHandle!);
-                          }
-                        }
-                      }
-                    });
-                  },
-                ),
-                IconButton(
-                  icon: Icon(
-                    isRecording
-                        ? Icons.radio_button_checked
-                        : Icons.radio_button_unchecked,
-                    color: activeRecord,
-                  ),
-                  onPressed: _toggleRecord,
-                ),
-                SizedBox(width: 16),
-                Container(
-                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: textFaint,
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: textFaint),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.timer, size: 14, color: textMuted),
-                      SizedBox(width: 8),
-                      SizedBox(
-                        width: 30,
-                        child: TextField(
-                          controller: TextEditingController(
-                            text: bpm.toString(),
-                          ),
-                          focusNode: _bpmFocus,
-                          style: TextStyle(
-                            color: textMain,
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                          ),
-                          keyboardType: TextInputType.number,
-                          decoration: InputDecoration(
-                            isDense: true,
-                            border: InputBorder.none,
-                            contentPadding: EdgeInsets.zero,
-                          ),
-                          onSubmitted: (v) {
-                            int? nb = int.tryParse(v);
-                            if (nb != null && nb > 20 && nb < 300) {
-                              _changeTempo(nb);
-                            }
-                            _focusNode.requestFocus();
-                          },
-                          onTapOutside: (e) => _focusNode.requestFocus(),
-                        ),
-                      ),
-                      Text(
-                        'BPM',
-                        style: TextStyle(color: textMuted, fontSize: 10),
-                      ),
-                      TextButton(
-                        onPressed: _tapTempo,
-                        child: Text(
-                          'Tap',
-                          style: TextStyle(color: lavenderLight, fontSize: 10),
-                        ),
-                      ),
-                      SizedBox(width: 8),
-                      InkWell(
-                        onTap: () {
-                          setState(() {
-                            isMetronomeEnabled = !isMetronomeEnabled;
-                          });
-                        },
-                        child: Icon(
-                          Icons.notifications_active,
-                          size: 16,
-                          color: isMetronomeEnabled
-                              ? lavenderAccent
-                              : textMuted,
-                        ),
-                      ),
-                      SizedBox(width: 12),
-                      DropdownButton<int>(
-                        value: timeSigTop,
-                        underline: SizedBox(),
-                        dropdownColor: panelDark,
-                        icon: SizedBox(),
-                        items: [3, 4, 5, 6, 7]
-                            .map(
-                              (i) => DropdownMenuItem(
-                                value: i,
-                                child: Text(
-                                  '$i / $timeSigBottom',
-                                  style: TextStyle(
-                                    color: textMain,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (v) {
-                          if (v != null) setState(() => timeSigTop = v);
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
         ],
+      ),
+    );
+  }
+
+  void _applyTrackColor(Track track, Color color) {
+    setState(() {
+      track.colorValue = color.toARGB32();
+      for (final clip in trackClips[track.id] ?? const <DawClip>[]) {
+        clip.color = color;
+      }
+    });
+  }
+
+  void _applyTrackColorById(String trackId, Color color) {
+    final track = tracks.where((t) => t.id == trackId).firstOrNull;
+    if (track != null) {
+      _saveState();
+      _applyTrackColor(track, color);
+    }
+  }
+
+  void _showTrackColorPicker(Track track) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: panelDark,
+        title: Text('Track Color', style: TextStyle(color: textMain)),
+        content: Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: kTrackColorPalette.map((c) {
+            final isCur = track.colorValue == c.toARGB32();
+            return GestureDetector(
+              onTap: () {
+                _saveState();
+                _applyTrackColor(track, c);
+                Navigator.pop(ctx);
+              },
+              child: Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: c,
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: isCur ? Colors.white : Colors.black26,
+                    width: isCur ? 3 : 1,
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
       ),
     );
   }
@@ -3225,6 +5882,24 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       child: Column(
         children: [
           Container(
+            height: 22,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            alignment: Alignment.centerLeft,
+            decoration: BoxDecoration(
+              color: bgDark,
+              border: Border(bottom: BorderSide(color: borderMain, width: 1)),
+            ),
+            child: Text(
+              'OVERVIEW',
+              style: TextStyle(
+                color: textFaint,
+                fontSize: 9,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.0,
+              ),
+            ),
+          ),
+          Container(
             height: 40,
             padding: EdgeInsets.symmetric(horizontal: 8),
             child: Row(
@@ -3237,6 +5912,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                     if (v == 'audio') _addTrack(TrackType.audio);
                     if (v == 'midi') _addTrack(TrackType.midi);
                     if (v == 'sampler') _addTrack(TrackType.sampler);
+                    if (v == 'group') _addTrack(TrackType.group);
                     if (v == 'import') _importAudioTrack();
                   },
                   itemBuilder: (context) => [
@@ -3249,10 +5925,35 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                       value: 'sampler',
                       child: Text('Add Sampler Track'),
                     ),
+                    PopupMenuItem(
+                      value: 'group',
+                      child: Text('Add Group Bus'),
+                    ),
                     PopupMenuItem(value: 'import', child: Text('Import WAV')),
                   ],
                 ),
               ],
+            ),
+          ),
+          Container(
+            height: 20,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            alignment: Alignment.centerLeft,
+            decoration: BoxDecoration(
+              color: bgDark,
+              border: Border(
+                top: BorderSide(color: borderMain, width: 1),
+                bottom: BorderSide(color: borderMain, width: 1),
+              ),
+            ),
+            child: Text(
+              'TEMPO / SIG',
+              style: TextStyle(
+                color: textFaint,
+                fontSize: 9,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.0,
+              ),
             ),
           ),
           Expanded(
@@ -3262,7 +5963,11 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
               itemCount: tracks.length,
               itemBuilder: (context, index) {
                 final track = tracks[index];
+                if (!_isTrackVisibleInArrange(track)) {
+                  return const SizedBox.shrink();
+                }
                 final isSelected = selectedTrackIndex == index;
+                final parentGroup = _groupForTrack(track);
                 return GestureDetector(
                   onSecondaryTapUp: (d) {
                     final RenderBox overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
@@ -3273,9 +5978,21 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                         Offset.zero & overlay.size,
                       ),
                       items: [
+                        PopupMenuItem(value: 'color', child: Text('Change Track Color')),
+                        if (track.type != TrackType.group &&
+                            tracks.any((t) => t.type == TrackType.group))
+                          PopupMenuItem(
+                            value: 'assign_group',
+                            child: Text('Route to Group Bus...'),
+                          ),
+                        PopupMenuItem(value: 'bounce', child: Text('Bounce Track to Audio')),
+                        PopupMenuDivider(),
                         PopupMenuItem(value: 'delete', child: Text('Delete Track', style: TextStyle(color: Colors.red))),
                       ],
                     ).then((value) {
+                      if (value == 'color') _showTrackColorPicker(track);
+                      if (value == 'assign_group') _assignTrackToGroupDialog(track);
+                      if (value == 'bounce') _bounceTrackToAudio(track);
                       if (value == 'delete') _deleteTrack(track);
                     });
                   },
@@ -3287,12 +6004,16 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                         multiSelectedClips.clear();
                       }
                       selectedTrackIndex = index;
-                      if (track.type == TrackType.audio &&
+                      if ((track.type == TrackType.audio ||
+                              track.type == TrackType.group) &&
                           (selectedBottomTab == 0 || selectedBottomTab == 3)) {
-                        selectedBottomTab = 2;
+                        selectedBottomTab = track.type == TrackType.audio ? 4 : 2;
                       } else if (track.type == TrackType.midi &&
-                          selectedBottomTab == 3) {
+                          (selectedBottomTab == 3 || selectedBottomTab == 4)) {
                         selectedBottomTab = 0;
+                      } else if (track.type == TrackType.group &&
+                          selectedBottomTab == 4) {
+                        selectedBottomTab = 2;
                       }
                       if (!wasSelected && track.type == TrackType.sampler) {
                         selectedBottomTab = 3;
@@ -3307,7 +6028,10 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                     height: track.showAutomation ? 140 : 100,
                     decoration: BoxDecoration(
                       color: isSelected ? panelLight : Colors.transparent,
-                      border: Border(bottom: BorderSide(color: textFaint)),
+                      border: Border(
+                        left: BorderSide(color: track.color, width: 4),
+                        bottom: BorderSide(color: textFaint),
+                      ),
                     ),
                     padding: EdgeInsets.all(8),
                     child: Column(
@@ -3315,8 +6039,56 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                       children: [
                         Row(
                           children: [
-                            if (track.type == TrackType.audio)
-                              Icon(Icons.mic, size: 16, color: lavenderAccent)
+                            InkWell(
+                              onTap: () => _showTrackColorPicker(track),
+                              child: Container(
+                                width: 10,
+                                height: 10,
+                                margin: EdgeInsets.only(right: 6),
+                                decoration: BoxDecoration(
+                                  color: track.color,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                            ),
+                            if (track.type == TrackType.group)
+                              Row(
+                                children: [
+                                  InkWell(
+                                    onTap: () => setState(
+                                      () => track.isGroupCollapsed =
+                                          !track.isGroupCollapsed,
+                                    ),
+                                    child: Icon(
+                                      track.isGroupCollapsed
+                                          ? Icons.chevron_right
+                                          : Icons.expand_more,
+                                      size: 16,
+                                      color: Colors.amberAccent,
+                                    ),
+                                  ),
+                                  Container(
+                                    padding: EdgeInsets.symmetric(
+                                      horizontal: 4,
+                                      vertical: 1,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.amberAccent.withValues(alpha: 0.2),
+                                      borderRadius: BorderRadius.circular(3),
+                                    ),
+                                    child: Text(
+                                      'BUS',
+                                      style: TextStyle(
+                                        fontSize: 9,
+                                        color: Colors.amberAccent,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              )
+                            else if (track.type == TrackType.audio)
+                              Icon(Icons.mic, size: 16, color: track.color)
                             else
                               Row(
                                 children: [
@@ -3325,7 +6097,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                                     child: Icon(
                                       Icons.piano,
                                       size: 16,
-                                      color: lavenderAccent,
+                                      color: track.color,
                                     ),
                                   ),
                                   SizedBox(width: 8),
@@ -3335,12 +6107,33 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                                       Icons.cable,
                                       size: 16,
                                       color: track.midiInputId == null
-                                          ? lavenderAccent
+                                          ? track.color
                                           : Colors.cyanAccent,
                                     ),
                                   ),
                                 ],
                               ),
+                            if (parentGroup != null) ...[
+                              SizedBox(width: 4),
+                              Container(
+                                padding: EdgeInsets.symmetric(
+                                  horizontal: 3,
+                                  vertical: 1,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: parentGroup.color.withValues(alpha: 0.22),
+                                  borderRadius: BorderRadius.circular(3),
+                                ),
+                                child: Text(
+                                  'GRP',
+                                  style: TextStyle(
+                                    fontSize: 8,
+                                    color: parentGroup.color,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ],
                             SizedBox(width: 8),
                             Expanded(
                               child: GestureDetector(
@@ -3424,18 +6217,20 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                               },
                               Colors.amber,
                             ),
-                            SizedBox(width: 4),
-                            _buildTrackButton(
-                              'R',
-                              track.isArmed,
-                              () async {
-                                setState(
-                                  () => track.isArmed = !track.isArmed,
-                                );
-                                await _updateMicState();
-                              },
-                              activeRecord,
-                            ),
+                            if (track.type != TrackType.group) ...[
+                              SizedBox(width: 4),
+                              _buildTrackButton(
+                                'R',
+                                track.isArmed,
+                                () async {
+                                  setState(
+                                    () => track.isArmed = !track.isArmed,
+                                  );
+                                  await _updateMicState();
+                                },
+                                activeRecord,
+                              ),
+                            ],
                             if (track.type == TrackType.audio) ...[
                               SizedBox(width: 4),
                               _buildTrackButton(
@@ -3549,15 +6344,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                               SizedBox(width: 8),
                               Builder(
                                 builder: (context) {
-                                  final items = [
-                                    'Volume',
-                                    'Pan',
-                                    ...track.effectsChain.expand(
-                                      (fx) => fx.parameters.keys.map(
-                                        (p) => '${fx.name}_$p',
-                                      ),
-                                    ),
-                                  ];
+                                  final items = track.availableAutomationParams;
                                   if (!items.contains(
                                     track.currentAutomationParam,
                                   )) {
@@ -3659,6 +6446,23 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           int tIdx = tracks.indexWhere((t) => t.id == trackId);
           if (tIdx != -1) {
             selectedTrackIndex = tIdx;
+          }
+        }),
+        onDoubleTap: () => setState(() {
+          selectedClip = clip;
+          multiSelectedClips.clear();
+          int tIdx = tracks.indexWhere((t) => t.id == trackId);
+          if (tIdx != -1) {
+            selectedTrackIndex = tIdx;
+          }
+          isBottomPanelExpanded = true;
+          if (_bottomPanelHeight < 360) {
+            _bottomPanelHeight = 360;
+          }
+          if (clip is MidiClip) {
+            selectedBottomTab = 0;
+          } else if (clip is AudioClip) {
+            selectedBottomTab = 4;
           }
         }),
         onSecondaryTapUp: (details) =>
@@ -3766,23 +6570,232 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                   },
                 ),
               if (clip is MidiClip)
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    return ClipRect(
-                      child: Stack(
-                        children: clip.notes.map((n) {
-                          return Positioned(
-                            left: (n.start - clip.startOffset) * _zoomX,
-                            top: ((127 - n.pitch) / 128.0) * 80.0,
-                            width: n.length * _zoomX,
-                            height: 4,
-                            child: Container(color: textMuted),
-                          );
-                        }).toList(),
+                Positioned.fill(
+                  child: ClipRect(
+                    child: CustomPaint(
+                      painter: MidiClipThumbnailPainter(
+                        notes: clip.notes,
+                        clipLength: clip.length,
+                        originalLength: clip.originalLength,
+                        startOffset: clip.startOffset,
+                        color: textMain,
                       ),
-                    );
-                  },
+                    ),
+                  ),
                 ),
+              if (clip is AudioClip)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: CustomPaint(
+                      painter: LoopNotchesPainter(
+                        clipLength: clip.length,
+                        originalLength: clip.originalLength / clip.stretchFactor,
+                      ),
+                    ),
+                  ),
+                ),
+              if (clip is AudioClip)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: CustomPaint(
+                      painter: ClipFadePainter(
+                        fadeInRatio: clip.length > 0
+                            ? (clip.fadeIn / clip.length).clamp(0.0, 0.9)
+                            : 0.0,
+                        fadeOutRatio: clip.length > 0
+                            ? (clip.fadeOut / clip.length).clamp(0.0, 0.9)
+                            : 0.0,
+                        accentColor: Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
+              if (clip.length * _zoomX > 36)
+                Positioned(
+                  left: 12,
+                  right: 12,
+                  top: 2,
+                  child: IgnorePointer(
+                    child: Row(
+                      children: [
+                        if (clip is MidiClip && clip.patternGroupId != null)
+                          Container(
+                            margin: EdgeInsets.only(right: 4),
+                            padding: EdgeInsets.symmetric(horizontal: 3),
+                            decoration: BoxDecoration(
+                              color: Colors.black54,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                            child: Text(
+                              '∞',
+                              style: TextStyle(
+                                color: Colors.cyanAccent,
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        Expanded(
+                          child: Text(
+                            clip.name.isNotEmpty
+                                ? clip.name
+                                : (clip is AudioClip
+                                      ? p.basenameWithoutExtension(clip.filePath)
+                                      : 'MIDI'),
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold,
+                              shadows: [
+                                Shadow(color: Colors.black54, blurRadius: 2),
+                              ],
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (clip is AudioClip && clip.takes.length > 1)
+                          Container(
+                            margin: EdgeInsets.only(left: 4),
+                            padding: EdgeInsets.symmetric(horizontal: 3),
+                            decoration: BoxDecoration(
+                              color: Colors.black54,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                            child: Text(
+                              'T${clip.activeTakeIndex + 1}/${clip.takes.length}',
+                              style: TextStyle(
+                                color: Colors.lightGreenAccent,
+                                fontSize: 8,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        if (clip is AudioClip && clip.isLooped)
+                          Container(
+                            margin: EdgeInsets.only(left: 4),
+                            padding: EdgeInsets.symmetric(horizontal: 3),
+                            decoration: BoxDecoration(
+                              color: Colors.black54,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                            child: Text(
+                              'LOOP',
+                              style: TextStyle(
+                                color: Colors.amberAccent,
+                                fontSize: 8,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        if (clip is AudioClip &&
+                            (clip.stretchFactor - 1.0).abs() > 0.02)
+                          Container(
+                            margin: EdgeInsets.only(left: 4),
+                            padding: EdgeInsets.symmetric(horizontal: 3),
+                            decoration: BoxDecoration(
+                              color: Colors.black54,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                            child: Text(
+                              '${clip.stretchFactor.toStringAsFixed(2)}x',
+                              style: TextStyle(
+                                color: Colors.cyanAccent,
+                                fontSize: 8,
+                              ),
+                            ),
+                          ),
+                        if (clip is AudioClip && clip.pitchSemitones != 0)
+                          Container(
+                            margin: EdgeInsets.only(left: 4),
+                            padding: EdgeInsets.symmetric(horizontal: 3),
+                            decoration: BoxDecoration(
+                              color: Colors.black54,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                            child: Text(
+                              '${clip.pitchSemitones > 0 ? "+" : ""}${clip.pitchSemitones.round()}st',
+                              style: TextStyle(color: Colors.cyanAccent, fontSize: 8),
+                            ),
+                          ),
+                        if (clip is AudioClip && (clip.gain - 1.0).abs() > 0.05)
+                          Container(
+                            margin: EdgeInsets.only(left: 4),
+                            padding: EdgeInsets.symmetric(horizontal: 3),
+                            decoration: BoxDecoration(
+                              color: Colors.black54,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                            child: Text(
+                              '${(clip.gain * 100).round()}%',
+                              style: TextStyle(color: Colors.amberAccent, fontSize: 8),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              if (clip is AudioClip && clip.length * _zoomX > 28) ...[
+                Positioned(
+                  left: ((clip.fadeIn * _zoomX) - 6).clamp(
+                    6.0,
+                    max(6.0, clip.length * _zoomX - 18),
+                  ),
+                  top: 0,
+                  child: Tooltip(
+                    message: 'Drag Fade-In',
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.resizeLeftRight,
+                      child: GestureDetector(
+                        onHorizontalDragStart: (_) => _saveState(),
+                        onHorizontalDragUpdate: (d) => setState(() {
+                          clip.fadeIn = (clip.fadeIn + d.delta.dx / _zoomX)
+                              .clamp(0.0, max(0.0, clip.length - clip.fadeOut));
+                        }),
+                        child: Container(
+                          width: 12,
+                          height: 12,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.85),
+                            borderRadius: BorderRadius.only(
+                              bottomRight: Radius.circular(6),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  right: ((clip.fadeOut * _zoomX) - 6).clamp(
+                    6.0,
+                    max(6.0, clip.length * _zoomX - 18),
+                  ),
+                  top: 0,
+                  child: Tooltip(
+                    message: 'Drag Fade-Out',
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.resizeLeftRight,
+                      child: GestureDetector(
+                        onHorizontalDragStart: (_) => _saveState(),
+                        onHorizontalDragUpdate: (d) => setState(() {
+                          clip.fadeOut = (clip.fadeOut - d.delta.dx / _zoomX)
+                              .clamp(0.0, max(0.0, clip.length - clip.fadeIn));
+                        }),
+                        child: Container(
+                          width: 12,
+                          height: 12,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.85),
+                            borderRadius: BorderRadius.only(
+                              bottomLeft: Radius.circular(6),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
               Positioned(
                 left: 0,
                 top: 0,
@@ -3863,8 +6876,11 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                     onHorizontalDragUpdate: (d) => setState(() {
                       clip.length += (d.delta.dx / _zoomX);
                       if (clip.length < 10) clip.length = 10;
-                      if (clip.length >
-                          clip.originalLength - clip.startOffset) {
+                      final bool allowExtendLoop =
+                          clip is AudioClip && clip.isLooped;
+                      if (!allowExtendLoop &&
+                          clip.length >
+                              clip.originalLength - clip.startOffset) {
                         clip.length = clip.originalLength - clip.startOffset;
                       }
                     }),
@@ -3875,8 +6891,11 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                           (clip.length / snapResolution).round() *
                               snapResolution,
                         );
-                        if (clip.length >
-                            clip.originalLength - clip.startOffset) {
+                        final bool allowExtendLoop =
+                            clip is AudioClip && clip.isLooped;
+                        if (!allowExtendLoop &&
+                            clip.length >
+                                clip.originalLength - clip.startOffset) {
                           clip.length = clip.originalLength - clip.startOffset;
                         }
                       }
@@ -3906,150 +6925,308 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     );
   }
 
+  Future<void> _showAddMarkerDialog(double pos) async {
+    final ctrl = TextEditingController(text: 'Section');
+    int pickedColor = 0xFF00E5FF;
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) => AlertDialog(
+          backgroundColor: panelDark,
+          title: Text('Add Arrangement Marker', style: TextStyle(color: textMain)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: ctrl,
+                autofocus: true,
+                style: TextStyle(color: textMain),
+                decoration: InputDecoration(
+                  hintText: 'Intro, Verse, Chorus, Drop...',
+                  filled: true,
+                  fillColor: bgDark,
+                ),
+              ),
+              SizedBox(height: 10),
+              Wrap(
+                spacing: 6,
+                children: ['Intro', 'Verse', 'Chorus', 'Bridge', 'Drop', 'Outro']
+                    .map(
+                      (preset) => ActionChip(
+                        label: Text(preset, style: TextStyle(fontSize: 11)),
+                        onPressed: () => ctrl.text = preset,
+                      ),
+                    )
+                    .toList(),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                final label = ctrl.text.trim().isEmpty ? 'Marker' : ctrl.text.trim();
+                _saveState();
+                setState(() {
+                  songMarkers.add(
+                    SongMarker(
+                      id: UniqueKey().toString(),
+                      label: label,
+                      position: pos,
+                      colorValue: pickedColor,
+                    ),
+                  );
+                  songMarkers.sort((a, b) => a.position.compareTo(b.position));
+                });
+                Navigator.pop(ctx);
+              },
+              child: Text('Add', style: TextStyle(color: lavenderAccent)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTimelineMinimap() {
+    const double totalTimelineUnits = 2000.0;
+    return Container(
+      height: 22,
+      decoration: BoxDecoration(
+        color: bgDark,
+        border: Border(bottom: BorderSide(color: borderMain)),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final mapW = max(1.0, constraints.maxWidth);
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapDown: (d) {
+              final targetPos =
+                  (d.localPosition.dx / mapW) * totalTimelineUnits;
+              setState(() => playheadPosition = targetPos.clamp(0.0, 2000.0));
+              if (_horizontalScrollController.hasClients) {
+                final viewW = mapW;
+                _horizontalScrollController.jumpTo(
+                  (playheadPosition * _zoomX - viewW * 0.35).clamp(
+                    0.0,
+                    _horizontalScrollController.position.maxScrollExtent,
+                  ),
+                );
+              }
+            },
+            onHorizontalDragUpdate: (d) {
+              final targetPos =
+                  (d.localPosition.dx / mapW) * totalTimelineUnits;
+              setState(() => playheadPosition = targetPos.clamp(0.0, 2000.0));
+            },
+            child: Stack(
+              children: [
+                for (int ti = 0; ti < tracks.length; ti++)
+                  for (final c in trackClips[tracks[ti].id] ?? const <DawClip>[])
+                    Positioned(
+                      left: (c.start / totalTimelineUnits) * mapW,
+                      width: max(2.0, (c.length / totalTimelineUnits) * mapW),
+                      top: tracks.isEmpty
+                          ? 2
+                          : 2.0 + (ti / max(1, tracks.length)) * 18.0,
+                      height: max(2.0, 16.0 / max(1, tracks.length)),
+                      child: Container(
+                        color: c.color.withValues(alpha: 0.75),
+                      ),
+                    ),
+                Positioned(
+                  left: (playheadPosition / totalTimelineUnits) * mapW,
+                  top: 0,
+                  bottom: 0,
+                  width: 2,
+                  child: Container(color: Colors.redAccent),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   Widget _buildTimeline() {
     return Expanded(
-      child: Container(
-        color: bgDark,
-        child: SingleChildScrollView(
-          controller: _horizontalScrollController,
-          scrollDirection: Axis.horizontal,
-          child: SizedBox(
-            width: max(MediaQuery.of(context).size.width, 2000.0 * _zoomX),
-            child: Column(
-              children: [
-                Container(
-                  height: 40,
-                  color: panelDark,
-                  width: double.infinity,
-                  child: Stack(
-                    clipBehavior: Clip.none,
+      child: Column(
+        children: [
+          _buildTimelineMinimap(),
+          Expanded(
+            child: Container(
+              color: bgDark,
+              child: SingleChildScrollView(
+                controller: _horizontalScrollController,
+                scrollDirection: Axis.horizontal,
+                child: SizedBox(
+                  width: max(MediaQuery.of(context).size.width, 2000.0 * _zoomX),
+                  child: Column(
                     children: [
-                      GestureDetector(
-                        onTapDown: (d) => setState(() {
-                          playheadPosition = (d.localPosition.dx / _zoomX)
-                              .clamp(0.0, 2000.0);
-                          if (snapToGrid) {
-                            playheadPosition =
-                                (playheadPosition / snapResolution).round() *
-                                snapResolution;
-                          }
-                        }),
-                        onPanUpdate: (d) => setState(
-                          () => playheadPosition =
-                              (playheadPosition + (d.delta.dx / _zoomX)).clamp(
-                                0.0,
-                                2000.0,
+                      Container(
+                        height: 40,
+                        color: panelDark,
+                        width: double.infinity,
+                        child: Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            GestureDetector(
+                              onTapDown: (d) => setState(() {
+                                playheadPosition = (d.localPosition.dx / _zoomX)
+                                    .clamp(0.0, 2000.0);
+                                if (snapToGrid) {
+                                  playheadPosition =
+                                      (playheadPosition / snapResolution)
+                                          .round() *
+                                      snapResolution;
+                                }
+                              }),
+                              onDoubleTapDown: (d) {
+                                double pos = (d.localPosition.dx / _zoomX)
+                                    .clamp(0.0, 2000.0);
+                                if (snapToGrid) {
+                                  pos = (pos / snapResolution).round() *
+                                      snapResolution;
+                                }
+                                _showAddMarkerDialog(pos);
+                              },
+                              onSecondaryTapUp: (d) {
+                                double pos = (d.localPosition.dx / _zoomX)
+                                    .clamp(0.0, 2000.0);
+                                if (snapToGrid) {
+                                  pos = (pos / snapResolution).round() *
+                                      snapResolution;
+                                }
+                                final RenderBox overlay = Overlay.of(context)
+                                    .context
+                                    .findRenderObject() as RenderBox;
+                                showMenu<String>(
+                                  context: context,
+                                  position: RelativeRect.fromRect(
+                                    d.globalPosition & Size(40, 40),
+                                    Offset.zero & overlay.size,
+                                  ),
+                                  items: [
+                                    PopupMenuItem(
+                                      value: 'add_marker',
+                                      child: Text('Add Marker Here'),
+                                    ),
+                                    if (songMarkers.isNotEmpty)
+                                      PopupMenuDivider(),
+                                    ...songMarkers.map(
+                                      (m) => PopupMenuItem(
+                                        value: 'jump_${m.id}',
+                                        child: Text('Jump to: ${m.label}'),
+                                      ),
+                                    ),
+                                    if (songMarkers.isNotEmpty)
+                                      PopupMenuDivider(),
+                                    if (songMarkers.isNotEmpty)
+                                      PopupMenuItem(
+                                        value: 'clear_markers',
+                                        child: Text(
+                                          'Clear All Markers',
+                                          style: TextStyle(color: Colors.red),
+                                        ),
+                                      ),
+                                  ],
+                                ).then((val) {
+                                  if (val == 'add_marker') {
+                                    _showAddMarkerDialog(pos);
+                                  } else if (val == 'clear_markers') {
+                                    _saveState();
+                                    setState(() => songMarkers.clear());
+                                  } else if (val != null &&
+                                      val.startsWith('jump_')) {
+                                    final id = val.substring(5);
+                                    final m = songMarkers
+                                        .where((x) => x.id == id)
+                                        .firstOrNull;
+                                    if (m != null) {
+                                      setState(
+                                        () => playheadPosition = m.position,
+                                      );
+                                    }
+                                  }
+                                });
+                              },
+                              onPanUpdate: (d) => setState(
+                                () => playheadPosition =
+                                    (playheadPosition + (d.delta.dx / _zoomX))
+                                        .clamp(0.0, 2000.0),
                               ),
-                        ),
-                        onPanEnd: (d) => setState(() {
-                          if (snapToGrid) {
-                            playheadPosition =
-                                (playheadPosition / snapResolution).round() *
-                                snapResolution;
-                          }
-                        }),
-                        child: CustomPaint(
-                          painter: RulerPainter(
-                            zoomX: _zoomX,
-                            bpm: bpm,
-                            timeSigTop: timeSigTop,
-                          ),
-                          size: Size(double.infinity, 40),
-                        ),
-                      ),
-                      if (isLooping)
-                        Positioned(
-                          left: loopStart * _zoomX,
-                          width: (loopEnd - loopStart) * _zoomX,
-                          top: 0,
-                          bottom: 0,
-                          child: IgnorePointer(
-                            child: Container(
-                              color: lavenderAccent.withOpacity(0.2),
-                            ),
-                          ),
-                        ),
-                      Positioned(
-                        left: loopStart * _zoomX,
-                        width: max(10.0, (loopEnd - loopStart) * _zoomX),
-                        top: 0,
-                        height: 6,
-                        child: GestureDetector(
-                          onTap: () => setState(() => isLooping = !isLooping),
-                          child: Container(
-                            color: isLooping
-                                ? lavenderAccent
-                                : Colors.grey.withOpacity(0.5),
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        left: (loopStart * _zoomX) - 5,
-                        top: 0,
-                        width: 10,
-                        height: 10,
-                        child: GestureDetector(
-                          onPanUpdate: (d) => setState(() {
-                            loopStart += (d.delta.dx / _zoomX);
-                            if (loopStart < 0) loopStart = 0;
-                          }),
-                          onPanEnd: (d) => setState(() {
-                            if (snapToGrid) {
-                              loopStart =
-                                  (loopStart / snapResolution).round() *
-                                  snapResolution;
-                            }
-                          }),
-                          child: Container(
-                            color: Colors.transparent,
-                            child: Center(
-                              child: Container(
-                                width: 2,
-                                height: 10,
-                                color: textMain,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        left: (loopEnd * _zoomX) - 5,
-                        top: 0,
-                        width: 10,
-                        height: 10,
-                        child: GestureDetector(
-                          supportedDevices: {
-                            PointerDeviceKind.mouse,
-                            PointerDeviceKind.touch,
-                            PointerDeviceKind.stylus,
-                          },
-                          onPanUpdate: (d) => setState(() {
-                            loopEnd += (d.delta.dx / _zoomX);
-                            if (loopEnd <= loopStart) loopEnd = loopStart + 10;
-                          }),
-                          onPanEnd: (d) => setState(() {
-                            if (snapToGrid) {
-                              loopEnd = max(
-                                loopStart + snapResolution,
-                                (loopEnd / snapResolution).round() *
-                                    snapResolution,
-                              );
-                            }
-                          }),
-                          child: Container(
-                            color: Colors.transparent,
-                            child: Center(
-                              child: Container(
-                                width: 2,
-                                height: 10,
-                                color: textMain,
+                              onPanEnd: (d) => setState(() {
+                                if (snapToGrid) {
+                                  playheadPosition =
+                                      (playheadPosition / snapResolution)
+                                          .round() *
+                                      snapResolution;
+                                }
+                              }),
+                              child: CustomPaint(
+                                painter: RulerPainter(
+                                  zoomX: _zoomX,
+                                  bpm: bpm,
+                                  timeSigTop: timeSigTop,
+                                  markers: songMarkers,
+                                  tempoMarkers: tempoMarkers,
+                                ),
+                                size: Size(double.infinity, 40),
                               ),
                             ),
-                          ),
+                      Positioned.fill(
+                        child: TimelineLoopBar(
+                          loopStart: loopStart,
+                          loopEnd: loopEnd,
+                          isLooping: isLooping,
+                          zoomX: _zoomX,
+                          beatWidth: beatWidth,
+                          snapToGrid: snapToGrid,
+                          snapResolution: snapResolution,
+                          accentColor: lavenderAccent,
+                          handleColor: textMain,
+                          onDragStart: _saveState,
+                          onToggleLoop: () =>
+                              setState(() => isLooping = !isLooping),
+                          onLoopRangeChanged: (newStart, newEnd) =>
+                              setState(() {
+                                loopStart = newStart;
+                                loopEnd = newEnd;
+                              }),
                         ),
                       ),
                     ],
                   ),
+                ),
+                TempoSignatureLane(
+                  baseBpm: bpm.toDouble(),
+                  baseNum: timeSigTop,
+                  baseDen: timeSigBottom,
+                  markers: tempoMarkers,
+                  zoomX: _zoomX,
+                  snapResolution: snapResolution,
+                  snapToGrid: snapToGrid,
+                  onAddOrUpdateMarker: (m) {
+                    _saveState();
+                    setState(() {
+                      tempoMarkers.removeWhere((e) => e.id == m.id);
+                      tempoMarkers.add(m);
+                      tempoMarkers.sort(
+                        (a, b) => a.position.compareTo(b.position),
+                      );
+                    });
+                  },
+                  onDeleteMarker: (id) {
+                    _saveState();
+                    setState(() {
+                      tempoMarkers.removeWhere((e) => e.id == id);
+                    });
+                  },
                 ),
                 Expanded(
                   child: Stack(
@@ -4060,7 +7237,23 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                         itemCount: tracks.length,
                         itemBuilder: (context, index) {
                           final track = tracks[index];
-                          return GestureDetector(
+                          if (!_isTrackVisibleInArrange(track)) {
+                            return const SizedBox.shrink();
+                          }
+                          return Builder(
+                            builder: (laneCtx) => DragTarget<SampleBrowserItem>(
+                              onAcceptWithDetails: (details) {
+                                final box = laneCtx.findRenderObject() as RenderBox?;
+                                final localX = box != null
+                                    ? box.globalToLocal(details.offset).dx
+                                    : playheadPosition * _zoomX;
+                                _addBrowserItemToTrack(
+                                  details.data,
+                                  targetTrack: track,
+                                  startPos: (localX / _zoomX).clamp(0.0, 2000.0),
+                                );
+                              },
+                              builder: (ctx, cand, rej) => GestureDetector(
                             onTapDown: (d) => setState(() {
                               selectedClip = null;
                               multiSelectedClips.clear();
@@ -4113,7 +7306,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                                     id: UniqueKey().toString(),
                                     start: start,
                                     length: beatWidth * timeSigTop,
-                                    color: lavenderAccent,
+                                    color: track.color,
                                   );
                                   if (!trackClips.containsKey(track.id)) {
                                     trackClips[track.id] = [];
@@ -4127,6 +7320,9 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                             child: Container(
                               height: track.showAutomation ? 140 : 100,
                               decoration: BoxDecoration(
+                                color: track.type == TrackType.group
+                                    ? panelDark.withValues(alpha: 0.45)
+                                    : null,
                                 border: Border(
                                   bottom: BorderSide(
                                     color: panelLight,
@@ -4196,161 +7392,23 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                                     ),
                                   if (track.showAutomation)
                                     Positioned.fill(
-                                      child: GestureDetector(
-                                        onTapDown: (d) {
-                                          double time =
-                                              d.localPosition.dx / _zoomX;
-                                          double val =
-                                              1.0 -
-                                              (d.localPosition.dy / 140.0);
-                                          var list =
-                                              track.automation[track
-                                                  .currentAutomationParam] ??
-                                              [];
-                                          for (var p in list) {
-                                            double px = p.time * _zoomX;
-                                            double py = (1.0 - p.value) * 140.0;
-                                            double dist = sqrt(
-                                              pow(px - d.localPosition.dx, 2) +
-                                                  pow(
-                                                    py - d.localPosition.dy,
-                                                    2,
-                                                  ),
-                                            );
-                                            if (dist < 30.0) return;
-                                          }
-                                          _saveState();
-                                          setState(() {
-                                            if (!track.automation.containsKey(
-                                              track.currentAutomationParam,
-                                            )) {
-                                              track.automation[track
-                                                      .currentAutomationParam] =
-                                                  [];
-                                            }
-                                            track
-                                                .automation[track
-                                                    .currentAutomationParam]!
-                                                .add(
-                                                  AutomationPoint(
-                                                    time,
-                                                    val.clamp(0.0, 1.0),
-                                                  ),
-                                                );
-                                            track
-                                                .automation[track
-                                                    .currentAutomationParam]!
-                                                .sort(
-                                                  (a, b) =>
-                                                      a.time.compareTo(b.time),
-                                                );
-                                          });
-                                        },
-                                        onPanStart: (d) {
-                                          var list =
-                                              track.automation[track
-                                                  .currentAutomationParam] ??
-                                              [];
-                                          int closest = -1;
-                                          double minDist = 30.0;
-                                          for (
-                                            int i = 0;
-                                            i < list.length;
-                                            i++
-                                          ) {
-                                            double px = list[i].time * _zoomX;
-                                            double py =
-                                                (1.0 - list[i].value) * 140.0;
-                                            double dist = sqrt(
-                                              pow(px - d.localPosition.dx, 2) +
-                                                  pow(
-                                                    py - d.localPosition.dy,
-                                                    2,
-                                                  ),
-                                            );
-                                            if (dist < minDist) {
-                                              minDist = dist;
-                                              closest = i;
-                                            }
-                                          }
-                                          if (closest != -1) {
-                                            _saveState();
-                                            setState(() {
-                                              _draggingAutoPointIndex = closest;
-                                              _draggingAutoTrackId = track.id;
-                                            });
-                                          }
-                                        },
-                                        onPanUpdate: (d) {
-                                          if (_draggingAutoTrackId ==
-                                                  track.id &&
-                                              _draggingAutoPointIndex != null) {
-                                            setState(() {
-                                              var list =
-                                                  track.automation[track
-                                                      .currentAutomationParam]!;
-                                              double newTime =
-                                                  list[_draggingAutoPointIndex!]
-                                                      .time +
-                                                  (d.delta.dx / _zoomX);
-                                              double minTime =
-                                                  _draggingAutoPointIndex! > 0
-                                                  ? list[_draggingAutoPointIndex! -
-                                                                1]
-                                                            .time +
-                                                        0.1
-                                                  : 0.0;
-                                              double maxTime =
-                                                  _draggingAutoPointIndex! <
-                                                      list.length - 1
-                                                  ? list[_draggingAutoPointIndex! +
-                                                                1]
-                                                            .time -
-                                                        0.1
-                                                  : 2000.0;
-                                              list[_draggingAutoPointIndex!]
-                                                  .time = newTime.clamp(
-                                                minTime,
-                                                maxTime,
-                                              );
-
-                                              double newVal =
-                                                  list[_draggingAutoPointIndex!]
-                                                      .value -
-                                                  (d.delta.dy / 140.0);
-                                              list[_draggingAutoPointIndex!]
-                                                  .value = newVal.clamp(
-                                                0.0,
-                                                1.0,
-                                              );
-                                            });
-                                          }
-                                        },
-                                        onPanEnd: (d) => setState(() {
-                                          _draggingAutoPointIndex = null;
-                                          _draggingAutoTrackId = null;
-                                        }),
-                                        child: Container(
-                                          color: Colors.cyanAccent.withAlpha(
-                                            20,
-                                          ),
-                                          child: CustomPaint(
-                                            painter: AutomationPainter(
-                                              points:
-                                                  track.automation[track
-                                                      .currentAutomationParam] ??
-                                                  [],
-                                              zoomX: _zoomX,
-                                            ),
-                                          ),
-                                        ),
+                                      child: AutomationLaneOverlay(
+                                        track: track,
+                                        laneHeight: 140.0,
+                                        zoomX: _zoomX,
+                                        snapResolution: snapResolution,
+                                        snapToGrid: snapToGrid,
+                                        onSaveState: _saveState,
+                                        onChanged: () => setState(() {}),
                                       ),
                                     ),
                                 ],
                               ),
                             ),
-                          );
-                        },
+                          ),
+                        ),
+                      );
+                    },
                       ),
                       Positioned(
                         left: playheadPosition * _zoomX - 10,
@@ -4378,6 +7436,9 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           ),
         ),
       ),
+        ),
+      ],
+    ),
     );
   }
 
@@ -4424,8 +7485,14 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       } else {
         effect = DawEffect('Unknown', {});
       }
-      tracks[selectedTrackIndex!].effectsChain.add(effect);
-      _updateTrackFilters(tracks[selectedTrackIndex!]);
+      if (_isMasterFxSelected) {
+        masterEffectsChain.add(effect);
+        _syncMasterAndAuxFilters();
+      } else if (selectedTrackIndex != null &&
+          selectedTrackIndex! < tracks.length) {
+        tracks[selectedTrackIndex!].effectsChain.add(effect);
+        _updateTrackFilters(tracks[selectedTrackIndex!]);
+      }
     });
   }
 
@@ -4625,8 +7692,12 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   }
 
   Widget _buildBottomPanel() {
+    final maxH = max(240.0, MediaQuery.of(context).size.height - 140.0);
+    final panelH = !isBottomPanelExpanded
+        ? 54.0
+        : (_isBottomPanelMaximized ? maxH : _bottomPanelHeight.clamp(100.0, maxH));
     return Container(
-      height: isBottomPanelExpanded ? _bottomPanelHeight : 54,
+      height: panelH,
       decoration: BoxDecoration(
         color: panelDark,
         border: Border(top: BorderSide(color: textMuted, width: 2)),
@@ -4638,6 +7709,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
             child: GestureDetector(
               onVerticalDragUpdate: (details) {
                 setState(() {
+                  _isBottomPanelMaximized = false;
                   _bottomPanelHeight -= details.delta.dy;
                   if (_bottomPanelHeight < 100) _bottomPanelHeight = 100;
                   if (_bottomPanelHeight > 800) _bottomPanelHeight = 800;
@@ -4668,11 +7740,34 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                       if (tracks[selectedTrackIndex!].type == TrackType.midi ||
                           tracks[selectedTrackIndex!].type == TrackType.sampler)
                         _buildPanelTab('Editor', 0),
+                      if (tracks[selectedTrackIndex!].type == TrackType.audio ||
+                          selectedClip is AudioClip)
+                        _buildPanelTab('Audio Editor', 4),
                       _buildPanelTab('Mixer', 1),
                       _buildPanelTab('Effects', 2),
                       if (tracks[selectedTrackIndex!].type == TrackType.sampler)
                         _buildPanelTab('Sampler', 3),
                       Spacer(),
+                      IconButton(
+                        tooltip: _isBottomPanelMaximized
+                            ? 'Restore Console Size'
+                            : 'Maximize Dockable Console',
+                        icon: Icon(
+                          _isBottomPanelMaximized
+                              ? Icons.fullscreen_exit
+                              : Icons.fullscreen,
+                          size: 18,
+                          color: _isBottomPanelMaximized
+                              ? lavenderAccent
+                              : textMuted,
+                        ),
+                        onPressed: () => setState(() {
+                          if (!isBottomPanelExpanded) {
+                            isBottomPanelExpanded = true;
+                          }
+                          _isBottomPanelMaximized = !_isBottomPanelMaximized;
+                        }),
+                      ),
                       IconButton(
                         icon: Icon(
                           isBottomPanelExpanded
@@ -4680,9 +7775,12 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                               : Icons.keyboard_arrow_up,
                           color: textMuted,
                         ),
-                        onPressed: () => setState(
-                          () => isBottomPanelExpanded = !isBottomPanelExpanded,
-                        ),
+                        onPressed: () => setState(() {
+                          isBottomPanelExpanded = !isBottomPanelExpanded;
+                          if (!isBottomPanelExpanded) {
+                            _isBottomPanelMaximized = false;
+                          }
+                        }),
                       ),
                       SizedBox(width: 8),
                     ],
@@ -4724,21 +7822,88 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     );
   }
 
+  void _applyEffectChainPreset(Track track, String presetName) {
+    _saveState();
+    setState(() {
+      if (presetName == 'Clear Chain') {
+        track.effectsChain.clear();
+      } else if (presetName == 'Crunch Guitar') {
+        track.effectsChain = [
+          DawEffect('EQ', {'Low': 0.45, 'Mid': 0.65, 'High': 0.60}),
+          DawEffect('TubeScreamer', {
+            'Drive': 0.62,
+            'Tone': 0.55,
+            'Level': 0.70,
+          }),
+          DawEffect('GuitarAmp', {'Gain': 0.65, 'Reverb': 0.35}),
+        ];
+      } else if (presetName == 'Vocal Polish') {
+        track.effectsChain = [
+          DawEffect('EQ', {'Low': 0.35, 'Mid': 0.55, 'High': 0.72}),
+          DawEffect('Compressor', {'Thresh': 0.45, 'Ratio': 0.55}),
+          DawEffect('Reverb', {'Mix': 0.25, 'Size': 0.55}),
+        ];
+      } else if (presetName == 'Lo-Fi Tape') {
+        track.effectsChain = [
+          DawEffect('EQ', {'Low': 0.55, 'Mid': 0.60, 'High': 0.25}),
+          DawEffect('Echo', {'Mix': 0.25, 'Delay': 0.35, 'Decay': 0.40}),
+          DawEffect('Compressor', {'Thresh': 0.35, 'Ratio': 0.70}),
+        ];
+      } else if (presetName == 'Wide Ambient') {
+        track.effectsChain = [
+          DawEffect('Reverb', {'Mix': 0.65, 'Size': 0.85}),
+          DawEffect('Echo', {'Mix': 0.45, 'Delay': 0.50, 'Decay': 0.65}),
+        ];
+      }
+    });
+    if (_isMasterFxSelected) {
+      masterEffectsChain = track.effectsChain;
+      _syncMasterAndAuxFilters();
+    } else {
+      _updateTrackFilters(track);
+    }
+  }
+
   Widget _buildBottomPanelContent() {
     switch (selectedBottomTab) {
       case 0:
         if (selectedClip is MidiClip) {
+          final midiClip = selectedClip as MidiClip;
           Track? t;
           for (var tr in tracks) {
-            if (trackClips[tr.id]?.contains(selectedClip) == true) t = tr;
+            if (trackClips[tr.id]?.contains(midiClip) == true) t = tr;
+          }
+          // Collect ghost notes from other MIDI tracks overlapping this clip window
+          final List<MidiNote> ghostNotes = [];
+          final clipEnd = midiClip.start + midiClip.length;
+          for (final otherTrack in tracks) {
+            if (otherTrack == t) continue;
+            for (final c in trackClips[otherTrack.id] ?? const <DawClip>[]) {
+              if (c is MidiClip && c.start < clipEnd && (c.start + c.length) > midiClip.start) {
+                for (final n in c.notes) {
+                  final worldStart = n.start - c.startOffset + c.start;
+                  final localStart = worldStart - midiClip.start + midiClip.startOffset;
+                  if (localStart + n.length > 0 && localStart < midiClip.length) {
+                    ghostNotes.add(
+                      MidiNote(
+                        pitch: n.pitch,
+                        start: localStart,
+                        length: n.length,
+                        velocity: n.velocity,
+                      ),
+                    );
+                  }
+                }
+              }
+            }
           }
           return LayoutBuilder(
             builder: (context, constraints) {
               double autoZoom =
-                  (constraints.maxWidth - 60) / selectedClip!.length;
+                  (constraints.maxWidth - 60) / midiClip.length;
               if (autoZoom <= 0) autoZoom = 1.0;
               return MidiEditorWidget(
-                clip: selectedClip as MidiClip,
+                clip: midiClip,
                 track: t,
                 snapToGrid: snapToGrid,
                 snapResolution: snapResolution,
@@ -4746,10 +7911,22 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                 bpm: bpm,
                 timeSigTop: timeSigTop,
                 selectedMidiNotes: selectedMidiNotes,
+                ghostNotes: ghostNotes,
+                grooveAudioClips: tracks
+                    .expand((tr) => trackClips[tr.id] ?? const <DawClip>[])
+                    .whereType<AudioClip>()
+                    .toList(),
                 onSelectionChanged: (notes) =>
                     setState(() => selectedMidiNotes = notes),
                 onChangeStart: _saveState,
-                onNotesChanged: () => setState(() {}),
+                onNotesChanged: () {
+                  _syncLinkedMidiClips(midiClip);
+                  setState(() {});
+                },
+                onSynthSettingsChanged: () {
+                  if (t != null) _updateTrackFilters(t);
+                  setState(() {});
+                },
                 onZoomIn: () => setState(() => _midiZoomMultiplier += 0.2),
                 onZoomOut: () => setState(
                   () =>
@@ -4762,6 +7939,8 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                 onPaste: _paste,
                 onInstrumentDialogRequested: () => _showInstrumentDialog(t!),
                 onMidiInputDialogRequested: () => _showMidiInputDialog(t!),
+                onImportMidi: () => _importMidiFile(targetTrack: t),
+                onExportMidi: _exportSelectedMidiClip,
               );
             },
           );
@@ -4774,86 +7953,155 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           );
         }
       case 1:
-        return ListView.builder(
-          scrollDirection: Axis.horizontal,
-          itemCount: tracks.length,
-          itemBuilder: (context, index) {
-            final t = tracks[index];
-            return Container(
-              width: 100,
-              decoration: BoxDecoration(
-                border: Border(right: BorderSide(color: panelLight)),
-              ),
-              child: Column(
-                children: [
-                  SizedBox(height: 16),
-                  Text(
-                    t.name,
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  Spacer(),
-                  PanDial(
-                    onChangeStart: _saveState,
-                    pan: t.pan,
-                    onChanged: (v) => setState(() {
-                      t.pan = v;
-                      for (var c in trackClips[t.id] ?? []) {
-                        if (c is AudioClip && c.currentHandle != null) {
-                          SoLoud.instance.setPan(c.currentHandle!, v);
-                        }
-                      }
-                      _syncTrackMonitoringHandles();
-                    }),
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    'Pan L/R',
-                    style: TextStyle(fontSize: 10, color: textMuted),
-                  ),
-                  SizedBox(height: 8),
-                  Expanded(
-                    flex: 3,
-                    child: RotatedBox(
-                      quarterTurns: 3,
-                      child: SliderTheme(
-                        data: SliderThemeData(
-                          thumbShape: RoundSliderThumbShape(
-                            enabledThumbRadius: 6,
-                          ),
-                          overlayShape: SliderComponentShape.noOverlay,
-                        ),
-                        child: Slider(
-                          onChangeStart: (_) => _saveState(),
-                          value: t.volume,
-                          activeColor: lavenderAccent,
-                          onChanged: (v) => setState(() {
-                            t.volume = v;
-                            for (var c in trackClips[t.id] ?? []) {
-                              if (c is AudioClip && c.currentHandle != null) {
-                                SoLoud.instance.setVolume(c.currentHandle!, v);
-                              }
-                            }
-                            _syncTrackMonitoringHandles();
-                          }),
-                        ),
-                      ),
-                    ),
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    (t.volume * 100).toInt().toString(),
-                    style: TextStyle(fontSize: 10),
-                  ),
-                  SizedBox(height: 8),
-                ],
-              ),
-            );
+        return MixerConsoleView(
+          tracks: tracks,
+          trackLevels: _trackLevels,
+          trackPeaks: _trackPeaks,
+          auxReverbMix: auxReverbMix,
+          auxDelayMix: auxDelayMix,
+          auxRevLevel: _auxRevLevel,
+          auxDlyLevel: _auxDlyLevel,
+          auxReverbSolo: auxReverbSolo,
+          auxDelaySolo: auxDelaySolo,
+          masterVolume: masterVolume,
+          masterLimiter: masterLimiter,
+          masterLevel: _masterLevel,
+          masterPeak: _masterPeak,
+          masterVizSamples: _masterVizSamples,
+          masterLufs: _masterLufs,
+          masterLufsTarget: masterLufsTarget,
+          stereoCorrelation: _stereoCorrelation,
+          referenceTrackName: _referenceTrackPath != null
+              ? p.basename(_referenceTrackPath!)
+              : null,
+          isAuditioningReference: _isAuditioningReference,
+          midiLearnActive: _midiLearnActive,
+          midiLearnTarget: _midiLearnTarget,
+          onSaveState: _saveState,
+          onTrackVolumeChanged: (t, v) {
+            setState(() => t.volume = v);
+            if (_isSoloudReady) {
+              for (final c in trackClips[t.id] ?? []) {
+                if (c is AudioClip && c.currentHandle != null) {
+                  try {
+                    SoLoud.instance.setVolume(
+                      c.currentHandle!,
+                      (_effectiveTrackVolume(t) *
+                              _computeClipEnvelope(c, playheadPosition, track: t))
+                          .clamp(0.0, 2.5),
+                    );
+                  } catch (_) {}
+                }
+              }
+            }
+            _syncTrackMonitoringHandles();
+          },
+          onTrackPanChanged: (t, v) {
+            setState(() => t.pan = v);
+            if (_isSoloudReady) {
+              for (final c in trackClips[t.id] ?? []) {
+                if (c is AudioClip && c.currentHandle != null) {
+                  try {
+                    SoLoud.instance.setPan(c.currentHandle!, v.clamp(-1.0, 1.0));
+                  } catch (_) {}
+                }
+              }
+            }
+            _syncTrackMonitoringHandles();
+          },
+          onTrackRevSendChanged: (t, v) {
+            setState(() => t.reverbSend = v);
+            if (_isSoloudReady) {
+              for (final c in trackClips[t.id] ?? []) {
+                if (c is AudioClip && c.reverbSendHandle != null) {
+                  try {
+                    SoLoud.instance.setVolume(
+                      c.reverbSendHandle!,
+                      v * (t.reverbPreFader ? 1.0 : t.volume) * c.gain,
+                    );
+                  } catch (_) {}
+                }
+              }
+            }
+          },
+          onTrackDlySendChanged: (t, v) {
+            setState(() => t.delaySend = v);
+            if (_isSoloudReady) {
+              for (final c in trackClips[t.id] ?? []) {
+                if (c is AudioClip && c.delaySendHandle != null) {
+                  try {
+                    SoLoud.instance.setVolume(
+                      c.delaySendHandle!,
+                      v * (t.delayPreFader ? 1.0 : t.volume) * c.gain,
+                    );
+                  } catch (_) {}
+                }
+              }
+            }
+          },
+          onToggleReverbPreFader: (t) {
+            _saveState();
+            setState(() => t.reverbPreFader = !t.reverbPreFader);
+          },
+          onToggleDelayPreFader: (t) {
+            _saveState();
+            setState(() => t.delayPreFader = !t.delayPreFader);
+          },
+          onToggleMute: (t) {
+            _saveState();
+            setState(() => t.isMuted = !t.isMuted);
+            _syncTrackMonitoringHandles();
+          },
+          onToggleSolo: (t) {
+            _saveState();
+            setState(() => t.isSolo = !t.isSolo);
+            _syncTrackMonitoringHandles();
+          },
+          onAuxReverbMixChanged: (v) {
+            setState(() => auxReverbMix = v);
+            _syncMasterAndAuxFilters();
+          },
+          onAuxDelayMixChanged: (v) {
+            setState(() => auxDelayMix = v);
+            _syncMasterAndAuxFilters();
+          },
+          onToggleAuxReverbSolo: () =>
+              setState(() => auxReverbSolo = !auxReverbSolo),
+          onToggleAuxDelaySolo: () =>
+              setState(() => auxDelaySolo = !auxDelaySolo),
+          onMasterVolumeChanged: (v) {
+            setState(() => masterVolume = v);
+            _syncMasterAndAuxFilters();
+          },
+          onToggleMasterLimiter: () {
+            _saveState();
+            setState(() => masterLimiter = !masterLimiter);
+            _syncMasterAndAuxFilters();
+          },
+          onCycleLufsTarget: () {
+            setState(() {
+              if (masterLufsTarget <= -13.5) {
+                masterLufsTarget = -11.0;
+              } else if (masterLufsTarget <= -10.5) {
+                masterLufsTarget = -9.0;
+              } else {
+                masterLufsTarget = -14.0;
+              }
+            });
+          },
+          onLoadReference: _loadReferenceTrack,
+          onToggleReferenceAB: _toggleReferenceAB,
+          onMidiLearnSelect: (trackId, param) {
+            setState(() {
+              _midiLearnTarget = '$trackId:$param';
+              _midiLearnActive = true;
+            });
           },
         );
       case 2:
-        if (selectedTrackIndex == null ||
-            selectedTrackIndex! >= tracks.length) {
+        if (!_isMasterFxSelected &&
+            (selectedTrackIndex == null ||
+                selectedTrackIndex! >= tracks.length)) {
           return Center(
             child: Text(
               'No track selected',
@@ -4861,289 +8109,95 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
             ),
           );
         }
-        final track = tracks[selectedTrackIndex!];
-        return Row(
-          children: [
-            if (track.type == TrackType.audio)
-              Container(
-                width: 200,
-                color: panelDark,
-                padding: EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Input Source',
-                      style: TextStyle(
-                        color: textMuted,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12,
-                      ),
-                    ),
-                    SizedBox(height: 8),
-                    if (_inputDevices.isEmpty)
-                      Text(
-                        'No inputs found',
-                        style: TextStyle(color: textFaint, fontSize: 10),
-                      )
-                    else
-                      DropdownButton<InputDevice>(
-                        value: _selectedInputDevice,
-                        isExpanded: true,
-                        dropdownColor: bgDark,
-                        icon: Icon(Icons.mic, color: textMuted, size: 16),
-                        underline: Container(height: 1, color: lavenderAccent),
-                        style: TextStyle(color: textMain, fontSize: 12),
-                        onChanged: (InputDevice? newValue) {
-                          if (newValue != null) {
-                            setState(() => _selectedInputDevice = newValue);
-                            _restartMicCapture();
-                          }
-                        },
-                        items: _inputDevices.map<DropdownMenuItem<InputDevice>>(
-                          (InputDevice value) {
-                            return DropdownMenuItem<InputDevice>(
-                              value: value,
-                              child: Text(
-                                value.label.isNotEmpty
-                                    ? value.label
-                                    : 'Microphone ${value.id}',
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            );
-                          },
-                        ).toList(),
-                      ),
-                  ],
-                ),
-              ),
-            Expanded(
-              child: Row(
-                children: [
-                  Expanded(
-                    child: ReorderableListView(
-                      scrollDirection: Axis.horizontal,
-                      onReorder: (oldIndex, newIndex) {
-                        if (newIndex > oldIndex) newIndex -= 1;
-                        setState(() {
-                          final item = tracks[selectedTrackIndex!].effectsChain
-                              .removeAt(oldIndex);
-                          tracks[selectedTrackIndex!].effectsChain.insert(
-                            newIndex,
-                            item,
-                          );
-                          _updateTrackFilters(tracks[selectedTrackIndex!]);
-                        });
-                      },
-                      children: tracks[selectedTrackIndex!].effectsChain
-                          .asMap()
-                          .entries
-                          .map((e) {
-                            int idx = e.key;
-                            DawEffect fx = e.value;
-                            Color pedalColor = fx.name == 'EQ'
-                                ? Colors.blue[800]!
-                                : (fx.name == 'Compressor'
-                                      ? Colors.green[800]!
-                                      : (fx.name == 'TubeScreamer'
-                                            ? Colors.red[800]!
-                                            : (fx.name == 'GuitarAmp'
-                                                  ? Colors.grey[900]!
-                                                  : Colors.deepPurple[800]!)));
-                            bool isAmp = fx.name == 'GuitarAmp';
-                            return Center(
-                              key: ValueKey('${fx.name}_$idx'),
-                              child: Container(
-                                width: isAmp ? 240 : 120,
-                                height: 180,
-                                margin: EdgeInsets.all(16),
-                                decoration: BoxDecoration(
-                                  color: pedalColor,
-                                  borderRadius: BorderRadius.circular(
-                                    isAmp ? 4 : 8,
-                                  ),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: textMuted,
-                                      blurRadius: 4,
-                                      offset: Offset(2, 2),
-                                    ),
-                                  ],
-                                  border: Border.all(
-                                    color: textFaint,
-                                    width: isAmp ? 4 : 2,
-                                  ),
-                                ),
-                                child: Column(
-                                  children: [
-                                    Container(
-                                      color: textFaint,
-                                      padding: EdgeInsets.symmetric(
-                                        vertical: 4,
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          SizedBox(width: 8),
-                                          Expanded(
-                                            child: Text(
-                                              fx.name,
-                                              style: TextStyle(
-                                                fontWeight: FontWeight.bold,
-                                                fontSize: 12,
-                                                color: Colors.white,
-                                              ),
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          ),
-                                          GestureDetector(
-                                            onTap: () => setState(() {
-                                              tracks[selectedTrackIndex!]
-                                                  .effectsChain
-                                                  .removeAt(idx);
-                                              _updateTrackFilters(
-                                                tracks[selectedTrackIndex!],
-                                              );
-                                            }),
-                                            child: Icon(
-                                              Icons.close,
-                                              size: 14,
-                                              color: textMuted,
-                                            ),
-                                          ),
-                                          SizedBox(width: 4),
-                                        ],
-                                      ),
-                                    ),
-                                    Expanded(
-                                      child: Wrap(
-                                        alignment: WrapAlignment.center,
-                                        runAlignment: WrapAlignment.center,
-                                        spacing: 8,
-                                        runSpacing: 8,
-                                        children: fx.parameters.keys.map((k) {
-                                          return Column(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              PanDial(
-                                                onChangeStart: _saveState,
-                                                pan:
-                                                    fx.parameters[k]! * 2 - 1.0,
-                                                onChanged: (v) {
-                                                  setState(() {
-                                                    fx.parameters[k] =
-                                                        ((v + 1.0) / 2.0).clamp(
-                                                          0.0,
-                                                          1.0,
-                                                        );
-                                                  });
-                                                  _updateTrackFilters(
-                                                    tracks[selectedTrackIndex!],
-                                                  );
-                                                },
-                                              ),
-                                              SizedBox(height: 4),
-                                              Text(
-                                                k,
-                                                style: TextStyle(
-                                                  fontSize: 8,
-                                                  color: Colors.white,
-                                                ),
-                                              ),
-                                            ],
-                                          );
-                                        }).toList(),
-                                      ),
-                                    ),
-                                    Container(
-                                      margin: EdgeInsets.only(bottom: 12),
-                                      width: isAmp ? 80 : 20,
-                                      height: 20,
-                                      decoration: BoxDecoration(
-                                        color: isAmp
-                                            ? Colors.black87
-                                            : Colors.grey[400],
-                                        shape: isAmp
-                                            ? BoxShape.rectangle
-                                            : BoxShape.circle,
-                                        border: Border.all(
-                                          color: textMuted,
-                                          width: 2,
-                                        ),
-                                        boxShadow: [
-                                          BoxShadow(
-                                            color: textFaint,
-                                            blurRadius: 2,
-                                            offset: Offset(1, 1),
-                                          ),
-                                        ],
-                                      ),
-                                      child: isAmp
-                                          ? Row(
-                                              mainAxisAlignment:
-                                                  MainAxisAlignment.spaceEvenly,
-                                              children: [
-                                                Container(
-                                                  width: 6,
-                                                  height: 6,
-                                                  decoration: BoxDecoration(
-                                                    color: Colors.red,
-                                                    shape: BoxShape.circle,
-                                                  ),
-                                                ),
-                                              ],
-                                            )
-                                          : null,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            );
-                          })
-                          .toList(),
-                    ),
-                  ),
-                  Center(
-                    child: InkWell(
-                      onTap: _showAddEffectDialog,
-                      child: Container(
-                        margin: EdgeInsets.all(16),
-                        child: DottedBorder(
-                          options: RoundedRectDottedBorderOptions(
-                            color: textMuted,
-                            strokeWidth: 2,
-                            dashPattern: [6, 4],
-                            radius: Radius.circular(8),
-                          ),
-                          child: Container(
-                            width: 120,
-                            height: 180,
-                            decoration: BoxDecoration(
-                              color: textFaint.withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(Icons.add, color: textMuted, size: 32),
-                                SizedBox(height: 8),
-                                Text(
-                                  'Add Effect',
-                                  style: TextStyle(
-                                    color: textMuted,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
+        final fxTrack = _isMasterFxSelected
+            ? (Track(
+                id: '__master__',
+                name: 'MASTER BUS',
+                type: TrackType.group,
+                colorValue: Colors.redAccent.toARGB32(),
+              )..effectsChain = masterEffectsChain)
+            : tracks[selectedTrackIndex!];
+        void syncFx() {
+          if (_isMasterFxSelected) {
+            _syncMasterAndAuxFilters();
+          } else {
+            _updateTrackFilters(fxTrack);
+          }
+        }
+        return EffectsRackView(
+          track: fxTrack,
+          allTracks: tracks,
+          inputDevices: _inputDevices,
+          selectedInputDevice: _selectedInputDevice,
+          trackLevel: _isMasterFxSelected
+              ? _masterLevel.$1
+              : (_trackLevels[fxTrack.id]?.$1 ?? 0.0),
+          sidechainGr: _sidechainGr[fxTrack.id] ?? 0.0,
+          detectedPitch: _detectedPitch,
+          tunerEnabled: _tunerEnabled,
+          isMasterRack: _isMasterFxSelected,
+          onToggleMasterRack: () =>
+              setState(() => _isMasterFxSelected = !_isMasterFxSelected),
+          onSaveState: _saveState,
+          onInputDeviceChanged: (newValue) {
+            if (newValue != null) {
+              setState(() => _selectedInputDevice = newValue);
+              _restartMicCapture();
+            }
+          },
+          onToggleTuner: () async {
+            setState(() {
+              _tunerEnabled = !_tunerEnabled;
+              if (!_tunerEnabled) {
+                _detectedPitch = null;
+                _tunerBuffer.clear();
+              }
+            });
+            await _updateMicState();
+          },
+          onNoiseGateChanged: (v) =>
+              setState(() => fxTrack.noiseGateThreshold = v),
+          onReorderEffect: (oldIndex, newIndex) {
+            if (newIndex > oldIndex) newIndex -= 1;
+            _saveState();
+            setState(() {
+              final item = fxTrack.effectsChain.removeAt(oldIndex);
+              fxTrack.effectsChain.insert(newIndex, item);
+              syncFx();
+            });
+          },
+          onRemoveEffect: (idx) {
+            _saveState();
+            setState(() {
+              fxTrack.effectsChain.removeAt(idx);
+              syncFx();
+            });
+          },
+          onToggleBypass: (fx) {
+            _saveState();
+            setState(() {
+              fx.isBypassed = !fx.isBypassed;
+              syncFx();
+            });
+          },
+          onParamChanged: (fx, k, v) {
+            setState(() {
+              fx.parameters[k] = v;
+              syncFx();
+            });
+          },
+          onSidechainChanged: (fx, sourceId) {
+            _saveState();
+            setState(() {
+              fx.sidechainTrackId = sourceId;
+            });
+          },
+          onApplyPreset: (presetName) =>
+              _applyEffectChainPreset(fxTrack, presetName),
+          onAddEffectPressed: _showAddEffectDialog,
+          fftSpectrum: _cachedFftBins,
+          onAddExternalPluginPressed: () =>
+              _showExternalPluginBrowserDialog(fxTrack, syncFx),
         );
       case 3:
         if (selectedTrackIndex != null) {
@@ -5154,6 +8208,81 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           );
         }
         return SizedBox();
+      case 4:
+        AudioClip? targetAudioClip;
+        Track? audioOwnerTrack;
+        if (selectedClip is AudioClip) {
+          targetAudioClip = selectedClip as AudioClip;
+          for (final tr in tracks) {
+            if (trackClips[tr.id]?.contains(targetAudioClip) == true) {
+              audioOwnerTrack = tr;
+              break;
+            }
+          }
+        } else if (selectedTrackIndex != null &&
+            selectedTrackIndex! < tracks.length) {
+          audioOwnerTrack = tracks[selectedTrackIndex!];
+          final candidates = trackClips[audioOwnerTrack.id]
+              ?.whereType<AudioClip>()
+              .toList();
+          if (candidates != null && candidates.isNotEmpty) {
+            targetAudioClip = candidates.first;
+          }
+        }
+        if (targetAudioClip == null) {
+          return Center(
+            child: Text(
+              'Select or double-click an audio segment on the timeline to trim, split, fade, and process it.',
+              style: TextStyle(color: textMuted),
+            ),
+          );
+        }
+        final activeAudioClip = targetAudioClip;
+        final ownerId = audioOwnerTrack?.id ?? tracks[selectedTrackIndex!].id;
+        return AudioClipEditorWidget(
+          clip: activeAudioClip,
+          track: audioOwnerTrack,
+          bpm: bpm,
+          beatWidth: beatWidth,
+          snapToGrid: snapToGrid,
+          snapResolution: snapResolution,
+          playheadPosition: playheadPosition,
+          onPlayheadChanged: (pos) => setState(() => playheadPosition = pos),
+          onChangeStart: _saveState,
+          onClipChanged: () {
+            _ensureAudioClipProcessed(activeAudioClip);
+            if (_isSoloudReady && activeAudioClip.currentHandle != null) {
+              try {
+                final tr = audioOwnerTrack;
+                final vol = tr != null
+                    ? (_effectiveTrackVolume(tr) *
+                            _computeClipEnvelope(
+                              activeAudioClip,
+                              playheadPosition,
+                              track: tr,
+                            ))
+                        .clamp(0.0, 2.5)
+                    : activeAudioClip.gain.clamp(0.0, 2.5);
+                SoLoud.instance.setVolume(activeAudioClip.currentHandle!, vol);
+              } catch (_) {}
+            }
+            setState(() {});
+          },
+          onSplitClip: (splitPos) =>
+              _splitClipAtTimelinePos(ownerId, activeAudioClip, splitPos),
+          isPlaying: isPlaying,
+          onPlayPause: _togglePlay,
+          onNormalize: () => _normalizeAudioClip(activeAudioClip),
+          onReverse: () async {
+            _saveState();
+            await activeAudioClip.toggleReverse();
+            setState(() {});
+          },
+          onStripSilence: () => _stripSilenceAudioClip(ownerId, activeAudioClip),
+          onAutoMatchBpm: () => _autoMatchClipBpm(activeAudioClip),
+          onAudioToMidi: () => _extractMelodyFromClip(activeAudioClip),
+          onSliceToSampler: () => _sliceClipToSampler(activeAudioClip),
+        );
       default:
         return SizedBox();
     }
@@ -5169,6 +8298,44 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         if (FocusManager.instance.primaryFocus?.context?.widget
             is EditableText) {
           return KeyEventResult.ignored;
+        }
+        if (isMusicalTypingEnabled &&
+            !HardwareKeyboard.instance.isControlPressed) {
+          if (event is KeyDownEvent) {
+            if (event.logicalKey == LogicalKeyboardKey.keyZ) {
+              setState(() => _qwertyOctave = max(1, _qwertyOctave - 1));
+              return KeyEventResult.handled;
+            }
+            if (event.logicalKey == LogicalKeyboardKey.keyX) {
+              setState(() => _qwertyOctave = min(7, _qwertyOctave + 1));
+              return KeyEventResult.handled;
+            }
+            if (event.logicalKey == LogicalKeyboardKey.keyC) {
+              setState(() => _qwertyVelocity = max(20, _qwertyVelocity - 15));
+              return KeyEventResult.handled;
+            }
+            if (event.logicalKey == LogicalKeyboardKey.keyV) {
+              setState(() => _qwertyVelocity = min(127, _qwertyVelocity + 15));
+              return KeyEventResult.handled;
+            }
+            final offset = kQwertyNoteOffsets[event.logicalKey];
+            if (offset != null) {
+              final midi = ((_qwertyOctave + 1) * 12 + offset).clamp(0, 127);
+              if (!_qwertyActiveNotes.contains(midi)) {
+                setState(() => _qwertyActiveNotes.add(midi));
+                _handleMidiNoteOn(midi, _qwertyVelocity, null);
+              }
+              return KeyEventResult.handled;
+            }
+          } else if (event is KeyUpEvent) {
+            final offset = kQwertyNoteOffsets[event.logicalKey];
+            if (offset != null) {
+              final midi = ((_qwertyOctave + 1) * 12 + offset).clamp(0, 127);
+              setState(() => _qwertyActiveNotes.remove(midi));
+              _handleMidiNoteOff(midi);
+              return KeyEventResult.handled;
+            }
+          }
         }
         if (event is KeyDownEvent) {
           if (HardwareKeyboard.instance.isControlPressed) {
@@ -5262,8 +8429,80 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           children: [
             _buildTopBar(),
             Expanded(
-              child: Row(children: [_buildTrackHeaders(), _buildTimeline()]),
+              child: _isSessionView
+                  ? SessionLauncherView(
+                      tracks: tracks,
+                      trackClips: trackClips,
+                      playheadPosition: playheadPosition,
+                      isPlaying: isPlaying,
+                      activeSessionClipIds: _activeSessionClipIds,
+                      queuedSessionClipIds: _queuedSessionClipIds,
+                      onTriggerClip: _triggerSessionClip,
+                      onTriggerScene: _triggerSessionScene,
+                      onStopTrack: _stopSessionTrack,
+                      onToggleMute: (t) {
+                        _saveState();
+                        setState(() => t.isMuted = !t.isMuted);
+                        _syncTrackMonitoringHandles();
+                      },
+                      onToggleSolo: (t) {
+                        _saveState();
+                        setState(() => t.isSolo = !t.isSolo);
+                        _syncTrackMonitoringHandles();
+                      },
+                      onOpenClipEditor: (t, c) {
+                        final idx = tracks.indexOf(t);
+                        setState(() {
+                          selectedClip = c;
+                          if (idx >= 0) selectedTrackIndex = idx;
+                          if (c is MidiClip) {
+                            selectedBottomTab =
+                                t.type == TrackType.sampler ? 3 : 0;
+                          } else {
+                            selectedBottomTab = 2;
+                          }
+                          isBottomPanelExpanded = true;
+                        });
+                      },
+                    )
+                  : Row(
+                      children: [
+                        if (_showSampleBrowser)
+                          SampleBrowserDrawer(
+                            userFolders: _userSampleFolders,
+                            previewingPath: _browserPreviewPath,
+                            onAddFolderPressed: _addUserSampleFolder,
+                            onRemoveFolder: _removeUserSampleFolder,
+                            onTogglePreview: _toggleBrowserPreview,
+                            onAddToProject: (item) =>
+                                _addBrowserItemToTrack(item),
+                            onClose: () =>
+                                setState(() => _showSampleBrowser = false),
+                          ),
+                        _buildTrackHeaders(),
+                        _buildTimeline(),
+                      ],
+                    ),
             ),
+            if (isMusicalTypingEnabled)
+              MusicalKeyboardBar(
+                octave: _qwertyOctave,
+                velocity: _qwertyVelocity,
+                activeNotes: _qwertyActiveNotes,
+                onOctaveChanged: (o) =>
+                    setState(() => _qwertyOctave = o.clamp(1, 7)),
+                onVelocityChanged: (v) =>
+                    setState(() => _qwertyVelocity = v.clamp(20, 127)),
+                onNoteDown: (midi) {
+                  setState(() => _qwertyActiveNotes.add(midi));
+                  _handleMidiNoteOn(midi, _qwertyVelocity, null);
+                },
+                onNoteUp: (midi) {
+                  setState(() => _qwertyActiveNotes.remove(midi));
+                  _handleMidiNoteOff(midi);
+                },
+                onClose: () => setState(() => isMusicalTypingEnabled = false),
+              ),
             tracks.isNotEmpty ? _buildBottomPanel() : Container(),
           ],
         ),

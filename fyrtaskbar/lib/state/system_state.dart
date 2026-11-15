@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:fyrtaskbar/fyr_theme.dart';
 import 'package:fyrtaskbar/models/notification.dart';
 import 'package:fyrtaskbar/notification_service.dart';
 import 'package:fyrtaskbar/phone_service.dart';
@@ -42,6 +43,10 @@ class SystemState {
   static bool _isUpdatingSway = false;
   static int _updateCount = 0;
   static Timer? _timer;
+  static SwaySubscription? _swaySub;
+  static Process? _pactlSub;
+  static StreamSubscription<FileSystemEvent>? _swayDirSub;
+  static StreamSubscription<FileSystemEvent>? _dockDirSub;
 
   static List<Map<String, dynamic>>? _findFocusedPath(
     Map<String, dynamic> node,
@@ -80,45 +85,133 @@ class SystemState {
     _loadWeatherLocation();
     NotificationService.init();
     PhoneService.init();
-    _timer = Timer.periodic(const Duration(seconds: 5), (_) {
+    // Periodic fallback runs at 15s for slow-changing hardware stats (battery, wifi, bt)
+    // while Sway, volume, and Fyr config changes arrive immediately via event streams.
+    _timer = Timer.periodic(const Duration(seconds: 15), (_) {
       update();
       _updateCount++;
-      if (_updateCount % 60 == 0) {
+      if (_updateCount % 20 == 0) {
         _fetchWeather();
       }
     });
     _startSwaySubscription();
+    _startAudioSubscription();
+    _startConfigWatchers();
+  }
+
+  static Future<void> dispose() async {
+    _timer?.cancel();
+    _timer = null;
+    await _swaySub?.cancel();
+    _swaySub = null;
+    _pactlSub?.kill();
+    _pactlSub = null;
+    await _swayDirSub?.cancel();
+    _swayDirSub = null;
+    await _dockDirSub?.cancel();
+    _dockDirSub = null;
   }
 
   static void _startSwaySubscription() {
-    Process.start('swaymsg', [
-      '-t',
-      'subscribe',
-      '-m',
-      '["workspace", "window", "binding"]',
-    ]).then((process) {
+    _swaySub?.cancel();
+    _swaySub = SwayIpc.subscribe(
+      const ['workspace', 'window', 'binding'],
+      onEvent: (_) => updateSwayState(),
+    );
+  }
+
+  static void _startAudioSubscription() {
+    Process.start('pactl', ['subscribe']).then((process) {
+      _pactlSub = process;
       process.stdout
           .transform(utf8.decoder)
           .transform(const LineSplitter())
           .listen(
             (line) {
-              updateSwayState();
+              if (line.contains("'change' on sink") ||
+                  line.contains("'new' on sink") ||
+                  line.contains('server')) {
+                _refreshVolume();
+              }
             },
             onDone: () {
               Future.delayed(
-                const Duration(seconds: 2),
-                _startSwaySubscription,
+                const Duration(seconds: 3),
+                _startAudioSubscription,
               );
             },
-            onError: (_) {
-              Future.delayed(
-                const Duration(seconds: 2),
-                _startSwaySubscription,
-              );
-            },
+            onError: (_) {},
           );
-      process.stderr.listen((_) {});
-    });
+      process.stderr.drain<void>().catchError((_) {});
+    }).catchError((_) {});
+  }
+
+  static Future<void> _refreshVolume() async {
+    try {
+      final volResult = await _runWithTimeout('wpctl', [
+        'get-volume',
+        '@DEFAULT_AUDIO_SINK@',
+      ]);
+      if (volResult.exitCode == 0) {
+        final output = volResult.stdout.toString().trim();
+        final match = RegExp(r'Volume: (\d+\.\d+)').firstMatch(output);
+        if (match != null) {
+          volume.value = double.parse(match.group(1)!);
+        }
+      }
+    } catch (_) {}
+  }
+
+  static void _startConfigWatchers() {
+    final home = Platform.environment['HOME'] ?? '';
+    try {
+      final swayDir = Directory('$home/.config/sway');
+      if (swayDir.existsSync()) {
+        _swayDirSub?.cancel();
+        _swayDirSub = swayDir.watch().listen((event) {
+          if (event.path.contains('floating.conf')) {
+            _refreshFloatingMode();
+          }
+        }, onError: (_) {});
+      }
+    } catch (_) {}
+    try {
+      final dockDir = Directory('$home/.config/fyrdock');
+      if (dockDir.existsSync()) {
+        _dockDirSub?.cancel();
+        _dockDirSub = dockDir.watch().listen((event) {
+          if (event.path.contains('config.json')) {
+            _refreshDockAutohide();
+          }
+        }, onError: (_) {});
+      }
+    } catch (_) {}
+  }
+
+  static Future<void> _refreshFloatingMode() async {
+    try {
+      final floatingFile = File(
+        '${Platform.environment['HOME']}/.config/sway/floating.conf',
+      );
+      if (await floatingFile.exists()) {
+        final content = await floatingFile.readAsString();
+        floatingMode.value = content.contains('floating enable');
+      } else {
+        floatingMode.value = false;
+      }
+    } catch (_) {}
+  }
+
+  static Future<void> _refreshDockAutohide() async {
+    try {
+      final dockConfigFile = File(
+        '${Platform.environment['HOME']}/.config/fyrdock/config.json',
+      );
+      if (await dockConfigFile.exists()) {
+        final data = jsonDecode(await dockConfigFile.readAsString());
+        dockAutohide.value = data['autohide'] ?? false;
+      }
+    } catch (_) {}
   }
 
   static Future<void> update() async {
@@ -143,6 +236,9 @@ class SystemState {
         'active,ssid',
         'dev',
         'wifi',
+        'list',
+        '--rescan',
+        'no',
       ]);
       if (wifiResult.exitCode == 0) {
         final lines = wifiResult.stdout.toString().split('\n');
@@ -175,17 +271,7 @@ class SystemState {
             .toList();
       }
 
-      final volResult = await _runWithTimeout('wpctl', [
-        'get-volume',
-        '@DEFAULT_AUDIO_SINK@',
-      ]);
-      if (volResult.exitCode == 0) {
-        final output = volResult.stdout.toString().trim();
-        final match = RegExp(r'Volume: (\d+\.\d+)').firstMatch(output);
-        if (match != null) {
-          volume.value = double.parse(match.group(1)!);
-        }
-      }
+      await _refreshVolume();
 
       final brightResult = await _runWithTimeout('brightnessctl', ['-m']);
       if (brightResult.exitCode == 0) {
@@ -208,30 +294,11 @@ class SystemState {
             !output.contains('Soft blocked: no');
       }
 
-      final floatingFile = File(
-        '${Platform.environment['HOME']}/.config/sway/floating.conf',
-      );
-      if (await floatingFile.exists()) {
-        final content = await floatingFile.readAsString();
-        floatingMode.value = content.contains('floating enable');
-      } else {
-        floatingMode.value = false;
-      }
-
-      final dockConfigFile = File(
-        '${Platform.environment['HOME']}/.config/fyrdock/config.json',
-      );
-      if (await dockConfigFile.exists()) {
-        try {
-          final data = jsonDecode(await dockConfigFile.readAsString());
-          dockAutohide.value = data['autohide'] ?? false;
-        } catch (_) {}
-      }
+      await _refreshFloatingMode();
+      await _refreshDockAutohide();
 
       final recResult = await _runWithTimeout('pgrep', ['wf-recorder']);
       isRecording.value = recResult.exitCode == 0;
-
-      await updateSwayState();
     } catch (_) {
     } finally {
       _isUpdating = false;

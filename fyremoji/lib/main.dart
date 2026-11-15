@@ -2,39 +2,17 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
-import 'package:window_manager/window_manager.dart';
 import 'fyr_theme.dart';
 
-void main() async {
+void main(List<String> args) {
   WidgetsFlutterBinding.ensureInitialized();
-  await windowManager.ensureInitialized();
-  
-  WindowOptions windowOptions = const WindowOptions(
-    size: Size(400, 250),
-    minimumSize: Size(400, 250),
-    maximumSize: Size(400, 250),
-    center: false,
-    backgroundColor: Colors.transparent,
-    skipTaskbar: true,
-    titleBarStyle: TitleBarStyle.hidden,
-  );
-  
-  windowManager.waitUntilReadyToShow(windowOptions, () async {
-    await windowManager.setAsFrameless();
-    await windowManager.setBackgroundColor(Colors.transparent);
-    await windowManager.setMinimumSize(const Size(400, 250));
-    await windowManager.setMaximumSize(const Size(400, 250));
-    await windowManager.setSize(const Size(400, 250));
-    await windowManager.setResizable(false);
-    await windowManager.show();
-  });
-
   FyrTheme.initialize();
-  runApp(const FyrEmojiApp());
+  runApp(FyrEmojiApp(initiallyVisible: args.contains('--show')));
 }
 
 class FyrEmojiApp extends StatelessWidget {
-  const FyrEmojiApp({super.key});
+  final bool initiallyVisible;
+  const FyrEmojiApp({super.key, this.initiallyVisible = false});
 
   @override
   Widget build(BuildContext context) {
@@ -52,14 +30,15 @@ class FyrEmojiApp extends StatelessWidget {
           scaffoldBackgroundColor: Colors.transparent,
           colorScheme: ColorScheme.light(primary: FyrTheme.accentColor),
         ),
-        home: const EmojiPickerScreen(),
+        home: EmojiPickerScreen(initiallyVisible: initiallyVisible),
       ),
     );
   }
 }
 
 class EmojiPickerScreen extends StatefulWidget {
-  const EmojiPickerScreen({super.key});
+  final bool initiallyVisible;
+  const EmojiPickerScreen({super.key, this.initiallyVisible = false});
 
   @override
   State<EmojiPickerScreen> createState() => _EmojiPickerScreenState();
@@ -68,16 +47,30 @@ class EmojiPickerScreen extends StatefulWidget {
 class _EmojiPickerScreenState extends State<EmojiPickerScreen> {
   final FocusNode _focusNode = FocusNode();
   final TextEditingController _searchController = TextEditingController();
+  late final OverlayWindowController _overlayController;
+
+  @override
+  void initState() {
+    super.initState();
+    _overlayController = OverlayWindowController(
+      appName: 'fyremoji',
+      onShow: () {
+        if (mounted) _focusNode.requestFocus();
+      },
+    );
+    _overlayController.start(initiallyVisible: widget.initiallyVisible);
+  }
 
   @override
   void dispose() {
+    _overlayController.stop();
     _focusNode.dispose();
     _searchController.dispose();
     super.dispose();
   }
 
   void _hidePicker() {
-    Process.start('swaymsg', ['[app_id="fyremoji"] move scratchpad'], mode: ProcessStartMode.detached);
+    _overlayController.hide();
   }
 
   void _onEmojiSelected(Category? category, Emoji emoji) {

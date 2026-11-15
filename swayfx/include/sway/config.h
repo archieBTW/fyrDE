@@ -552,6 +552,8 @@ struct sway_config {
 	char *swaybg_command;
 	struct wl_client *swaybg_client;
 	struct wl_listener swaybg_client_destroy;
+	char **swaybg_argv;
+	size_t swaybg_argc;
 
 	// Flags
 	enum focus_follows_mouse_mode focus_follows_mouse;
@@ -737,6 +739,8 @@ void force_modeset(void);
 bool modeset_is_pending(void);
 
 bool spawn_swaybg(void);
+void swaybg_transfer(struct sway_config *dest, struct sway_config *src);
+void swaybg_free_argv(struct sway_config *cfg);
 
 int workspace_output_cmp_workspace(const void *a, const void *b);
 

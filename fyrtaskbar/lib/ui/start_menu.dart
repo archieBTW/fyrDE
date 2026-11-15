@@ -119,7 +119,7 @@ class _StartMenuPopupState extends State<StartMenuPopup>
     final confirm = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        backgroundColor: FyrTheme.bgColor,
+        backgroundColor: FyrTheme.panelBgColor,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
           side: BorderSide(color: FyrTheme.cardColor),
@@ -207,7 +207,7 @@ class _StartMenuPopupState extends State<StartMenuPopup>
     final newName = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: FyrTheme.bgColor,
+        backgroundColor: FyrTheme.panelBgColor,
         title: Text('Rename App', style: TextStyle(color: FyrTheme.textColor)),
         content: TextField(
           controller: _nameController,
@@ -265,7 +265,7 @@ class _StartMenuPopupState extends State<StartMenuPopup>
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: FyrTheme.bgColor,
+        backgroundColor: FyrTheme.panelBgColor,
         title: Text('Remove App', style: TextStyle(color: FyrTheme.textColor)),
         content: Text(
           'Are you sure you want to remove ${app.name}?',
@@ -300,7 +300,7 @@ class _StartMenuPopupState extends State<StartMenuPopup>
     final password = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: FyrTheme.bgColor,
+        backgroundColor: FyrTheme.panelBgColor,
         title: Text(
           'Authentication Required',
           style: TextStyle(color: FyrTheme.textColor),
@@ -370,7 +370,7 @@ class _StartMenuPopupState extends State<StartMenuPopup>
       child: Container(
         width: 400,
         decoration: BoxDecoration(
-          color: FyrTheme.bgColor,
+          color: FyrTheme.panelBgColor,
           border: Border(right: BorderSide(color: FyrTheme.cardColor)),
         ),
         child: Column(

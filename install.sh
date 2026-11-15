@@ -88,7 +88,9 @@ usage() {
     echo "Usage: $0 [options]"
     echo "Options:"
     echo "  -a <app>    Rebuild and reinstall a specific Flutter app (e.g., fyrtaskbar)"
-    echo "  -s          Reinstall Sway configuration and scripts"
+    echo "  -c          Force clean Flutter build (run flutter clean before building)"
+    echo "  -w          Build and install SwayFX compositor"
+    echo "  -s          Reinstall Sway configuration and scripts (preserves conf.d/*.conf)"
     echo "  -l          Reinstall SDDM theme and configuration"
     echo "  -t          Reinstall GTK and icon themes"
     echo "  -d          Install system dependencies only"
@@ -202,8 +204,10 @@ build_swayfx() {
     echo "Building and installing local swayfx..."
     if [ -d "./swayfx" ]; then
         cd ./swayfx
-        rm -rf build
-        meson setup build
+        if [ ! -f "build/build.ninja" ]; then
+            rm -rf build
+            meson setup build
+        fi
         ninja -C build
         sudo ninja -C build install
         cd ..
@@ -218,8 +222,12 @@ reinstall_app() {
     if [ -d "./$app" ]; then
         echo "Building $app..."
         cd "./$app"
-        flutter clean || true
-        flutter create --platforms=linux .
+        if [ "$CLEAN_BUILD" = "true" ]; then
+            flutter clean || true
+        fi
+        if [ ! -f "linux/CMakeLists.txt" ]; then
+            flutter create --platforms=linux .
+        fi
         flutter pub get
         xvfb-run -a flutter build linux
         
@@ -231,10 +239,37 @@ reinstall_app() {
         
         setup_app_configs "$app"
         cleanup_legacy_user_override "$app"
+        restart_overlay_daemon_if_running "$app"
     else
         echo "Error: Directory ./$app not found!"
         exit 1
     fi
+}
+
+restart_overlay_daemon_if_running() {
+    local app=$1
+    case "$app" in
+        fyrsearch|fyroverview|fyrwindowoverview|fyremoji)
+            if command -v swaymsg &> /dev/null && swaymsg -t get_version &> /dev/null; then
+                pkill -x "$app" 2>/dev/null || true
+                rm -f "$HOME/.config/fyr/overlay-$app.sock"
+                nohup "/opt/$app/$app" > /dev/null 2>&1 &
+            fi
+            ;;
+        fyrdock)
+            if command -v swaymsg &> /dev/null && swaymsg -t get_version &> /dev/null; then
+                pkill -x fyrdock 2>/dev/null || true
+                nohup /opt/fyrdock/fyrdock > /dev/null 2>&1 &
+            fi
+            ;;
+        fyrtaskbar)
+            if command -v swaymsg &> /dev/null && swaymsg -t get_version &> /dev/null; then
+                pkill -x fyrtaskbar 2>/dev/null || true
+                nohup /opt/fyrtaskbar/fyrtaskbar > /dev/null 2>&1 &
+                nohup /opt/fyrtaskbar/fyrtaskbar --desktop > /dev/null 2>&1 &
+            fi
+            ;;
+    esac
 }
 
 cleanup_legacy_user_override() {
@@ -255,6 +290,8 @@ cleanup_legacy_user_override() {
     if [ -e "$HOME/.local/bin/$app" ] || [ -L "$HOME/.local/bin/$app" ]; then
         if [ -e "/usr/local/bin/$app" ]; then
             ln -sf "/usr/local/bin/$app" "$HOME/.local/bin/$app"
+        elif [ -e "/opt/$app/$app" ]; then
+            ln -sf "/opt/$app/$app" "$HOME/.local/bin/$app"
         else
             rm -f "$HOME/.local/bin/$app"
         fi
@@ -826,6 +863,9 @@ Type=Application
 Categories=Development;Network;
 EOF
             ;;
+        "fyrdock"|"fyrtaskbar"|"fyroverview"|"fyrwindowoverview"|"fyrsearch"|"fyrhelp"|"fyremoji")
+            sudo ln -sf "/opt/$app/$app" "/usr/local/bin/$app"
+            ;;
     esac
     
     if command -v update-desktop-database &> /dev/null; then
@@ -994,27 +1034,39 @@ setup_sway_config() {
     cat << 'EOF' > ~/.config/fyr/toggle_floating.sh
 #!/bin/bash
 CONF="$HOME/.config/sway/floating.conf"
+EXCLUDED="fyrtaskbar|fyrdock|fyrdesktop|fyrsearch|launcher|fyroverview|fyrwindowoverview|fyrhelp|fyremoji"
 if [ -f "$CONF" ] && grep -q "floating enable" "$CONF"; then
     echo "" > "$CONF"
-    swaymsg '[floating workspace="^[0-9]+$" app_id="^(?!(fyrtaskbar|fyrdock|fyrdesktop|fyrsearch|launcher|fyroverview|fyrwindowoverview|fyrhelp|fyremoji)$).*$"] floating disable'
-    swaymsg '[tiling] border auto 2'
-    swaymsg 'gaps inner all set 20'
-    swaymsg 'gaps outer all set 20'
+    if swaymsg 'unfor_window [class=".*"] floating enable' >/dev/null 2>&1; then
+        swaymsg 'unfor_window [app_id=".*"] floating enable' >/dev/null 2>&1 || true
+        swaymsg 'unfor_window [class=".*"] border auto 4' >/dev/null 2>&1 || true
+        swaymsg "unfor_window [app_id=\"^(?!($EXCLUDED)$).*$\"] border auto 4" >/dev/null 2>&1 || true
+        swaymsg 'default_floating_border auto 4' >/dev/null 2>&1 || true
+        swaymsg 'gaps inner 20' >/dev/null 2>&1 || true
+        swaymsg 'gaps outer 20' >/dev/null 2>&1 || true
+        swaymsg "[floating workspace=\"^[0-9]+$\" app_id=\"^(?!($EXCLUDED)$).*$\"] floating disable; [tiling] border auto 2; gaps inner all set 20; gaps outer all set 20" >/dev/null 2>&1 || true
+    else
+        swaymsg "[floating workspace=\"^[0-9]+$\" app_id=\"^(?!($EXCLUDED)$).*$\"] floating disable; [tiling] border auto 2; gaps inner all set 20; gaps outer all set 20" >/dev/null 2>&1 || true
+        swaymsg reload >/dev/null 2>&1 || true
+    fi
 else
     echo 'for_window [class=".*"] floating enable' > "$CONF"
     echo 'for_window [app_id=".*"] floating enable' >> "$CONF"
     echo 'for_window [class=".*"] border auto 4' >> "$CONF"
-    echo 'for_window [app_id="^(?!(fyrtaskbar|fyrdock|fyrdesktop|fyrsearch|launcher|fyroverview|fyrwindowoverview|fyrhelp|fyremoji)$).*$"] border auto 4' >> "$CONF"
+    echo "for_window [app_id=\"^(?!($EXCLUDED)$).*$\"] border auto 4" >> "$CONF"
     echo 'default_floating_border auto 4' >> "$CONF"
     echo 'gaps inner 0' >> "$CONF"
     echo 'gaps outer 0' >> "$CONF"
-    swaymsg '[tiling] floating enable'
-    swaymsg '[floating workspace="^[0-9]+$" class=".*"] border auto 4'
-    swaymsg '[floating workspace="^[0-9]+$" app_id="^(?!(fyrtaskbar|fyrdock|fyrdesktop|fyrsearch|launcher|fyroverview|fyrwindowoverview|fyrhelp|fyremoji)$).*$"] border auto 4'
-    swaymsg 'gaps inner all set 0'
-    swaymsg 'gaps outer all set 0'
+    swaymsg 'for_window [class=".*"] floating enable' >/dev/null 2>&1 || true
+    swaymsg 'for_window [app_id=".*"] floating enable' >/dev/null 2>&1 || true
+    swaymsg 'for_window [class=".*"] border auto 4' >/dev/null 2>&1 || true
+    swaymsg "for_window [app_id=\"^(?!($EXCLUDED)$).*$\"] border auto 4" >/dev/null 2>&1 || true
+    swaymsg 'default_floating_border auto 4' >/dev/null 2>&1 || true
+    swaymsg 'gaps inner 0' >/dev/null 2>&1 || true
+    swaymsg 'gaps outer 0' >/dev/null 2>&1 || true
+    swaymsg "[tiling] floating enable; [floating workspace=\"^[0-9]+$\" class=\".*\"] border auto 4; [floating workspace=\"^[0-9]+$\" app_id=\"^(?!($EXCLUDED)$).*$\"] border auto 4; gaps inner all set 0; gaps outer all set 0" >/dev/null 2>&1 || true
 fi
-swaymsg reload
+exit 0
 EOF
     chmod +x ~/.config/fyr/toggle_floating.sh
 
@@ -1116,70 +1168,75 @@ EOF
     # Overview Toggle Script
     cat << 'EOF' > ~/.config/fyr/overview_toggle.sh
 #!/bin/bash
-
-# Get focused output info
-FOCUSED_OUTPUT=$(swaymsg -t get_outputs | jq -r '.[] | select(.focused) | .name')
-X=$(swaymsg -t get_outputs | jq -r ".[] | select(.name == \"$FOCUSED_OUTPUT\") | .rect.x")
-Y=$(swaymsg -t get_outputs | jq -r ".[] | select(.name == \"$FOCUSED_OUTPUT\") | .rect.y")
-W=$(swaymsg -t get_outputs | jq -r ".[] | select(.name == \"$FOCUSED_OUTPUT\") | .rect.width")
-H=$(swaymsg -t get_outputs | jq -r ".[] | select(.name == \"$FOCUSED_OUTPUT\") | .rect.height")
-
 CONF="$HOME/.config/sway/floating.conf"
 IS_FLOATING=0
 if [ -f "$CONF" ] && grep -q "floating enable" "$CONF"; then
     IS_FLOATING=1
 fi
 
-ARG=$1
+send_cmd() {
+    local sock="$HOME/.config/fyr/overlay-$1.sock"
+    local msg="$2"
+    [ -S "$sock" ] || return 1
+    python3 -c "import socket,sys; s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); s.settimeout(0.3); s.connect(sys.argv[1]); s.sendall((sys.argv[2]+'\n').encode()); s.close()" "$sock" "$msg" 2>/dev/null
+}
 
+ARG="${1:-}"
 if [ "$ARG" = "hide" ]; then
-    swaymsg '[app_id="fyrwindowoverview"] move scratchpad'
-    swaymsg '[app_id="fyroverview"] move scratchpad'
+    send_cmd "fyrwindowoverview" "hide" || true
+    send_cmd "fyroverview" "hide" || true
     exit 0
 fi
 
-TARGET=""
+COORDS=$(swaymsg -t get_outputs 2>/dev/null | jq -r '.[] | select(.focused) | "\(.rect.x),\(.rect.y)"' | head -n 1)
 
 if [ "$IS_FLOATING" -eq 1 ]; then
     if [ "$ARG" = "workspace" ]; then
         TARGET="fyroverview"
+        OTHER="fyrwindowoverview"
     else
         TARGET="fyrwindowoverview"
+        OTHER="fyroverview"
     fi
 else
     TARGET="fyroverview"
+    OTHER="fyrwindowoverview"
 fi
 
-OTHER="fyrwindowoverview"
-if [ "$TARGET" = "fyrwindowoverview" ]; then
-    OTHER="fyroverview"
+send_cmd "$OTHER" "hide" || true
+if ! send_cmd "$TARGET" "toggle ${COORDS}"; then
+    "/opt/$TARGET/$TARGET" --show >/dev/null 2>&1 &
 fi
-
-swaymsg "[app_id=\"$OTHER\"] move scratchpad"
-swaymsg "[app_id=\"$TARGET\"] scratchpad show, border none, resize set $W $H, move absolute position $X $Y"
 EOF
     chmod +x ~/.config/fyr/overview_toggle.sh
 
     # Launcher Toggle Script
     cat << 'EOF' > ~/.config/fyr/launcher_toggle.sh
 #!/bin/bash
-FOCUSED_OUTPUT=$(swaymsg -t get_outputs | jq -r '.[] | select(.focused) | .name')
-X=$(swaymsg -t get_outputs | jq -r ".[] | select(.name == \"$FOCUSED_OUTPUT\") | .rect.x")
-Y=$(swaymsg -t get_outputs | jq -r ".[] | select(.name == \"$FOCUSED_OUTPUT\") | .rect.y")
-W=$(swaymsg -t get_outputs | jq -r ".[] | select(.name == \"$FOCUSED_OUTPUT\") | .rect.width")
-H=$(swaymsg -t get_outputs | jq -r ".[] | select(.name == \"$FOCUSED_OUTPUT\") | .rect.height")
+SOCK="$HOME/.config/fyr/overlay-fyrsearch.sock"
+COORDS=$(swaymsg -t get_outputs 2>/dev/null | jq -r '.[] | select(.focused) | "\(.rect.x),\(.rect.y)"' | head -n 1)
 
-# Toggle logic: if it's already visible on the current output, hide it
-# Otherwise show it on the current output
-VISIBLE=$(swaymsg -t get_tree | jq -r '.. | select(.app_id? == "fyrsearch" or .app_id? == "launcher") | .visible')
-
-if [ "$VISIBLE" = "true" ]; then
-    swaymsg '[app_id="(?i).*fyrsearch.*"] move scratchpad'
-else
-    swaymsg "[app_id=\"(?i).*fyrsearch.*\"] scratchpad show, border none, resize set $W $H, move absolute position $X $Y"
+if [ -S "$SOCK" ]; then
+    python3 -c "import socket,sys; s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); s.settimeout(0.3); s.connect(sys.argv[1]); s.sendall((sys.argv[2]+'\n').encode()); s.close()" "$SOCK" "toggle ${COORDS}" && exit 0
 fi
+
+/opt/fyrsearch/fyrsearch --show >/dev/null 2>&1 &
 EOF
     chmod +x ~/.config/fyr/launcher_toggle.sh
+
+    # Emoji Picker Toggle Script
+    cat << 'EOF' > ~/.config/fyr/emoji_toggle.sh
+#!/bin/bash
+SOCK="$HOME/.config/fyr/overlay-fyremoji.sock"
+COORDS=$(swaymsg -t get_outputs 2>/dev/null | jq -r '.[] | select(.focused) | "\(.rect.x),\(.rect.y)"' | head -n 1)
+
+if [ -S "$SOCK" ]; then
+    python3 -c "import socket,sys; s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); s.settimeout(0.3); s.connect(sys.argv[1]); s.sendall((sys.argv[2]+'\n').encode()); s.close()" "$SOCK" "toggle ${COORDS}" && exit 0
+fi
+
+/opt/fyremoji/fyremoji --show >/dev/null 2>&1 &
+EOF
+    chmod +x ~/.config/fyr/emoji_toggle.sh
 
     # Help Toggle Script
     cat << 'EOF' > ~/.config/fyr/help_toggle.sh
@@ -1200,12 +1257,99 @@ fi
 EOF
     chmod +x ~/.config/fyr/help_toggle.sh
 
-    mkdir -p ~/.config/sway
-    if [ -f "./sway/config" ]; then
+    # OSD Popup Helper Script (Volume, Mic, Brightness)
+    cat << 'EOF' > ~/.config/fyr/osd.sh
+#!/bin/bash
+set -e
+
+SOCK="${HOME}/.config/fyr/osd.sock"
+
+send_osd() {
+    local msg="$1"
+    [ -S "$SOCK" ] || return 0
+    python3 -c "import socket,sys; s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); s.settimeout(0.2); s.connect(sys.argv[1]); s.sendall((sys.argv[2]+'\n').encode()); s.close()" "$SOCK" "$msg" 2>/dev/null || true
+}
+
+report_volume() {
+    local out pct
+    out=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null || true)
+    pct=$(awk '{printf "%d", $2 * 100 + 0.5}' <<<"$out")
+    if grep -q '\[MUTED\]' <<<"$out"; then
+        send_osd "volume ${pct:-0} muted"
+    else
+        send_osd "volume ${pct:-0}"
+    fi
+}
+
+report_mic() {
+    local out
+    out=$(wpctl get-volume @DEFAULT_AUDIO_SOURCE@ 2>/dev/null || true)
+    if grep -q '\[MUTED\]' <<<"$out"; then
+        send_osd "mic muted"
+    else
+        send_osd "mic unmuted"
+    fi
+}
+
+report_brightness() {
+    local pct
+    pct=$(brightnessctl -m 2>/dev/null | awk -F, '{gsub(/%/, "", $4); print $4}')
+    [ -n "$pct" ] && send_osd "brightness $pct"
+}
+
+case "${1:-}" in
+    vol-up)
+        wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+
+        report_volume
+        ;;
+    vol-down)
+        wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-
+        report_volume
+        ;;
+    vol-mute)
+        wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle
+        report_volume
+        ;;
+    mic-mute)
+        wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle
+        report_mic
+        ;;
+    bright-up)
+        brightnessctl set +5% >/dev/null
+        report_brightness
+        ;;
+    bright-down)
+        brightnessctl set 5%- >/dev/null
+        report_brightness
+        ;;
+esac
+EOF
+    chmod +x ~/.config/fyr/osd.sh
+
+    mkdir -p ~/.config/sway/conf.d
+    if [ -d "./sway" ] && [ -f "./sway/config" ]; then
         cp ./sway/config ~/.config/sway/config
-        sed -i "s/1920 1080/$WIDTH $HEIGHT/g" ~/.config/sway/config
-        sed -i "s/1920x1080/${WIDTH}x${HEIGHT}/g" ~/.config/sway/config
-        echo "Sway config updated with resolution ${WIDTH}x${HEIGHT}"
+        echo "Sway main config updated (user overrides in ~/.config/sway/conf.d/ preserved)."
+    fi
+    if [ ! -f ~/.config/sway/conf.d/22-displays.conf ]; then
+        cat << EOF > ~/.config/sway/conf.d/22-displays.conf
+# DISPLAY OUTPUT SETTINGS
+output eDP-1 resolution ${WIDTH}x${HEIGHT} position 0 0
+# END DISPLAY OUTPUT SETTINGS
+EOF
+    fi
+    if [ ! -f ~/.config/sway/conf.d/30-touchpad.conf ]; then
+        cat << 'EOF' > ~/.config/sway/conf.d/30-touchpad.conf
+# TOUCHPAD SETTINGS
+input "type:touchpad" {
+    tap enabled
+    tap_button_map lrm
+    drag enabled
+    dwt enabled
+    natural_scroll disabled
+}
+# END TOUCHPAD SETTINGS
+EOF
     fi
 
     # Configure WirePlumber auto-profile for automatic HDMI and audio detection
@@ -1227,6 +1371,10 @@ monitor.alsa.rules = [
   }
 ]
 EOF
+
+    if command -v swaymsg &> /dev/null && swaymsg -t get_version &> /dev/null; then
+        swaymsg reload || true
+    fi
 }
 
 setup_themes() {
@@ -1264,6 +1412,18 @@ setup_sddm() {
         sudo cp -r ./sddm/theme/* /usr/share/sddm/themes/fyr/
         sudo mkdir -p /etc/sddm.conf.d
         sudo cp ./sddm/sddm.conf /etc/sddm.conf.d/fyr.conf
+        sudo mkdir -p /etc/X11/xorg.conf.d
+        sudo tee /etc/X11/xorg.conf.d/30-touchpad.conf > /dev/null <<'XORG_TOUCHPAD_EOF'
+Section "InputClass"
+    Identifier "touchpad"
+    Driver "libinput"
+    MatchIsTouchpad "on"
+    Option "Tapping" "on"
+    Option "TappingDrag" "on"
+    Option "TappingButtonMap" "lrm"
+    Option "DisableWhileTyping" "on"
+EndSection
+XORG_TOUCHPAD_EOF
         sudo systemctl enable sddm || true
         
         echo "Setting up ACLs for SDDM user..."
@@ -1279,6 +1439,7 @@ setup_sddm() {
 # --- Main Logic ---
 
 MODULAR=false
+CLEAN_BUILD=false
 INSTALL_DEPS=false
 INSTALL_SWAY_CONFIG=false
 INSTALL_SDDM=false
@@ -1309,17 +1470,18 @@ setup_zsh() {
 
 APP_TO_REINSTALL=""
 
-while getopts "a:sldthfFzH" opt; do
-    MODULAR=true
+while getopts "a:wcsltdhfFzH" opt; do
     case $opt in
-        a) APP_TO_REINSTALL="$OPTARG" ;;
-        s) INSTALL_SWAY_CONFIG=true ;;
-        l) INSTALL_SDDM=true ;;
-        t) INSTALL_THEMES=true ;;
-        d) INSTALL_DEPS=true ;;
-        z) INSTALL_ZSH=true ;;
-        f) INSTALL_FETCH=true ;;
-        H) HIDE_REDUNDANT=true ;;
+        a) APP_TO_REINSTALL="$OPTARG"; MODULAR=true ;;
+        c) CLEAN_BUILD=true ;;
+        w) INSTALL_SWAYFX=true; MODULAR=true ;;
+        s) INSTALL_SWAY_CONFIG=true; MODULAR=true ;;
+        l) INSTALL_SDDM=true; MODULAR=true ;;
+        t) INSTALL_THEMES=true; MODULAR=true ;;
+        d) INSTALL_DEPS=true; MODULAR=true ;;
+        z) INSTALL_ZSH=true; MODULAR=true ;;
+        f) INSTALL_FETCH=true; MODULAR=true ;;
+        H) HIDE_REDUNDANT=true; MODULAR=true ;;
         F) MODULAR=false ;;
         h) usage; exit 0 ;;
         *) usage; exit 1 ;;
@@ -1347,6 +1509,7 @@ else
     [ "$INSTALL_DEPS" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
     [ "$INSTALL_ZSH" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
     [ -n "$APP_TO_REINSTALL" ] && TOTAL_STEPS=$((TOTAL_STEPS + 2)) # flutter + app
+    [ "$INSTALL_SWAYFX" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
     [ "$INSTALL_SWAY_CONFIG" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
     [ "$INSTALL_SDDM" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
     [ "$INSTALL_THEMES" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
@@ -1361,6 +1524,7 @@ else
         install_flutter
         reinstall_app "$APP_TO_REINSTALL"
     fi
+    if [ "$INSTALL_SWAYFX" = "true" ]; then build_swayfx; fi
     if [ "$INSTALL_SWAY_CONFIG" = "true" ]; then setup_sway_config; fi
     if [ "$INSTALL_SDDM" = "true" ]; then setup_sddm; fi
     if [ "$INSTALL_THEMES" = "true" ]; then setup_themes; fi

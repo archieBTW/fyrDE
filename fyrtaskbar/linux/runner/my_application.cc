@@ -1,15 +1,19 @@
 #include "my_application.h"
 
+#include <cstring>
 #include <flutter_linux/flutter_linux.h>
+#include <gtk-layer-shell.h>
 #ifdef GDK_WINDOWING_X11
 #include <gdk/gdkx.h>
 #endif
 
 #include "flutter/generated_plugin_registrant.h"
+#include "osd_overlay.h"
 
 struct _MyApplication {
   GtkApplication parent_instance;
   char **dart_entrypoint_arguments;
+  OsdOverlay *osd_overlay;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
@@ -34,6 +38,15 @@ static void fyr_method_call_cb(FlMethodChannel *channel,
         int height = fl_value_get_int(height_val);
         gtk_widget_set_size_request(GTK_WIDGET(window), width, height);
       }
+    }
+    g_autoptr(FlMethodResponse) response =
+        FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+    fl_method_call_respond(method_call, response, nullptr);
+  } else if (strcmp(method, "setNamespace") == 0) {
+    FlValue *args = fl_method_call_get_args(method_call);
+    if (args && fl_value_get_type(args) == FL_VALUE_TYPE_STRING &&
+        gtk_layer_is_layer_window(window)) {
+      gtk_layer_set_namespace(window, fl_value_get_string(args));
     }
     g_autoptr(FlMethodResponse) response =
         FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
@@ -123,6 +136,11 @@ static void my_application_activate(GApplication *application) {
   fl_method_channel_set_method_call_handler(channel, fyr_method_call_cb, window,
                                             nullptr);
 
+  if (!self->osd_overlay) {
+    self->osd_overlay = new OsdOverlay();
+  }
+  self->osd_overlay->AttachMethodChannel(view);
+
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }
 
@@ -168,6 +186,8 @@ static void my_application_shutdown(GApplication *application) {
 // Implements GObject::dispose.
 static void my_application_dispose(GObject *object) {
   MyApplication *self = MY_APPLICATION(object);
+  delete self->osd_overlay;
+  self->osd_overlay = nullptr;
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
   G_OBJECT_CLASS(my_application_parent_class)->dispose(object);
 }

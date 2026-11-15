@@ -1,30 +1,109 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import 'package:fyrbrowser/main.dart';
+import 'package:fyrbrowser/adblock_engine.dart';
+import 'package:fyrbrowser/browser_models.dart';
+import 'package:fyrbrowser/home_page.dart';
+import 'package:webview_cef/webview_cef.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  group('AdBlockEngine', () {
+    test('extracts normalized hostnames without www prefix', () {
+      expect(
+        AdBlockEngine.extractHost('https://WWW.Example.com/path?a=1'),
+        'example.com',
+      );
+      expect(AdBlockEngine.extractHost('sub.domain.org'), 'sub.domain.org');
+      expect(AdBlockEngine.extractHost('   '), '');
+    });
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    test('cosmetic script uses safe CSS selectors without fetch/XHR hooks', () {
+      final script = AdBlockEngine.cosmeticCssScript;
+      expect(script.contains('XMLHttpRequest'), isFalse);
+      expect(script.contains('window.fetch'), isFalse);
+      expect(script.contains('[id*="ad"]'), isFalse);
+      expect(script.contains('.adsbygoogle'), isTrue);
+    });
+  });
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+  group('BrowserModels & Navigation', () {
+    test('defaults homepage to start.duckduckgo.com and migrates fyr://home', () {
+      final defaults = BrowserSettings();
+      expect(defaults.homePage, kDefaultHomePage);
+      expect(defaults.homePage, 'https://start.duckduckgo.com');
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+      final migrated = BrowserSettings.fromJson({'homePage': 'fyr://home'});
+      expect(migrated.homePage, 'https://start.duckduckgo.com');
+    });
+
+    test('BrowserTab defaults isReady to false before CEF init', () {
+      final controller = WebviewManager().createWebView();
+      final tab = BrowserTab(id: 'tab_1', controller: controller);
+      expect(tab.isReady, isFalse);
+      expect(tab.url, 'https://start.duckduckgo.com');
+    });
+
+    test('resolveNavigationInput routes URLs vs search queries', () {
+      expect(
+        resolveNavigationInput('  ', SearchEngine.duckDuckGo),
+        'https://start.duckduckgo.com',
+      );
+      expect(
+        resolveNavigationInput('https://google.com', SearchEngine.duckDuckGo),
+        'https://google.com',
+      );
+      expect(
+        resolveNavigationInput('example.com/test', SearchEngine.duckDuckGo),
+        'https://example.com/test',
+      );
+      expect(
+        resolveNavigationInput('localhost:8080', SearchEngine.duckDuckGo),
+        'http://localhost:8080',
+      );
+      expect(
+        resolveNavigationInput('how to cook rice', SearchEngine.google),
+        'https://www.google.com/search?q=how%20to%20cook%20rice',
+      );
+    });
+
+    test('BrowserSettings whitelist matching supports subdomains', () {
+      final settings = BrowserSettings(adBlockWhitelist: ['example.com']);
+      expect(settings.isHostWhitelisted('example.com'), isTrue);
+      expect(settings.isHostWhitelisted('www.example.com'), isTrue);
+      expect(settings.isHostWhitelisted('docs.example.com'), isTrue);
+      expect(settings.isHostWhitelisted('badexample.com'), isFalse);
+
+      final roundTrip = BrowserSettings.fromJson(settings.toJson());
+      expect(roundTrip.adBlockEnabled, isTrue);
+      expect(roundTrip.adBlockWhitelist, ['example.com']);
+    });
+  });
+
+  group('Error Widget', () {
+    testWidgets('FyrErrorPage triggers retry and home callbacks',
+        (tester) async {
+      bool retried = false;
+      bool wentHome = false;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: FyrErrorPage(
+              error: const LoadErrorInfo(
+                errorCode: -105,
+                errorText: 'ERR_NAME_NOT_RESOLVED',
+                failedUrl: 'https://missing.invalid',
+              ),
+              onRetry: () => retried = true,
+              onGoHome: () => wentHome = true,
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('Server not found'), findsOneWidget);
+      await tester.tap(find.text('Try Again'));
+      await tester.tap(find.text('Go Home'));
+      expect(retried, isTrue);
+      expect(wentHome, isTrue);
+    });
   });
 }

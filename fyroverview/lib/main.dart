@@ -7,13 +7,15 @@ import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'fyr_theme.dart';
 
-void main() {
+void main(List<String> args) {
+  WidgetsFlutterBinding.ensureInitialized();
   FyrTheme.initialize();
-  runApp(const OverviewApp());
+  runApp(OverviewApp(initiallyVisible: args.contains('--show')));
 }
 
 class OverviewApp extends StatelessWidget {
-  const OverviewApp({super.key});
+  final bool initiallyVisible;
+  const OverviewApp({super.key, this.initiallyVisible = false});
 
   @override
   Widget build(BuildContext context) {
@@ -39,7 +41,7 @@ class OverviewApp extends StatelessWidget {
           secondary: FyrTheme.accentColor,
         ),
       ),
-      home: OverviewScreen(),
+      home: OverviewScreen(initiallyVisible: initiallyVisible),
     ),
     );
   }
@@ -73,7 +75,8 @@ class WindowData {
 }
 
 class OverviewScreen extends StatefulWidget {
-  const OverviewScreen({super.key});
+  final bool initiallyVisible;
+  const OverviewScreen({super.key, this.initiallyVisible = false});
 
   @override
   State<OverviewScreen> createState() => _OverviewScreenState();
@@ -84,20 +87,36 @@ class _OverviewScreenState extends State<OverviewScreen>
   final FocusNode _focusNode = FocusNode();
   List<WorkspaceData> _workspaces = [];
   int _selectedIndex = -1;
-  bool _isLoading = true;
+  bool _isLoading = false;
   String? _wallpaperPath;
   Timer? _captureTimer;
+  late final OverlayWindowController _overlayController;
+  final Map<String, ({DateTime modified, Uint8List bytes})> _previewCache = {};
+  bool _isRefreshing = false;
+  DateTime? _lastRefreshAt;
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
+    if (state == AppLifecycleState.resumed && _overlayController.isVisible) {
       _refresh();
     }
   }
 
   void _refresh() {
-    _fetchWallpaper();
+    final now = DateTime.now();
+    if (_isRefreshing ||
+        (_lastRefreshAt != null &&
+            now.difference(_lastRefreshAt!).inMilliseconds < 80)) {
+      if (!_focusNode.hasFocus) {
+        _focusNode.requestFocus();
+      }
+      return;
+    }
+    _lastRefreshAt = now;
     _loadData();
+    if (_wallpaperPath == null) {
+      _fetchWallpaper();
+    }
     if (!_focusNode.hasFocus) {
       _focusNode.requestFocus();
     }
@@ -107,15 +126,22 @@ class _OverviewScreenState extends State<OverviewScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _initWorkspaces();
+    _wallpaperPath = SwayIpc.initialWallpaperFallback();
+    _overlayController = OverlayWindowController(
+      appName: 'fyroverview',
+      onShow: _refresh,
+    );
+    _overlayController.start(initiallyVisible: widget.initiallyVisible);
     _focusNode.addListener(() {
-      if (_focusNode.hasFocus) {
+      if (_focusNode.hasFocus && _overlayController.isVisible) {
         _refresh();
       }
     });
-    _initWorkspaces();
     _fetchWallpaper();
+    _loadData();
     _captureActiveWorkspace().then((_) {
-      _loadData();
+      if (mounted) _loadData();
     });
     _startCaptureTimer();
   }
@@ -124,7 +150,7 @@ class _OverviewScreenState extends State<OverviewScreen>
     _captureTimer = Timer.periodic(const Duration(milliseconds: 2000), (
       timer,
     ) async {
-      if (!_focusNode.hasFocus) {
+      if (!_overlayController.isVisible) {
         await _captureActiveWorkspace();
       }
     });
@@ -167,67 +193,83 @@ class _OverviewScreenState extends State<OverviewScreen>
   }
 
   Future<void> _fetchWallpaper() async {
-    try {
-      final result = await Process.run('sh', ['-c', 'pgrep -a swaybg']);
-      if (result.exitCode == 0) {
-        final out = result.stdout.toString();
-        final match = RegExp(r'-i\s+([^\s]+)').firstMatch(out);
-        if (match != null) {
-          setState(() {
-            _wallpaperPath = match.group(1);
-          });
-        }
-      }
-    } catch (e) {
-      debugPrint('Failed to fetch wallpaper: $e');
+    final path = await SwayIpc.detectWallpaperPath();
+    if (path != null && path != _wallpaperPath && mounted) {
+      setState(() {
+        _wallpaperPath = path;
+      });
     }
   }
 
   @override
   void dispose() {
+    _overlayController.stop();
     _captureTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _focusNode.dispose();
     super.dispose();
   }
 
-  Future<void> _loadData() async {
+  Future<Uint8List?> _readCachedPreview(String name) async {
+    final path = '/tmp/fyroverview_ws_$name.jpg';
+    final imgFile = File(path);
     try {
-      List<WorkspaceData> newWorkspaces = List.generate(
+      final stat = await imgFile.stat();
+      if (stat.type == FileSystemEntityType.notFound) {
+        _previewCache.remove(path);
+        return null;
+      }
+      final cached = _previewCache[path];
+      if (cached != null && cached.modified == stat.modified) {
+        return cached.bytes;
+      }
+      final bytes = await imgFile.readAsBytes();
+      _previewCache[path] = (modified: stat.modified, bytes: bytes);
+      return bytes;
+    } catch (_) {
+      return _previewCache[path]?.bytes;
+    }
+  }
+
+  Future<void> _loadData() async {
+    if (_isRefreshing) return;
+    _isRefreshing = true;
+    try {
+      final newWorkspaces = List.generate(
         9,
         (index) => WorkspaceData(name: '${index + 1}'),
       );
       int newSelectedIndex = _selectedIndex;
 
-      final wsResult = await Process.run('swaymsg', ['-t', 'get_workspaces']);
-      if (wsResult.exitCode == 0) {
-        final List<dynamic> wsJson = jsonDecode(wsResult.stdout);
-        for (var ws in wsJson) {
-          final String name = ws['name'].toString();
-          final int index = int.tryParse(name) ?? -1;
-          if (index >= 1 && index <= 9) {
-            final wsData = newWorkspaces[index - 1];
-            wsData.isFocused = ws['focused'] == true;
-            wsData.isVisible = ws['visible'] == true;
-            wsData.rect = ws['rect'];
+      final (wsJson, treeJson) = await SwayIpc.getWorkspacesAndTree();
+      final List<Future<void>> previewFutures = [];
 
-            final imgFile = File('/tmp/fyroverview_ws_$name.jpg');
-            if (await imgFile.exists()) {
-              wsData.previewBytes = await imgFile.readAsBytes();
-            } else {
-              wsData.previewBytes = null;
-            }
+      for (final ws in wsJson) {
+        final String name = ws['name'].toString();
+        final int index = int.tryParse(name) ?? -1;
+        if (index >= 1 && index <= 9) {
+          final wsData = newWorkspaces[index - 1];
+          wsData.isFocused = ws['focused'] == true;
+          wsData.isVisible = ws['visible'] == true;
+          wsData.rect = ws['rect'];
 
-            if (wsData.isFocused) {
-              newSelectedIndex = index - 1;
-            }
+          previewFutures.add(
+            _readCachedPreview(name).then((bytes) {
+              wsData.previewBytes = bytes;
+            }),
+          );
+
+          if (wsData.isFocused) {
+            newSelectedIndex = index - 1;
           }
         }
       }
 
-      final treeResult = await Process.run('swaymsg', ['-t', 'get_tree']);
-      if (treeResult.exitCode == 0) {
-        final Map<String, dynamic> treeJson = jsonDecode(treeResult.stdout);
+      if (previewFutures.isNotEmpty) {
+        await Future.wait(previewFutures);
+      }
+
+      if (treeJson != null) {
         _parseTree(treeJson, newWorkspaces);
       }
 
@@ -245,6 +287,8 @@ class _OverviewScreenState extends State<OverviewScreen>
           _isLoading = false;
         });
       }
+    } finally {
+      _isRefreshing = false;
     }
   }
 
@@ -302,9 +346,7 @@ class _OverviewScreenState extends State<OverviewScreen>
   }
 
   void _hideOverview() {
-    Process.start('swaymsg', [
-      '[app_id="fyroverview"] move scratchpad',
-    ], mode: ProcessStartMode.detached);
+    _overlayController.hide();
   }
 
   void _switchToWorkspace(int index) {

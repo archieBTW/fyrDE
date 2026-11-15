@@ -1,6 +1,7 @@
 #include "my_application.h"
 
 #include <flutter_linux/flutter_linux.h>
+#include <gtk-layer-shell.h>
 #ifdef GDK_WINDOWING_X11
 #include <gdk/gdkx.h>
 #endif
@@ -37,6 +38,72 @@ static void fyr_method_call_cb(FlMethodChannel* channel, FlMethodCall* method_ca
       }
     }
     g_autoptr(FlMethodResponse) response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+    fl_method_call_respond(method_call, response, nullptr);
+  } else if (strcmp(method, "setInputRegion") == 0) {
+    FlValue* args = fl_method_call_get_args(method_call);
+    if (args && fl_value_get_type(args) == FL_VALUE_TYPE_MAP) {
+      FlValue* full_val = fl_value_lookup_string(args, "full");
+      if (full_val && fl_value_get_type(full_val) == FL_VALUE_TYPE_BOOL &&
+          fl_value_get_bool(full_val)) {
+        gtk_widget_input_shape_combine_region(GTK_WIDGET(window), nullptr);
+      } else {
+        cairo_region_t* region = cairo_region_create();
+        FlValue* empty_val = fl_value_lookup_string(args, "empty");
+        if (!(empty_val && fl_value_get_type(empty_val) == FL_VALUE_TYPE_BOOL &&
+              fl_value_get_bool(empty_val))) {
+          FlValue* x_val = fl_value_lookup_string(args, "x");
+          FlValue* y_val = fl_value_lookup_string(args, "y");
+          FlValue* w_val = fl_value_lookup_string(args, "width");
+          FlValue* h_val = fl_value_lookup_string(args, "height");
+          if (x_val && y_val && w_val && h_val) {
+            cairo_rectangle_int_t rect = {
+              static_cast<int>(fl_value_get_int(x_val)),
+              static_cast<int>(fl_value_get_int(y_val)),
+              static_cast<int>(fl_value_get_int(w_val)),
+              static_cast<int>(fl_value_get_int(h_val)),
+            };
+            cairo_region_union_rectangle(region, &rect);
+          }
+        }
+        gtk_widget_input_shape_combine_region(GTK_WIDGET(window), region);
+        cairo_region_destroy(region);
+      }
+      if (GdkWindow* gdk_window = gtk_widget_get_window(GTK_WIDGET(window))) {
+        gdk_window_invalidate_rect(gdk_window, nullptr, TRUE);
+      }
+      gtk_widget_queue_draw(GTK_WIDGET(window));
+    }
+    g_autoptr(FlMethodResponse) response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+    fl_method_call_respond(method_call, response, nullptr);
+  } else if (strcmp(method, "setNamespace") == 0) {
+    FlValue* args = fl_method_call_get_args(method_call);
+    if (args && fl_value_get_type(args) == FL_VALUE_TYPE_STRING &&
+        gtk_layer_is_layer_window(window)) {
+      gtk_layer_set_namespace(window, fl_value_get_string(args));
+    }
+    g_autoptr(FlMethodResponse) response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+    fl_method_call_respond(method_call, response, nullptr);
+  } else if (strcmp(method, "getMonitorRect") == 0) {
+    g_autoptr(FlValue) result = nullptr;
+    if (GdkWindow* gdk_window = gtk_widget_get_window(GTK_WIDGET(window))) {
+      GdkDisplay* display = gdk_window_get_display(gdk_window);
+      if (display != nullptr) {
+        GdkMonitor* monitor = gdk_display_get_monitor_at_window(display, gdk_window);
+        if (monitor != nullptr) {
+          GdkRectangle geom;
+          gdk_monitor_get_geometry(monitor, &geom);
+          result = fl_value_new_map();
+          fl_value_set_string_take(result, "x", fl_value_new_int(geom.x));
+          fl_value_set_string_take(result, "y", fl_value_new_int(geom.y));
+          fl_value_set_string_take(result, "width", fl_value_new_int(geom.width));
+          fl_value_set_string_take(result, "height", fl_value_new_int(geom.height));
+        }
+      }
+    }
+    if (result == nullptr) {
+      result = fl_value_new_null();
+    }
+    g_autoptr(FlMethodResponse) response = FL_METHOD_RESPONSE(fl_method_success_response_new(result));
     fl_method_call_respond(method_call, response, nullptr);
   } else {
     g_autoptr(FlMethodResponse) response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());

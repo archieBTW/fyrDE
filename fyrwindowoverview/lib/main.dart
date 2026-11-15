@@ -7,13 +7,15 @@ import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'fyr_theme.dart';
 
-void main() {
+void main(List<String> args) {
+  WidgetsFlutterBinding.ensureInitialized();
   FyrTheme.initialize();
-  runApp(const WindowOverviewApp());
+  runApp(WindowOverviewApp(initiallyVisible: args.contains('--show')));
 }
 
 class WindowOverviewApp extends StatelessWidget {
-  const WindowOverviewApp({super.key});
+  final bool initiallyVisible;
+  const WindowOverviewApp({super.key, this.initiallyVisible = false});
 
   @override
   Widget build(BuildContext context) {
@@ -39,7 +41,7 @@ class WindowOverviewApp extends StatelessWidget {
             secondary: FyrTheme.accentColor,
           ),
         ),
-        home: const WindowOverviewScreen(),
+        home: WindowOverviewScreen(initiallyVisible: initiallyVisible),
       ),
     );
   }
@@ -62,7 +64,8 @@ class WindowData {
 }
 
 class WindowOverviewScreen extends StatefulWidget {
-  const WindowOverviewScreen({super.key});
+  final bool initiallyVisible;
+  const WindowOverviewScreen({super.key, this.initiallyVisible = false});
 
   @override
   State<WindowOverviewScreen> createState() => _WindowOverviewScreenState();
@@ -73,7 +76,7 @@ class _WindowOverviewScreenState extends State<WindowOverviewScreen>
   final FocusNode _focusNode = FocusNode();
   List<WindowData> _windows = [];
   int _selectedIndex = 0;
-  bool _isLoading = true;
+  bool _isLoading = false;
   String? _wallpaperPath;
   Uint8List? _workspacePreview;
   double _wsWidth = 1920;
@@ -82,17 +85,27 @@ class _WindowOverviewScreenState extends State<WindowOverviewScreen>
   Timer? _captureTimer;
   Timer? _focusedWinCaptureTimer;
   int? _lastCapturedId;
+  late final OverlayWindowController _overlayController;
+  bool _isRefreshing = false;
+  DateTime? _lastRefreshAt;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _wallpaperPath = SwayIpc.initialWallpaperFallback();
+    _overlayController = OverlayWindowController(
+      appName: 'fyrwindowoverview',
+      onShow: _refresh,
+    );
+    _overlayController.start(initiallyVisible: widget.initiallyVisible);
     _focusNode.addListener(() {
-      if (_focusNode.hasFocus) {
+      if (_focusNode.hasFocus && _overlayController.isVisible) {
         _refresh();
       }
     });
-    _refresh();
+    _fetchWallpaper();
+    _loadData();
     _startCaptureTimers();
   }
 
@@ -102,14 +115,14 @@ class _WindowOverviewScreenState extends State<WindowOverviewScreen>
     
     // 1. Workspace-wide capture (fallback)
     _captureTimer = Timer.periodic(const Duration(seconds: 8), (_) {
-      if (!_focusNode.hasFocus) {
+      if (!_overlayController.isVisible) {
         _captureActiveWorkspace();
       }
     });
 
     // 2. Focused window capture (for "clean" previews)
     _focusedWinCaptureTimer = Timer.periodic(const Duration(milliseconds: 2500), (_) {
-      if (!_focusNode.hasFocus) {
+      if (!_overlayController.isVisible) {
         _captureFocusedWindow();
       }
     });
@@ -127,9 +140,8 @@ class _WindowOverviewScreenState extends State<WindowOverviewScreen>
 
   Future<void> _captureFocusedWindow() async {
     try {
-      final result = await Process.run('swaymsg', ['-t', 'get_tree']);
-      if (result.exitCode == 0) {
-        final Map<String, dynamic> tree = jsonDecode(result.stdout);
+      final tree = await SwayIpc.getTree();
+      if (tree != null) {
         final focusedNode = _findFocusedNode(tree);
         if (focusedNode != null) {
           final int? id = focusedNode['id'];
@@ -197,6 +209,7 @@ class _WindowOverviewScreenState extends State<WindowOverviewScreen>
 
   @override
   void dispose() {
+    _overlayController.stop();
     _captureTimer?.cancel();
     _focusedWinCaptureTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
@@ -205,8 +218,20 @@ class _WindowOverviewScreenState extends State<WindowOverviewScreen>
   }
 
   void _refresh() {
-    _fetchWallpaper();
+    final now = DateTime.now();
+    if (_isRefreshing ||
+        (_lastRefreshAt != null &&
+            now.difference(_lastRefreshAt!).inMilliseconds < 80)) {
+      if (!_focusNode.hasFocus) {
+        _focusNode.requestFocus();
+      }
+      return;
+    }
+    _lastRefreshAt = now;
     _loadData();
+    if (_wallpaperPath == null) {
+      _fetchWallpaper();
+    }
     if (!_focusNode.hasFocus) {
       _focusNode.requestFocus();
     }
@@ -214,64 +239,52 @@ class _WindowOverviewScreenState extends State<WindowOverviewScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
+    if (state == AppLifecycleState.resumed && _overlayController.isVisible) {
       _refresh();
     }
   }
 
   Future<void> _fetchWallpaper() async {
-    try {
-      final result = await Process.run('sh', ['-c', 'pgrep -a swaybg']);
-      if (result.exitCode == 0) {
-        final out = result.stdout.toString();
-        final match = RegExp(r'-i\s+([^\s]+)').firstMatch(out);
-        if (match != null) {
-          setState(() {
-            _wallpaperPath = match.group(1);
-          });
-        }
-      }
-    } catch (e) {
-      debugPrint('Failed to fetch wallpaper: $e');
+    final path = await SwayIpc.detectWallpaperPath();
+    if (path != null && path != _wallpaperPath && mounted) {
+      setState(() {
+        _wallpaperPath = path;
+      });
     }
   }
 
   Future<void> _loadData() async {
+    if (_isRefreshing) return;
+    _isRefreshing = true;
     try {
-      // 1. Get current workspace name and resolution
-      final wsResult = await Process.run('swaymsg', ['-t', 'get_workspaces']);
+      final imgFile = File('/tmp/fyrwindowoverview_ws.jpg');
+      final results = await Future.wait<dynamic>([
+        SwayIpc.getWorkspacesAndTree(),
+        imgFile.exists().then((e) => e ? imgFile.readAsBytes() : null),
+      ]);
+      final (wsJson, treeJson) =
+          results[0] as (List<dynamic>, Map<String, dynamic>?);
+      final Uint8List? preview = results[1] as Uint8List?;
+
       String? currentWsName;
       double wsW = 1920;
       double wsH = 1080;
 
-      if (wsResult.exitCode == 0) {
-        final List<dynamic> wsJson = jsonDecode(wsResult.stdout);
-        for (var ws in wsJson) {
-          if (ws['focused'] == true) {
-            currentWsName = ws['name'].toString();
-            wsW = ws['rect']['width'].toDouble();
-            wsH = ws['rect']['height'].toDouble();
-            break;
-          }
+      for (final ws in wsJson) {
+        if (ws['focused'] == true) {
+          currentWsName = ws['name'].toString();
+          wsW = ws['rect']['width'].toDouble();
+          wsH = ws['rect']['height'].toDouble();
+          break;
         }
       }
 
       if (currentWsName == null) return;
 
-      // 2. Load existing preview
-      final imgFile = File('/tmp/fyrwindowoverview_ws.jpg');
-      Uint8List? preview;
-      if (await imgFile.exists()) {
-        preview = await imgFile.readAsBytes();
-      }
-
-      // 3. Get tree and find windows in current workspace
-      final treeResult = await Process.run('swaymsg', ['-t', 'get_tree']);
-      if (treeResult.exitCode == 0) {
-        final Map<String, dynamic> treeJson = jsonDecode(treeResult.stdout);
-        List<WindowData> newWindows = [];
+      if (treeJson != null) {
+        final List<WindowData> newWindows = [];
         _parseTree(treeJson, currentWsName, newWindows);
-        
+
         if (mounted) {
           setState(() {
             _windows = newWindows;
@@ -293,6 +306,8 @@ class _WindowOverviewScreenState extends State<WindowOverviewScreen>
           _isLoading = false;
         });
       }
+    } finally {
+      _isRefreshing = false;
     }
   }
 
@@ -347,9 +362,7 @@ class _WindowOverviewScreenState extends State<WindowOverviewScreen>
   }
 
   void _hideOverview() {
-    Process.start('swaymsg', [
-      '[app_id="fyrwindowoverview"] move scratchpad',
-    ], mode: ProcessStartMode.detached);
+    _overlayController.hide();
   }
 
   void _focusWindow(WindowData win) {

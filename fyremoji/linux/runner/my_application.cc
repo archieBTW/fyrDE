@@ -6,37 +6,21 @@
 #endif
 
 #include "flutter/generated_plugin_registrant.h"
+#include "../../../packages/fyr_core/linux/layer_overlay_helper.h"
 
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
+  fyr_core::LayerOverlayState* overlay_state;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
-  GtkWidget* toplevel = gtk_widget_get_toplevel(GTK_WIDGET(view));
-  if (GTK_IS_WINDOW(toplevel)) {
-    GtkWindow* win = GTK_WINDOW(toplevel);
-    GdkGeometry geometry;
-    geometry.min_width = 400;
-    geometry.min_height = 250;
-    geometry.max_width = 400;
-    geometry.max_height = 250;
-    gtk_window_set_geometry_hints(
-        win, nullptr, &geometry,
-        static_cast<GdkWindowHints>(GDK_HINT_MIN_SIZE | GDK_HINT_MAX_SIZE));
-    gtk_window_set_resizable(win, FALSE);
-    gtk_window_resize(win, 400, 250);
+  if (self->overlay_state && !self->overlay_state->config.start_hidden) {
+    fyr_core::ShowLayerOverlay(self->overlay_state);
   }
-  gtk_widget_show(toplevel);
-}
-
-// Intercept close requests (e.g., Sway kill command)
-static gboolean on_window_delete_event(GtkWidget* widget, GdkEvent* event, gpointer user_data) {
-  system("swaymsg '[app_id=\"fyremoji\"] move scratchpad' > /dev/null 2>&1");
-  return TRUE; // Prevent the window from actually closing
 }
 
 // Implements GApplication::activate.
@@ -45,31 +29,14 @@ static void my_application_activate(GApplication* application) {
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
 
-  // --- ENABLE TRANSPARENCY & REMOVE DECORATIONS ---
-  gtk_widget_set_app_paintable(GTK_WIDGET(window), TRUE);
-  GdkScreen *screen = gtk_widget_get_screen(GTK_WIDGET(window));
-  GdkVisual *visual = gdk_screen_get_rgba_visual(screen);
-  if (visual != NULL) {
-      gtk_widget_set_visual(GTK_WIDGET(window), visual);
-  }
-  gtk_window_set_decorated(window, FALSE);
-
-  // --- FORCE GTK WINDOW TRANSPARENCY VIA CSS ---
-  GtkCssProvider* css = gtk_css_provider_new();
-  gtk_css_provider_load_from_data(css, "window, decoration { background: transparent; }", -1, nullptr);
-  gtk_style_context_add_provider_for_screen(screen, GTK_STYLE_PROVIDER(css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-
-  gtk_window_set_default_size(window, 400, 250);
-  gtk_widget_set_size_request(GTK_WIDGET(window), 400, 250);
-  gtk_window_set_resizable(window, FALSE);
-  GdkGeometry geometry;
-  geometry.min_width = 400;
-  geometry.min_height = 250;
-  geometry.max_width = 400;
-  geometry.max_height = 250;
-  gtk_window_set_geometry_hints(
-      window, nullptr, &geometry,
-      static_cast<GdkWindowHints>(GDK_HINT_MIN_SIZE | GDK_HINT_MAX_SIZE));
+  fyr_core::LayerOverlayConfig cfg;
+  cfg.layer_namespace = "fyremoji";
+  cfg.fullscreen = false;
+  cfg.width = 400;
+  cfg.height = 250;
+  cfg.start_hidden = !fyr_core::ShouldStartShown(self->dart_entrypoint_arguments);
+  cfg.hide_on_focus_out = true;
+  fyr_core::ConfigureLayerOverlayWindow(window, cfg);
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();
   fl_dart_project_set_dart_entrypoint_arguments(
@@ -81,17 +48,20 @@ static void my_application_activate(GApplication* application) {
   gtk_widget_show(GTK_WIDGET(view));
   gtk_container_add(GTK_CONTAINER(window), GTK_WIDGET(view));
 
-  g_signal_connect(window, "delete-event", G_CALLBACK(on_window_delete_event), nullptr);
+  if (!self->overlay_state) {
+    self->overlay_state = new fyr_core::LayerOverlayState();
+  }
+  fyr_core::AttachLayerOverlayChannel(self->overlay_state, window, view, cfg);
 
-  // Show the window when Flutter renders.
-  // Requires the view to be realized so we can start rendering.
   g_signal_connect_swapped(view, "first-frame", G_CALLBACK(first_frame_cb),
                            self);
+  gtk_widget_realize(GTK_WIDGET(window));
   gtk_widget_realize(GTK_WIDGET(view));
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
-
-  gtk_widget_grab_focus(GTK_WIDGET(view));
+  if (!cfg.start_hidden) {
+    fyr_core::ShowLayerOverlay(self->overlay_state);
+  }
 }
 
 // Implements GApplication::local_command_line.
@@ -101,6 +71,12 @@ static gboolean my_application_local_command_line(GApplication* application,
   MyApplication* self = MY_APPLICATION(application);
   // Strip out the first argument as it is the binary name.
   self->dart_entrypoint_arguments = g_strdupv(*arguments + 1);
+
+  if (fyr_core::ShouldStartShown(self->dart_entrypoint_arguments) &&
+      fyr_core::ForwardToExistingOverlay("fyremoji", "show")) {
+    *exit_status = 0;
+    return TRUE;
+  }
 
   g_autoptr(GError) error = nullptr;
   if (!g_application_register(application, nullptr, &error)) {
@@ -136,6 +112,8 @@ static void my_application_shutdown(GApplication* application) {
 // Implements GObject::dispose.
 static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
+  delete self->overlay_state;
+  self->overlay_state = nullptr;
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
   G_OBJECT_CLASS(my_application_parent_class)->dispose(object);
 }

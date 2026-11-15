@@ -12,6 +12,14 @@ import 'fyr_theme.dart';
 
 final waylandLayerShellPlugin = WaylandLayerShell();
 
+/// Returns true when [rawAppId] identifies the Fyr search/launcher overlay.
+bool isSearchOverlayAppId(String rawAppId) {
+  final id = rawAppId.toLowerCase();
+  return id == 'launcher' ||
+      id.contains('fyrsearch') ||
+      id.contains('sway_launcher');
+}
+
 void main() async {
   FyrTheme.initialize();
   WidgetsFlutterBinding.ensureInitialized();
@@ -19,6 +27,12 @@ void main() async {
 
   bool isSupported = await waylandLayerShellPlugin.initialize(800, 200);
   if (isSupported) {
+    try {
+      await const MethodChannel('fyrdock/resize').invokeMethod(
+        'setNamespace',
+        'fyrdock',
+      );
+    } catch (_) {}
     await waylandLayerShellPlugin.setAnchor(ShellEdge.edgeBottom, true);
     await waylandLayerShellPlugin.setAnchor(ShellEdge.edgeLeft, false);
     await waylandLayerShellPlugin.setAnchor(ShellEdge.edgeRight, false);
@@ -94,31 +108,128 @@ class DockScreen extends StatefulWidget {
   State<DockScreen> createState() => _DockScreenState();
 }
 
-class _DockScreenState extends State<DockScreen> {
+class _DockScreenState extends State<DockScreen>
+    with SingleTickerProviderStateMixin {
   List<dynamic> _pinnedApps = [];
   List<Map<String, dynamic>> _openWindows = [];
-  Timer? _timer;
   Timer? _hideDebounce;
+  Timer? _visibilityDebounce;
+  Timer? _fullscreenRecheckTimer;
+  Timer? _geometryPollTimer;
+  SwaySubscription? _swaySub;
+  StreamSubscription<FileSystemEvent>? _dockDirSub;
   bool _isVisible = true;
+  bool _isSearchOverlayOpen = false;
+  bool _hasFullscreenWindow = false;
+  bool _hasTrackableVisibleWindows = false;
+  bool _didInitialVisibilityCheck = false;
+  bool _checkingVisibility = false;
+  bool _pendingVisibilityRecheck = false;
   bool _autohide = false; // Static by default
   bool _initializedAutohide = false;
   double _dockWidth = -1.0;
   double _dockHeight = -1.0;
+  String _inputMode = '';
   bool _isHoveredMain = false;
   String? _previewId;
   String? _previewExec;
   double? _previewX;
+  late final AnimationController _fadeController;
+
+  bool get _forceHidden => _isSearchOverlayOpen || _hasFullscreenWindow;
+
+  bool get _shouldShowDock =>
+      _initializedAutohide &&
+      !_forceHidden &&
+      (!_autohide || _isVisible || _isHoveredMain || _previewId != null);
+
+  void _syncVisibilityAnimation() {
+    if (_forceHidden) {
+      if (_fadeController.value != 0.0 || _fadeController.isAnimating) {
+        _fadeController.value = 0.0;
+      }
+      return;
+    }
+    if (_shouldShowDock) {
+      if (_fadeController.status != AnimationStatus.forward &&
+          _fadeController.status != AnimationStatus.completed) {
+        _fadeController.forward();
+      }
+    } else {
+      if (_fadeController.status != AnimationStatus.reverse &&
+          _fadeController.status != AnimationStatus.dismissed) {
+        _fadeController.reverse();
+      }
+    }
+  }
 
   @override
   void initState() {
     super.initState();
-    _loadConfig();
-    _loadPinnedApps();
-    _timer = Timer.periodic(const Duration(milliseconds: 300), (_) {
-      _loadConfig();
-      _loadPinnedApps();
-      _checkWindowVisibility();
-    });
+    _fadeController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 150),
+      value: 0.0,
+    )..addStatusListener((status) {
+        if (status == AnimationStatus.dismissed && mounted) {
+          setState(() {});
+        }
+      });
+    _initializeDock();
+  }
+
+  Future<void> _initializeDock() async {
+    await _loadConfig();
+    await _loadPinnedApps();
+    await _checkWindowVisibility();
+    _startSwaySubscription();
+    _startConfigWatcher();
+  }
+
+  void _startSwaySubscription() {
+    _swaySub?.cancel();
+    _swaySub = SwayIpc.subscribe(
+      const ['window', 'workspace', 'output'],
+      onEvent: (_) => _scheduleVisibilityCheck(),
+    );
+  }
+
+  void _scheduleVisibilityCheck() {
+    _visibilityDebounce?.cancel();
+    _visibilityDebounce = Timer(
+      const Duration(milliseconds: 16),
+      _checkWindowVisibility,
+    );
+  }
+
+  void _startConfigWatcher() {
+    _dockDirSub?.cancel();
+    try {
+      final dir = Directory(
+        '${Platform.environment['HOME']}/.config/fyrdock',
+      );
+      if (!dir.existsSync()) {
+        dir.createSync(recursive: true);
+      }
+      _dockDirSub = dir
+          .watch(
+            events:
+                FileSystemEvent.create |
+                FileSystemEvent.modify |
+                FileSystemEvent.move |
+                FileSystemEvent.delete,
+          )
+          .listen(
+            (event) {
+              if (event.path.contains('config.json')) {
+                _loadConfig();
+              } else if (event.path.contains('pinned_apps.json')) {
+                _loadPinnedApps();
+              }
+            },
+            onError: (_) {},
+          );
+    } catch (_) {}
   }
 
   Future<void> _loadConfig() async {
@@ -137,32 +248,191 @@ class _DockScreenState extends State<DockScreen> {
             _initializedAutohide = true;
             if (!_autohide) {
               waylandLayerShellPlugin.setExclusiveZone(72);
-              waylandLayerShellPlugin.setLayer(ShellLayer.layerTop);
+              waylandLayerShellPlugin.setLayer(
+                _isSearchOverlayOpen
+                    ? ShellLayer.layerBottom
+                    : ShellLayer.layerTop,
+              );
             } else {
               waylandLayerShellPlugin.setExclusiveZone(0);
-              waylandLayerShellPlugin.setLayer(ShellLayer.layerTop);
+              waylandLayerShellPlugin.setLayer(
+                _isSearchOverlayOpen
+                    ? ShellLayer.layerBottom
+                    : ShellLayer.layerTop,
+              );
             }
-            _updateWindowWidth();
+            if (_autohide) {
+              await _checkWindowVisibility();
+            } else {
+              _syncGeometryPollTimer();
+              if (mounted) {
+                setState(() => _isVisible = !_forceHidden);
+              }
+              _updateWindowWidth();
+            }
           }
         }
       } catch (_) {}
-    } else {
-      if (!_autohide && !_initializedAutohide) {
-        _initializedAutohide = true;
-        waylandLayerShellPlugin.setExclusiveZone(72);
-        waylandLayerShellPlugin.setLayer(ShellLayer.layerTop);
-        _updateWindowWidth();
-      }
+    }
+    if (!_initializedAutohide) {
+      _initializedAutohide = true;
+      waylandLayerShellPlugin.setExclusiveZone(_autohide ? 0 : 72);
+      waylandLayerShellPlugin.setLayer(
+        _isSearchOverlayOpen ? ShellLayer.layerBottom : ShellLayer.layerTop,
+      );
+      _updateWindowWidth();
     }
   }
 
-  Future<void> _checkWindowVisibility() async {
+  void _syncGeometryPollTimer() {
+    final shouldPoll =
+        mounted &&
+        _autohide &&
+        !_isSearchOverlayOpen &&
+        _hasTrackableVisibleWindows;
+    if (shouldPoll) {
+      if (_geometryPollTimer == null || !_geometryPollTimer!.isActive) {
+        _geometryPollTimer = Timer.periodic(
+          const Duration(milliseconds: 200),
+          (_) {
+            if (!_checkingVisibility) {
+              _checkWindowVisibility();
+            }
+          },
+        );
+      }
+    } else {
+      _geometryPollTimer?.cancel();
+      _geometryPollTimer = null;
+    }
+  }
+
+  static bool _windowsDiffer(
+    List<Map<String, dynamic>> a,
+    List<Map<String, dynamic>> b,
+  ) {
+    if (a.length != b.length) return true;
+    for (int i = 0; i < a.length; i++) {
+      final wa = a[i];
+      final wb = b[i];
+      if (wa['con_id'] != wb['con_id'] ||
+          wa['app_id'] != wb['app_id'] ||
+          wa['name'] != wb['name'] ||
+          wa['is_minimized'] != wb['is_minimized'] ||
+          wa['is_focused'] != wb['is_focused'] ||
+          wa['workspace'] != wb['workspace']) {
+        return true;
+      }
+      final ma = wa['marks'] as List? ?? const [];
+      final mb = wb['marks'] as List? ?? const [];
+      if (ma.length != mb.length) return true;
+      for (int j = 0; j < ma.length; j++) {
+        if (ma[j] != mb[j]) return true;
+      }
+    }
+    return false;
+  }
+
+  Future<Map<String, int>?> _getMonitorRect() async {
     try {
-      final treeResult = await Process.run('swaymsg', ['-t', 'get_tree']);
-      if (treeResult.exitCode == 0) {
-        final tree = jsonDecode(treeResult.stdout);
+      const channel = MethodChannel('fyrdock/resize');
+      final res = await channel.invokeMethod('getMonitorRect');
+      if (res is Map) {
+        return {
+          'x': (res['x'] as num).toInt(),
+          'y': (res['y'] as num).toInt(),
+          'width': (res['width'] as num).toInt(),
+          'height': (res['height'] as num).toInt(),
+        };
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<String?> _getPrimaryDisplayName() async {
+    try {
+      final home = Platform.environment['HOME'];
+      if (home == null || home.isEmpty) return null;
+      final file = File('$home/.config/fyr/primary_display');
+      if (await file.exists()) {
+        final content = (await file.readAsString()).trim();
+        if (content.isNotEmpty) return content;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  String? _resolveDockOutputName(
+    Map<String, dynamic> tree,
+    Map<String, int>? monitorRect,
+    String? primaryDisplayName,
+  ) {
+    final outputs = (tree['nodes'] as List? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .where((n) => n['type'] == 'output' && n['name'] != '__i3')
+        .toList();
+    if (outputs.isEmpty) return null;
+
+    if (monitorRect != null) {
+      for (final out in outputs) {
+        final rect = out['rect'];
+        if (rect is Map) {
+          final x = (rect['x'] as num?)?.toInt() ?? 0;
+          final y = (rect['y'] as num?)?.toInt() ?? 0;
+          final w = (rect['width'] as num?)?.toInt() ?? 0;
+          final h = (rect['height'] as num?)?.toInt() ?? 0;
+          if ((x - monitorRect['x']!).abs() <= 2 &&
+              (y - monitorRect['y']!).abs() <= 2 &&
+              (w - monitorRect['width']!).abs() <= 2 &&
+              (h - monitorRect['height']!).abs() <= 2) {
+            return out['name']?.toString();
+          }
+        }
+      }
+    }
+
+    if (primaryDisplayName != null) {
+      for (final out in outputs) {
+        if (out['name']?.toString() == primaryDisplayName) {
+          return primaryDisplayName;
+        }
+      }
+    }
+
+    for (final out in outputs) {
+      if (out['focused'] == true) {
+        return out['name']?.toString();
+      }
+    }
+    return outputs.first['name']?.toString();
+  }
+
+  Future<void> _checkWindowVisibility() async {
+    if (_checkingVisibility) {
+      _pendingVisibilityRecheck = true;
+      return;
+    }
+    _checkingVisibility = true;
+    try {
+      final results = await Future.wait<dynamic>([
+        SwayIpc.getTree(),
+        _getMonitorRect(),
+        _getPrimaryDisplayName(),
+      ]);
+      final tree = results[0] as Map<String, dynamic>?;
+      final monitorRect = results[1] as Map<String, int>?;
+      final primaryDisplayName = results[2] as String?;
+      if (tree != null) {
+        final dockOutputName = _resolveDockOutputName(
+          tree,
+          monitorRect,
+          primaryDisplayName,
+        );
         List<Map<String, dynamic>> windows = [];
         bool hasVisibleWindows = false;
+        bool hasSearchOverlay = false;
+        bool hasFullscreenWindow = false;
+        bool hasTrackableVisible = false;
         double screenX = 0;
         double screenY = 0;
         double screenWidth = 1920;
@@ -181,13 +451,18 @@ class _DockScreenState extends State<DockScreen> {
           Map<String, dynamic> node,
           bool isScratch,
           String? currentWorkspace,
+          bool isDockOutput,
         ) {
+          bool nodeOnDockOutput = isDockOutput;
           if (node['type'] == 'output' &&
               node['name'] != '__i3' &&
               node['rect'] != null) {
+            nodeOnDockOutput =
+                dockOutputName == null ||
+                node['name']?.toString() == dockOutputName;
             final w = (node['rect']['width'] as num?)?.toDouble() ?? 0;
             final h = (node['rect']['height'] as num?)?.toDouble() ?? 0;
-            if (w > 0 && h > 0) {
+            if (nodeOnDockOutput && w > 0 && h > 0) {
               screenX = (node['rect']['x'] as num?)?.toDouble() ?? 0;
               screenY = (node['rect']['y'] as num?)?.toDouble() ?? 0;
               screenWidth = w;
@@ -210,13 +485,15 @@ class _DockScreenState extends State<DockScreen> {
                         node['name'])
                     .toString()
                     .toLowerCase();
-            if (!appId.contains('fyrtaskbar') &&
+            if (isSearchOverlayAppId(appId)) {
+              if (!currentScratch && node['visible'] == true) {
+                hasSearchOverlay = true;
+              }
+            } else if (!appId.contains('fyrtaskbar') &&
                 !appId.contains('fyrdock') &&
-                !appId.contains('fyrsearch') &&
                 !appId.contains('fyroverview') &&
                 !appId.contains('fyrhelp') &&
                 !appId.contains('fyremoji') &&
-                !appId.contains('sway_launcher') &&
                 !appId.contains('fyrwindowoverview') &&
                 !appId.contains('fyrdesktop')) {
               windows.add({
@@ -229,9 +506,16 @@ class _DockScreenState extends State<DockScreen> {
                 'workspace': ws,
                 'marks': node['marks'] ?? [],
               });
-              if (!currentScratch && node['visible'] == true) {
-                if ((node['fullscreen_mode'] as num? ?? 0) > 0) {
+              final int fsMode =
+                  (node['fullscreen_mode'] as num?)?.toInt() ?? 0;
+              final bool isGlobalFullscreen = fsMode == 2;
+              if (!currentScratch &&
+                  node['visible'] == true &&
+                  (nodeOnDockOutput || isGlobalFullscreen)) {
+                hasTrackableVisible = true;
+                if (fsMode > 0) {
                   hasVisibleWindows = true;
+                  hasFullscreenWindow = true;
                 } else if (node['rect'] != null) {
                   double wx = (node['rect']['x'] as num).toDouble();
                   double wy = (node['rect']['y'] as num).toDouble();
@@ -251,32 +535,80 @@ class _DockScreenState extends State<DockScreen> {
             }
           }
           for (var child in (node['nodes'] ?? []))
-            traverse(child, currentScratch, ws);
+            traverse(child, currentScratch, ws, nodeOnDockOutput);
           for (var child in (node['floating_nodes'] ?? []))
-            traverse(child, currentScratch, ws);
+            traverse(child, currentScratch, ws, nodeOnDockOutput);
         }
 
-        traverse(tree, false, null);
+        traverse(tree, false, null, dockOutputName == null);
 
         if (mounted) {
-          setState(() {
-            _openWindows = windows;
-            if (_autohide) {
-              _isVisible = !hasVisibleWindows;
-            } else {
-              _isVisible = true;
+          _hasTrackableVisibleWindows = hasTrackableVisible;
+          final nextForceHidden = hasSearchOverlay || hasFullscreenWindow;
+          final nextIsVisible = nextForceHidden
+              ? false
+              : (_autohide ? !hasVisibleWindows : true);
+          final wasFullscreen = _hasFullscreenWindow;
+          final overlayChanged = hasSearchOverlay != _isSearchOverlayOpen;
+          final stateChanged =
+              !_didInitialVisibilityCheck ||
+              nextIsVisible != _isVisible ||
+              hasSearchOverlay != _isSearchOverlayOpen ||
+              hasFullscreenWindow != _hasFullscreenWindow ||
+              _windowsDiffer(_openWindows, windows);
+          _didInitialVisibilityCheck = true;
+
+          if (stateChanged) {
+            setState(() {
+              _openWindows = windows;
+              _isSearchOverlayOpen = hasSearchOverlay;
+              _hasFullscreenWindow = hasFullscreenWindow;
+              if (nextForceHidden) {
+                _isHoveredMain = false;
+                _previewId = null;
+                _previewExec = null;
+                _isVisible = false;
+              } else {
+                _isVisible = nextIsVisible;
+              }
+            });
+            if (overlayChanged) {
+              waylandLayerShellPlugin.setLayer(
+                hasSearchOverlay ? ShellLayer.layerBottom : ShellLayer.layerTop,
+              );
             }
-          });
-          _updateWindowWidth();
+            if (wasFullscreen && !hasFullscreenWindow) {
+              _fullscreenRecheckTimer?.cancel();
+              _fullscreenRecheckTimer = Timer(
+                const Duration(milliseconds: 250),
+                _checkWindowVisibility,
+              );
+            } else if (hasFullscreenWindow) {
+              _fullscreenRecheckTimer?.cancel();
+            }
+            _updateWindowWidth();
+          }
+          _syncGeometryPollTimer();
         }
       }
-    } catch (_) {}
+    } catch (_) {} finally {
+      _checkingVisibility = false;
+      if (_pendingVisibilityRecheck && mounted) {
+        _pendingVisibilityRecheck = false;
+        _checkWindowVisibility();
+      }
+    }
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
     _hideDebounce?.cancel();
+    _visibilityDebounce?.cancel();
+    _fullscreenRecheckTimer?.cancel();
+    _geometryPollTimer?.cancel();
+    _swaySub?.cancel();
+    _dockDirSub?.cancel();
+    _fadeController.dispose();
     super.dispose();
   }
 
@@ -339,21 +671,50 @@ class _DockScreenState extends State<DockScreen> {
 
     if (width < 100) width = 100;
 
-    bool shouldShow = !_autohide || _isVisible || _isHoveredMain || _previewId != null;
-    double height = !shouldShow ? 6.0 : (_previewId != null ? 200.0 : 88.0);
+    _syncVisibilityAnimation();
+    bool shouldShow = _shouldShowDock;
+    // Keep the layer surface at a normal height (88 / 200) and toggle the
+    // pointer input region instead of shrinking GtkWindow below FlView's
+    // minimum height (which stalls GTK/EGL frame scheduling under Wayland).
+    double height = _previewId != null ? 200.0 : 88.0;
+    final String nextInputMode = _forceHidden
+        ? 'empty'
+        : (!shouldShow ? 'edge' : 'full');
 
-    if (_dockWidth == width && _dockHeight == height) return;
+    final bool sizeChanged = _dockWidth != width || _dockHeight != height;
+    final bool inputChanged = _inputMode != nextInputMode || (sizeChanged && nextInputMode == 'edge');
+    if (!sizeChanged && !inputChanged) return;
+
     _dockWidth = width;
     _dockHeight = height;
+    _inputMode = nextInputMode;
 
     const channel = MethodChannel('fyrdock/resize');
-    try {
-      await channel.invokeMethod('setSize', {
-        'width': width.toInt(),
-        'height': height.toInt(),
-      });
-    } catch (_) {}
-    await windowManager.setSize(Size(width, height));
+    if (sizeChanged) {
+      try {
+        await channel.invokeMethod('setSize', {
+          'width': width.toInt(),
+          'height': height.toInt(),
+        });
+      } catch (_) {}
+      await windowManager.setSize(Size(width, height));
+    }
+    if (inputChanged) {
+      try {
+        if (nextInputMode == 'empty') {
+          await channel.invokeMethod('setInputRegion', {'empty': true});
+        } else if (nextInputMode == 'edge') {
+          await channel.invokeMethod('setInputRegion', {
+            'x': 0,
+            'y': height.toInt() - 8,
+            'width': width.toInt(),
+            'height': 8,
+          });
+        } else {
+          await channel.invokeMethod('setInputRegion', {'full': true});
+        }
+      } catch (_) {}
+    }
   }
 
   Future<String?> _findIcon(String? iconName) async {
@@ -555,9 +916,20 @@ class _DockScreenState extends State<DockScreen> {
     return _DockIcon(
       name: 'All Apps',
       iconWidget: Icon(Icons.apps, color: FyrTheme.textColor, size: 32),
-      onTap: () => Process.run('swaymsg', [
-        '[app_id="(?i).*fyrsearch.*"] scratchpad show, border none, resize set 1920 1080, move absolute position 0 0',
-      ]),
+      onTap: () async {
+        final home = Platform.environment['HOME'] ?? '';
+        final launcherScript = '$home/.config/fyr/launcher_toggle.sh';
+        if (File(launcherScript).existsSync()) {
+          await Process.run(launcherScript, []);
+        } else {
+          await Process.start(
+            '/opt/fyrsearch/fyrsearch',
+            ['--show'],
+            mode: ProcessStartMode.detached,
+          );
+        }
+        await _checkWindowVisibility();
+      },
       onUnpin: null,
       isOpen: false,
       isMinimized: false,
@@ -572,7 +944,7 @@ class _DockScreenState extends State<DockScreen> {
       margin: EdgeInsets.only(bottom: 16),
       padding: EdgeInsets.all(8),
       decoration: BoxDecoration(
-        color: FyrTheme.bgColor.withOpacity(0.95),
+        color: FyrTheme.panelBgColor.withOpacity(0.75),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: FyrTheme.cardColor, width: 1.5),
         boxShadow: [
@@ -661,6 +1033,7 @@ class _DockScreenState extends State<DockScreen> {
         hitTestBehavior: HitTestBehavior.opaque,
         onEnter: (_) {
           _hideDebounce?.cancel();
+          if (_forceHidden) return;
           if (!_isHoveredMain) {
             setState(() => _isHoveredMain = true);
             _updateWindowWidth();
@@ -669,6 +1042,7 @@ class _DockScreenState extends State<DockScreen> {
         },
         onHover: (_) {
           _hideDebounce?.cancel();
+          if (_forceHidden) return;
           if (!_isHoveredMain) {
             setState(() => _isHoveredMain = true);
             _updateWindowWidth();
@@ -692,7 +1066,7 @@ class _DockScreenState extends State<DockScreen> {
         child: Container(
           width: double.infinity,
           height: double.infinity,
-          color: const Color(0x01000000),
+          color: Colors.transparent,
           child: ClipRect(
             child: OverflowBox(
               minWidth: 0,
@@ -700,11 +1074,16 @@ class _DockScreenState extends State<DockScreen> {
               minHeight: 0,
               maxHeight: 200,
               alignment: Alignment.bottomCenter,
-              child: AnimatedOpacity(
-                opacity: (_isVisible || _isHoveredMain || _previewId != null) ? 1.0 : 0.0,
-                duration: const Duration(milliseconds: 150),
-                child: SizedBox(
-                  width: _dockWidth > 0 ? _dockWidth : 800,
+              child: (!_shouldShowDock && _fadeController.isDismissed)
+                  ? SizedBox(
+                      width: _dockWidth > 0 ? _dockWidth : 800,
+                      height: 200,
+                      child: const CustomPaint(painter: _ClearSurfacePainter()),
+                    )
+                  : FadeTransition(
+                      opacity: _fadeController,
+                      child: SizedBox(
+                        width: _dockWidth > 0 ? _dockWidth : 800,
                   height: 200,
                   child: Stack(
                     children: [
@@ -714,9 +1093,14 @@ class _DockScreenState extends State<DockScreen> {
                   margin: EdgeInsets.only(bottom: 20),
                   height: 64,
                   decoration: BoxDecoration(
-                    color: FyrTheme.bgColor.withOpacity(0.4),
+                    color: FyrTheme.panelBgColor.withOpacity(0.2),
                     borderRadius: BorderRadius.circular(24),
-                    border: Border.all(color: FyrTheme.cardColor, width: 1),
+                    border: Border.all(
+                      color: FyrTheme.isDark
+                          ? Colors.white.withOpacity(0.12)
+                          : Colors.black.withOpacity(0.12),
+                      width: 1,
+                    ),
                   ),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(24),
@@ -878,6 +1262,18 @@ class _DockScreenState extends State<DockScreen> {
       ),
     );
   }
+}
+
+class _ClearSurfacePainter extends CustomPainter {
+  const _ClearSurfacePainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(Offset.zero & size, Paint()..blendMode = BlendMode.clear);
+  }
+
+  @override
+  bool shouldRepaint(covariant _ClearSurfacePainter oldDelegate) => false;
 }
 
 class _DockIcon extends StatefulWidget {

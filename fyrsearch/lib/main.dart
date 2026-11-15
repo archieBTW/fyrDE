@@ -7,13 +7,15 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'search_providers.dart';
 import 'fyr_theme.dart';
 
-void main() {
+void main(List<String> args) {
+  WidgetsFlutterBinding.ensureInitialized();
   FyrTheme.initialize();
-  runApp(const LauncherApp());
+  runApp(LauncherApp(initiallyVisible: args.contains('--show')));
 }
 
 class LauncherApp extends StatelessWidget {
-  const LauncherApp({super.key});
+  final bool initiallyVisible;
+  const LauncherApp({super.key, this.initiallyVisible = false});
 
   @override
   Widget build(BuildContext context) {
@@ -43,7 +45,7 @@ class LauncherApp extends StatelessWidget {
           surface: FyrTheme.surfaceColor,
         ),
       ),
-      home: LauncherScreen(),
+      home: LauncherScreen(initiallyVisible: initiallyVisible),
     ),
     );
   }
@@ -72,7 +74,8 @@ class DesktopApp {
 }
 
 class LauncherScreen extends StatefulWidget {
-  const LauncherScreen({super.key});
+  final bool initiallyVisible;
+  const LauncherScreen({super.key, this.initiallyVisible = false});
 
   @override
   State<LauncherScreen> createState() => _LauncherScreenState();
@@ -95,10 +98,10 @@ class _LauncherScreenState extends State<LauncherScreen>
   final int _rowsPerPage = 2;
   late final int _itemsPerPage;
 
-  Timer? _refreshTimer;
   Timer? _debounceTimer;
   final List<StreamSubscription> _dirWatchers = [];
   final Map<String, DateTime> _lastDirModified = {};
+  late final OverlayWindowController _overlayController;
 
   @override
   void initState() {
@@ -107,7 +110,28 @@ class _LauncherScreenState extends State<LauncherScreen>
     _itemsPerPage = _crossAxisCount * _rowsPerPage;
     _loadApps();
     _setupWatchers();
-    _refreshTimer = Timer.periodic(const Duration(seconds: 4), (_) => _checkAppsModified());
+    _overlayController = OverlayWindowController(
+      appName: 'fyrsearch',
+      onShow: () {
+        _checkAppsModified();
+        if (mounted) {
+          setState(() {
+            _searchController.clear();
+            _filterApps('');
+          });
+          _focusNode.requestFocus();
+        }
+      },
+      onHide: () {
+        if (mounted) {
+          setState(() {
+            _searchController.clear();
+            _filterApps('');
+          });
+        }
+      },
+    );
+    _overlayController.start(initiallyVisible: widget.initiallyVisible);
     _focusNode.addListener(() {
       if (_focusNode.hasFocus) {
         _checkAppsModified();
@@ -118,7 +142,7 @@ class _LauncherScreenState extends State<LauncherScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _refreshTimer?.cancel();
+    _overlayController.stop();
     _debounceTimer?.cancel();
     for (var sub in _dirWatchers) {
       sub.cancel();
@@ -491,10 +515,7 @@ class _LauncherScreenState extends State<LauncherScreen>
   }
 
   void _hideLauncher() {
-    Process.start('swaymsg', [
-      'move',
-      'scratchpad',
-    ], mode: ProcessStartMode.detached);
+    _overlayController.hide();
     setState(() {
       _searchController.clear();
       _filterApps('');

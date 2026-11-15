@@ -111,38 +111,14 @@ class _PowerPaneState extends State<PowerPane> {
     if (args.length > 1) {
       Process.start('swayidle', args);
     }
-    final configFile = File(
-      '${Platform.environment['HOME']}/.config/sway/config',
+    await SwayConfD.removeLegacyMarkerBlock(
+      '# POWER SETTINGS',
+      '# END POWER SETTINGS',
     );
-    if (await configFile.exists()) {
-      var lines = await configFile.readAsLines();
-      bool inBlock = false;
-      var newLines = <String>[];
-      for (var line in lines) {
-        if (line == '# POWER SETTINGS') {
-          inBlock = true;
-          continue;
-        }
-        if (line == '# END POWER SETTINGS') {
-          inBlock = false;
-          continue;
-        }
-        if (!inBlock) {
-          newLines.add(line);
-        }
-      }
-
-      if (args.length > 1) {
-        newLines.add('# POWER SETTINGS');
-        final cmdStr =
-            'exec swayidle ' +
-            args.map((a) => a.contains(' ') ? "'\$a'" : a).join(' ');
-        newLines.add(cmdStr);
-        newLines.add('# END POWER SETTINGS');
-      }
-
-      await configFile.writeAsString('${newLines.join('\n')}\n');
-    }
+    final powerContent = args.length > 1
+        ? '# POWER SETTINGS\nexec swayidle ${args.map((a) => a.contains(' ') ? "'$a'" : a).join(' ')}\n# END POWER SETTINGS\n'
+        : '';
+    await SwayConfD.writeDropIn('40-power.conf', powerContent, reload: false);
   }
 
   @override
