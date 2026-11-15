@@ -112,6 +112,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   bool _midiLearnActive = false;
   String? _midiLearnTarget;
   List<MidiCcMapping> midiMappings = [];
+  List<DawClip> _activeDragClips = [];
 
   bool _isSessionView = false;
   final Set<String> _activeSessionClipIds = {};
@@ -2041,11 +2042,11 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         tracks.add(t);
       }
       AudioSource? src;
-      if (SoLoud.instance.isInitialized) {
-        try {
+      try {
+        if (SoLoud.instance.isInitialized) {
           src = await SoLoud.instance.loadFile(resolvedPath);
-        } catch (_) {}
-      }
+        }
+      } catch (_) {}
       final clip = AudioClip(
         id: UniqueKey().toString(),
         name: p.basenameWithoutExtension(item.name),
@@ -2060,7 +2061,9 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         selectedTrackIndex = tracks.indexOf(t);
         selectedClip = clip;
       });
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Add browser item error: $e');
+    }
   }
 
   Future<void> _importMidiFile({Track? targetTrack, double? startPos}) async {
@@ -6425,10 +6428,39 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     );
   }
 
+  DawClip _cloneClipForDragCopy(String trackId, DawClip sourceClip) {
+    final dup = DawClip.fromJson(sourceClip.toJson());
+    dup.id = UniqueKey().toString();
+    if (dup is MidiClip) {
+      dup.patternGroupId = null;
+    } else if (dup is AudioClip && sourceClip is AudioClip) {
+      dup.waveformData = sourceClip.waveformData;
+      dup.processedFilePath = sourceClip.processedFilePath;
+      dup.processedCacheKey = sourceClip.processedCacheKey;
+      dup.source = sourceClip.source;
+      try {
+        if (SoLoud.instance.isInitialized) {
+          final loadPath = dup.playbackFilePath;
+          Future(() async {
+            try {
+              final src = loadPath.startsWith('assets/')
+                  ? await SoLoud.instance.loadAsset(loadPath)
+                  : await SoLoud.instance.loadFile(loadPath);
+              dup.source = src;
+            } catch (_) {}
+          });
+        }
+      } catch (_) {}
+    }
+    trackClips.putIfAbsent(trackId, () => []).add(dup);
+    return dup;
+  }
+
   Widget _buildClip(String trackId, DawClip clip) {
     final isSelected =
         selectedClip == clip || multiSelectedClips.contains(clip);
     return Positioned(
+      key: ValueKey('clip_${clip.id}'),
       left: clip.start * _zoomX,
       top: 10,
       bottom: 10,
@@ -6448,6 +6480,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
             selectedTrackIndex = tIdx;
           }
         }),
+        onDoubleTapDown: (_) {},
         onDoubleTap: () => setState(() {
           selectedClip = clip;
           multiSelectedClips.clear();
@@ -6467,26 +6500,67 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         }),
         onSecondaryTapUp: (details) =>
             _showClipMenu(details.globalPosition, trackId, clip),
-        onHorizontalDragStart: (d) => _saveState(),
-        onHorizontalDragUpdate: (d) => setState(() {
-          List<DawClip> targets = multiSelectedClips.contains(clip)
-              ? multiSelectedClips
+        onHorizontalDragStart: (d) {
+          _saveState();
+          final sourceTargets = multiSelectedClips.contains(clip)
+              ? [...multiSelectedClips]
               : [clip];
+          if (HardwareKeyboard.instance.isAltPressed) {
+            final clones = <DawClip>[];
+            DawClip? clonedPrimary;
+            for (final orig in sourceTargets) {
+              String? ownerId;
+              for (final t in tracks) {
+                if (trackClips[t.id]?.contains(orig) == true) {
+                  ownerId = t.id;
+                  break;
+                }
+              }
+              final clone = _cloneClipForDragCopy(ownerId ?? trackId, orig);
+              clones.add(clone);
+              if (identical(orig, clip)) clonedPrimary = clone;
+            }
+            setState(() {
+              _activeDragClips = clones;
+              if (multiSelectedClips.contains(clip)) {
+                multiSelectedClips
+                  ..clear()
+                  ..addAll(clones);
+                selectedClip = clonedPrimary ?? clones.first;
+              } else {
+                multiSelectedClips.clear();
+                selectedClip = clonedPrimary ?? clones.first;
+              }
+            });
+          } else {
+            _activeDragClips = sourceTargets;
+          }
+        },
+        onHorizontalDragUpdate: (d) => setState(() {
+          final targets = _activeDragClips.isNotEmpty
+              ? _activeDragClips
+              : (multiSelectedClips.contains(clip)
+                    ? multiSelectedClips
+                    : [clip]);
           for (var c in targets) {
             c.start += (d.delta.dx / _zoomX);
             if (c.start < 0) c.start = 0;
           }
         }),
         onHorizontalDragEnd: (d) => setState(() {
+          final targets = _activeDragClips.isNotEmpty
+              ? _activeDragClips
+              : (multiSelectedClips.contains(clip)
+                    ? multiSelectedClips
+                    : [clip]);
           if (snapToGrid) {
-            List<DawClip> targets = multiSelectedClips.contains(clip)
-                ? multiSelectedClips
-                : [clip];
             for (var c in targets) {
               c.start = (c.start / snapResolution).round() * snapResolution;
             }
           }
+          _activeDragClips = [];
         }),
+        onHorizontalDragCancel: () => _activeDragClips = [],
         child: Container(
           decoration: BoxDecoration(
             color: clip.color.withOpacity(isSelected ? 0.8 : 0.5),
@@ -7292,6 +7366,14 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                             onLongPressEnd: (d) =>
                                 setState(() => isSelecting = false),
                             onDoubleTapDown: (d) {
+                              final double clickX = d.localPosition.dx / _zoomX;
+                              final bool hitExisting =
+                                  (trackClips[track.id] ?? []).any(
+                                (c) =>
+                                    clickX >= c.start &&
+                                    clickX <= c.start + c.length,
+                              );
+                              if (hitExisting) return;
                               if (track.type == TrackType.midi ||
                                   track.type == TrackType.sampler) {
                                 _saveState();

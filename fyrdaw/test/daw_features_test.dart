@@ -3,6 +3,7 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fyrdaw/main.dart';
 import 'package:fyrdaw/models/automation_point.dart';
@@ -2080,6 +2081,261 @@ void main() {
       } finally {
         await tmpDir.delete(recursive: true);
       }
+    });
+  });
+
+  group('Alt+Drag Copy & Double-Click Guard', () {
+    testWidgets('Double-clicking existing MIDI/Sampler clip opens editor without creating duplicate clip on top', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      tester.view.physicalSize = const Size(1600, 960);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+
+      await tester.pumpWidget(const MaterialApp(home: DawApp()));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // Add MIDI track -> creates a single 'Pattern 1' clip
+      await tester.tap(find.byIcon(Icons.add).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add MIDI Track'));
+      await tester.pumpAndSettle();
+
+      // Switch to Mixer so we can verify double-click opens MIDI Editor
+      await tester.tap(find.text('Mixer'));
+      await tester.pumpAndSettle();
+      expect(find.byType(MidiEditorWidget), findsNothing);
+
+      final midiPos = tester.getCenter(find.text('Pattern 1').first);
+      await tester.tapAt(midiPos);
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.tapAt(midiPos);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(MidiEditorWidget), findsOneWidget);
+      // No new unnamed 'MIDI' clip should be spawned on top of 'Pattern 1'
+      expect(find.text('Pattern 1'), findsOneWidget);
+      expect(find.text('MIDI'), findsNothing);
+    });
+
+    testWidgets('Holding Alt while dragging MIDI, Sampler, or Audio clip creates a copy', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final tempDocDir = Directory.systemTemp.createTempSync('daw_test_docs_');
+      final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      const pathChannel = MethodChannel('plugins.flutter.io/path_provider');
+      const wmChannel = MethodChannel('window_manager');
+      const recChannel = MethodChannel('com.llfbandit.record/messages');
+      const midiChannel = MethodChannel('plugins.invisiblewrench.com/flutter_midi_command');
+      const midiRxChannel = MethodChannel('plugins.invisiblewrench.com/flutter_midi_command/rx_channel');
+      messenger.setMockMethodCallHandler(pathChannel, (call) async => tempDocDir.path);
+      messenger.setMockMethodCallHandler(wmChannel, (call) async => null);
+      messenger.setMockMethodCallHandler(recChannel, (call) async => null);
+      messenger.setMockMethodCallHandler(midiChannel, (call) async => <dynamic>[]);
+      messenger.setMockMethodCallHandler(midiRxChannel, (call) async => null);
+      addTearDown(() async {
+        messenger.setMockMethodCallHandler(pathChannel, null);
+        messenger.setMockMethodCallHandler(wmChannel, null);
+        messenger.setMockMethodCallHandler(recChannel, null);
+        messenger.setMockMethodCallHandler(midiChannel, null);
+        messenger.setMockMethodCallHandler(midiRxChannel, null);
+        if (tempDocDir.existsSync()) {
+          tempDocDir.deleteSync(recursive: true);
+        }
+      });
+
+      tester.view.physicalSize = const Size(1600, 960);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+
+      await tester.pumpWidget(const MaterialApp(home: DawApp()));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // Add MIDI track ('Pattern 1') and Sampler track ('Beat 1')
+      await tester.tap(find.byIcon(Icons.add).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add MIDI Track'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.add).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add Sampler Track'));
+      await tester.pumpAndSettle();
+
+      // Insert an Audio clip ('cello_c3') via Sample Browser
+      await tester.tap(find.byKey(const Key('toggle_sample_browser')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.descendant(
+          of: find.byType(SampleBrowserDrawer),
+          matching: find.byType(TextField),
+        ),
+        'cello_c3',
+      );
+      await tester.pumpAndSettle();
+      final audioClipFinder = find.descendant(
+        of: find.byWidgetPredicate(
+          (w) => w.key is ValueKey<String> && (w.key as ValueKey<String>).value.startsWith('clip_'),
+        ),
+        matching: find.text('cello_c3'),
+      );
+      await tester.tap(find.text('+Add').first);
+      for (int i = 0; i < 40; i++) {
+        await tester.pump();
+        if (audioClipFinder.evaluate().isNotEmpty) break;
+        await tester.runAsync(() => Future.delayed(const Duration(milliseconds: 50)));
+      }
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('toggle_sample_browser')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Pattern 1'), findsOneWidget);
+      expect(find.text('Beat 1'), findsOneWidget);
+      // Track header and Audio clip both show 'cello_c3'; the clip widget is keyed 'clip_*'
+      expect(audioClipFinder, findsOneWidget);
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+      addTearDown(() async {
+        if (HardwareKeyboard.instance.physicalKeysPressed.contains(
+          PhysicalKeyboardKey.altLeft,
+        )) {
+          await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+        }
+      });
+
+      // Alt+drag MIDI clip
+      final origMidiLeft = tester.getTopLeft(find.text('Pattern 1')).dx;
+      await tester.drag(
+        find.text('Pattern 1'),
+        const Offset(220, 0),
+        kind: PointerDeviceKind.mouse,
+        warnIfMissed: false,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Pattern 1'), findsNWidgets(2));
+      final midiLefts = tester
+          .widgetList(find.text('Pattern 1'))
+          .map((w) => tester.getTopLeft(find.byWidget(w)).dx)
+          .toList()
+        ..sort();
+      expect(midiLefts[0], closeTo(origMidiLeft, 2.0));
+      expect(midiLefts[1] - midiLefts[0], greaterThan(150.0));
+
+      // Alt+drag Sampler clip
+      final origSamplerLeft = tester.getTopLeft(find.text('Beat 1')).dx;
+      await tester.drag(
+        find.text('Beat 1'),
+        const Offset(240, 0),
+        kind: PointerDeviceKind.mouse,
+        warnIfMissed: false,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Beat 1'), findsNWidgets(2));
+      final samplerLefts = tester
+          .widgetList(find.text('Beat 1'))
+          .map((w) => tester.getTopLeft(find.byWidget(w)).dx)
+          .toList()
+        ..sort();
+      expect(samplerLefts[0], closeTo(origSamplerLeft, 2.0));
+      expect(samplerLefts[1] - samplerLefts[0], greaterThan(150.0));
+
+      // Alt+drag Audio clip
+      final origAudioLeft = tester.getTopLeft(audioClipFinder).dx;
+      await tester.drag(
+        audioClipFinder,
+        const Offset(200, 0),
+        kind: PointerDeviceKind.mouse,
+        warnIfMissed: false,
+      );
+      await tester.pumpAndSettle();
+      expect(audioClipFinder, findsNWidgets(2));
+      final audioLefts = tester
+          .widgetList(audioClipFinder)
+          .map((w) => tester.getTopLeft(find.byWidget(w)).dx)
+          .toList()
+        ..sort();
+      expect(audioLefts[0], closeTo(origAudioLeft, 2.0));
+      expect(audioLefts[1] - audioLefts[0], greaterThan(120.0));
+
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+    });
+
+    testWidgets('Holding Alt while dragging a MIDI note in MidiEditorWidget copies the note', (tester) async {
+      final track = Track(id: 'm1', name: 'Keys', type: TrackType.midi);
+      final clip = MidiClip(
+        id: 'mc1',
+        start: 0.0,
+        length: 400.0,
+        color: Colors.purple,
+        notes: [MidiNote(pitch: 60, start: 20.0, length: 60.0, velocity: 100)],
+      );
+      List<MidiNote> selected = [];
+      int changes = 0;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setModalState) => SizedBox(
+                width: 900,
+                height: 500,
+                child: MidiEditorWidget(
+                  clip: clip,
+                  track: track,
+                  snapToGrid: false,
+                  snapResolution: 25.0,
+                  zoomX: 1.0,
+                  bpm: 120,
+                  timeSigTop: 4,
+                  selectedMidiNotes: selected,
+                  onSelectionChanged: (s) => setModalState(() => selected = s),
+                  onNotesChanged: () => setModalState(() => changes++),
+                  onZoomIn: () {},
+                  onZoomOut: () {},
+                  playheadPosition: 0.0,
+                  onPlayheadChanged: (_) {},
+                  midiDevices: const [],
+                  onCopy: () {},
+                  onPaste: () {},
+                  onInstrumentDialogRequested: () {},
+                  onMidiInputDialogRequested: () {},
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(clip.notes, hasLength(1));
+      final noteFinder = find.byKey(ObjectKey(clip.notes.first));
+      expect(noteFinder, findsOneWidget);
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+      addTearDown(() async {
+        if (HardwareKeyboard.instance.physicalKeysPressed.contains(
+          PhysicalKeyboardKey.altLeft,
+        )) {
+          await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+        }
+      });
+
+      // Ensure visible and mouse-drag the note right + up while holding Alt
+      await tester.ensureVisible(noteFinder);
+      await tester.pumpAndSettle();
+      await tester.drag(
+        noteFinder,
+        const Offset(100, -40),
+        kind: PointerDeviceKind.mouse,
+      );
+      await tester.pumpAndSettle();
+
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+
+      expect(clip.notes, hasLength(2));
+      expect(changes, greaterThanOrEqualTo(2));
+      expect(clip.notes[0].start, closeTo(20.0, 0.1));
+      expect(clip.notes[0].pitch, 60);
+      expect(clip.notes[1].start, greaterThan(90.0));
+      expect(clip.notes[1].pitch, greaterThan(60));
     });
   });
 }

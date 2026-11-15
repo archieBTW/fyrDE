@@ -151,8 +151,13 @@ void releaseInstrumentNote(SoundHandle handle, {int releaseMs = 140}) {
 }
 
 Future<Directory> getProjectMediaDirectory() async {
-  final docsDir = await getApplicationDocumentsDirectory();
-  final dir = Directory('${docsDir.path}/SoundBooth/Media');
+  Directory baseDir;
+  try {
+    baseDir = await getApplicationDocumentsDirectory();
+  } catch (_) {
+    baseDir = Directory.systemTemp;
+  }
+  final dir = Directory('${baseDir.path}/SoundBooth/Media');
   if (!dir.existsSync()) {
     dir.createSync(recursive: true);
   }

@@ -1,5 +1,6 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'dart:math';
 import 'dart:async';
 import 'package:flutter_soloud/flutter_soloud.dart';
@@ -119,6 +120,7 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
   bool _showArpBar = false;
 
   final Map<MidiNote, int> _dragInitialPitches = {};
+  List<MidiNote> _activeDragNotes = [];
   double _dragTotalDy = 0.0;
   final Map<int, SoundHandle> _previewKeyHandles = {};
 
@@ -1335,6 +1337,7 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                                   note,
                                 );
                                 return Positioned(
+                                  key: ObjectKey(note),
                                   left: note.start * widget.zoomX,
                                   top:
                                       _getRowFromMidiPitch(note.pitch) *
@@ -1351,14 +1354,27 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                                       widget.onChangeStart?.call();
                                       _dragInitialPitches.clear();
                                       _dragTotalDy = 0.0;
-                                      List<MidiNote> targets =
+                                      final List<MidiNote> sourceTargets =
                                           widget.selectedMidiNotes.contains(
                                             note,
                                           )
-                                          ? widget.selectedMidiNotes
+                                          ? [...widget.selectedMidiNotes]
                                           : [note];
+                                      List<MidiNote> targets = sourceTargets;
+                                      if (HardwareKeyboard.instance.isAltPressed) {
+                                        targets = [
+                                          for (final orig in sourceTargets)
+                                            MidiNote.fromJson(orig.toJson()),
+                                        ];
+                                        widget.clip.notes.addAll(targets);
+                                        widget.onSelectionChanged(targets);
+                                      }
+                                      _activeDragNotes = targets;
                                       for (var n in targets) {
                                         _dragInitialPitches[n] = n.pitch;
+                                      }
+                                      if (HardwareKeyboard.instance.isAltPressed) {
+                                        widget.onNotesChanged();
                                       }
                                     },
                                     onPanUpdate: (d) {
@@ -1368,11 +1384,12 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                                             (_dragTotalDy / _pitchHeight)
                                                 .round();
                                         List<MidiNote> targets =
-                                            widget.selectedMidiNotes.contains(
-                                              note,
-                                            )
-                                            ? widget.selectedMidiNotes
-                                            : [note];
+                                            _activeDragNotes.isNotEmpty
+                                            ? _activeDragNotes
+                                            : (widget.selectedMidiNotes
+                                                      .contains(note)
+                                                  ? widget.selectedMidiNotes
+                                                  : [note]);
                                         for (var n in targets) {
                                           n.start +=
                                               (d.delta.dx / widget.zoomX);
@@ -1399,60 +1416,62 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                                               if (newPitch != n.pitch &&
                                                   newPitch != -1) {
                                                 n.pitch = newPitch;
-                                                if (widget.track != null &&
-                                                    SoLoud
-                                                        .instance
-                                                        .isInitialized &&
-                                                    targets.length == 1) {
-                                                  if (widget.track!.type ==
-                                                      TrackType.sampler) {
-                                                    var pad = widget
-                                                        .track!
-                                                        .samplerPads
-                                                        .values
-                                                        .where(
-                                                          (p) =>
-                                                              p.midiNote ==
-                                                              newPitch,
-                                                        )
-                                                        .firstOrNull;
-                                                    if (pad != null) {
-                                                      pad.play(
-                                                        100.0,
-                                                        widget.track!.bus,
-                                                        widget.track!.volume,
-                                                        widget.track!.pan,
-                                                      );
-                                                    }
-                                                  } else {
-                                                    final handle =
-                                                        triggerInstrumentNote(
-                                                          widget.track!,
-                                                          newPitch,
-                                                          85,
+                                                try {
+                                                  if (widget.track != null &&
+                                                      SoLoud
+                                                          .instance
+                                                          .isInitialized &&
+                                                      targets.length == 1) {
+                                                    if (widget.track!.type ==
+                                                        TrackType.sampler) {
+                                                      var pad = widget
+                                                          .track!
+                                                          .samplerPads
+                                                          .values
+                                                          .where(
+                                                            (p) =>
+                                                                p.midiNote ==
+                                                                newPitch,
+                                                          )
+                                                          .firstOrNull;
+                                                      if (pad != null) {
+                                                        pad.play(
+                                                          100.0,
+                                                          widget.track!.bus,
+                                                          widget.track!.volume,
+                                                          widget.track!.pan,
                                                         );
-                                                    if (handle != null) {
-                                                      final preset =
-                                                          getInstrumentPreset(
-                                                            widget
-                                                                .track!
-                                                                .instrumentIndex,
+                                                      }
+                                                    } else {
+                                                      final handle =
+                                                          triggerInstrumentNote(
+                                                            widget.track!,
+                                                            newPitch,
+                                                            85,
                                                           );
-                                                      Timer(
-                                                        const Duration(
-                                                          milliseconds: 140,
-                                                        ),
-                                                        () {
-                                                          releaseInstrumentNote(
-                                                            handle,
-                                                            releaseMs: preset
-                                                                .releaseMs,
-                                                          );
-                                                        },
-                                                      );
+                                                      if (handle != null) {
+                                                        final preset =
+                                                            getInstrumentPreset(
+                                                              widget
+                                                                  .track!
+                                                                  .instrumentIndex,
+                                                            );
+                                                        Timer(
+                                                          const Duration(
+                                                            milliseconds: 140,
+                                                          ),
+                                                          () {
+                                                            releaseInstrumentNote(
+                                                              handle,
+                                                              releaseMs: preset
+                                                                  .releaseMs,
+                                                            );
+                                                          },
+                                                        );
+                                                      }
                                                     }
                                                   }
-                                                }
+                                                } catch (_) {}
                                               }
                                             }
                                           }
@@ -1460,14 +1479,16 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                                       });
                                     },
                                     onPanEnd: (d) {
-                                      if (widget.snapToGrid) {
-                                        setState(() {
-                                          List<MidiNote> targets =
-                                              widget.selectedMidiNotes.contains(
-                                                note,
-                                              )
-                                              ? widget.selectedMidiNotes
-                                              : [note];
+                                      final List<MidiNote> targets =
+                                          _activeDragNotes.isNotEmpty
+                                          ? _activeDragNotes
+                                          : (widget.selectedMidiNotes.contains(
+                                                  note,
+                                                )
+                                                ? widget.selectedMidiNotes
+                                                : [note]);
+                                      setState(() {
+                                        if (widget.snapToGrid) {
                                           for (var n in targets) {
                                             n.start =
                                                 (n.start /
@@ -1475,8 +1496,15 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                                                     .round() *
                                                 widget.snapResolution;
                                           }
-                                        });
-                                      }
+                                        }
+                                        _activeDragNotes = [];
+                                        _dragInitialPitches.clear();
+                                      });
+                                      widget.onNotesChanged();
+                                    },
+                                    onPanCancel: () {
+                                      _activeDragNotes = [];
+                                      _dragInitialPitches.clear();
                                     },
                                     child: Container(
                                       margin: EdgeInsets.all(1),
