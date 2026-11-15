@@ -1,13 +1,13 @@
-import 'dart:ui';
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'dart:async';
+import 'package:flutter/material.dart';
 import 'package:flutter_soloud/flutter_soloud.dart';
 import 'package:fyrdaw/main.dart';
+import 'package:fyrdaw/models/enums.dart';
 import 'package:fyrdaw/utils/audio_utils.dart';
 
 class SamplerPad {
   String? filePath;
+  String? name;
   AudioSource? source;
   SoundHandle? currentHandle;
   List<double>? waveformData;
@@ -18,10 +18,11 @@ class SamplerPad {
   double fadeIn = 0.0;
   double fadeOut = 0.0;
   int midiNote = 36;
+  int chokeGroup = 0; // 0 = Off, 1..4 = Choke A..D
 
   SamplerPad();
 
-  void extractWaveform() async {
+  Future<void> extractWaveform() async {
     if (filePath == null) return;
     final data = await extractWavWaveform(filePath!, 200);
     if (data != null) {
@@ -29,18 +30,55 @@ class SamplerPad {
     }
   }
 
+  /// Loads [path] (either a bundled `'assets/...'` asset or a disk file path)
+  /// into SoLoud (when initialized) and extracts waveform peaks.
+  Future<void> loadSample(String path, {String? label}) async {
+    filePath = path;
+    if (label != null) {
+      name = label;
+    }
+    try {
+      if (SoLoud.instance.isInitialized) {
+        if (source != null) {
+          SoLoud.instance.disposeSource(source!);
+        }
+        source = path.startsWith('assets/')
+            ? await SoLoud.instance.loadAsset(path)
+            : await SoLoud.instance.loadFile(path);
+        source!.filters.pitchShiftFilter.activate();
+      }
+    } catch (_) {}
+    await extractWaveform();
+  }
+
+  void stopActive() {
+    if (currentHandle == null) return;
+    try {
+      if (SoLoud.instance.getIsValidVoiceHandle(currentHandle!)) {
+        SoLoud.instance.stop(currentHandle!);
+      }
+    } catch (_) {}
+    currentHandle = null;
+  }
+
   void play([
     double velocity = 127.0,
     Bus? bus,
     double trackVolume = 1.0,
     double trackPan = 0.0,
+    Iterable<SamplerPad>? trackPads,
+    double? pitchMultiplierOverride,
   ]) {
     if (source == null) return;
     try {
-      if (currentHandle != null &&
-          SoLoud.instance.getIsValidVoiceHandle(currentHandle!)) {
-        SoLoud.instance.stop(currentHandle!);
+      if (chokeGroup > 0 && trackPads != null) {
+        for (final other in trackPads) {
+          if (!identical(other, this) && other.chokeGroup == chokeGroup) {
+            other.stopActive();
+          }
+        }
       }
+      stopActive();
 
       final totalLen = SoLoud.instance.getLength(source!);
       final startPos = totalLen * trimStart;
@@ -59,7 +97,8 @@ class SamplerPad {
             );
       currentHandle = handle;
       SoLoud.instance.seek(handle, startPos);
-      source!.filters.pitchShiftFilter.shift(soundHandle: handle).value = pitch;
+      source!.filters.pitchShiftFilter.shift(soundHandle: handle).value =
+          (pitch * (pitchMultiplierOverride ?? 1.0)).clamp(0.1, 4.0);
       SoLoud.instance.setPause(handle, false);
 
       double targetVol = volume * (velocity / 127.0) * trackVolume;
@@ -97,6 +136,7 @@ class SamplerPad {
 
   Map<String, dynamic> toJson() => {
     'filePath': filePath,
+    'name': name,
     'trimStart': trimStart,
     'trimEnd': trimEnd,
     'volume': volume,
@@ -106,11 +146,13 @@ class SamplerPad {
     'reversed': reversed,
     'originalFilePath': originalFilePath,
     'midiNote': midiNote,
+    'chokeGroup': chokeGroup,
   };
 
   factory SamplerPad.fromJson(Map<String, dynamic> json) {
     return SamplerPad()
       ..filePath = json['filePath']
+      ..name = json['name']
       ..trimStart = json['trimStart'] ?? 0.0
       ..trimEnd = json['trimEnd'] ?? 1.0
       ..volume = json['volume'] ?? 1.0
@@ -119,7 +161,8 @@ class SamplerPad {
       ..fadeOut = json['fadeOut'] ?? 0.0
       ..reversed = json['reversed'] ?? false
       ..originalFilePath = json['originalFilePath']
-      ..midiNote = json['midiNote'] ?? 36;
+      ..midiNote = json['midiNote'] ?? 36
+      ..chokeGroup = json['chokeGroup'] ?? 0;
   }
 
   Future<void> toggleReverse(VoidCallback onDone) async {
@@ -142,14 +185,35 @@ class SamplerPad {
       filePath = originalFilePath;
     }
 
-    if (SoLoud.instance.isInitialized) {
-      if (source != null) {
-        SoLoud.instance.disposeSource(source!);
-      }
-      source = await SoLoud.instance.loadFile(filePath!);
-      source!.filters.pitchShiftFilter.activate();
-    }
-    extractWaveform();
+    await loadSample(filePath!);
     onDone();
+  }
+}
+
+/// Populates a sampler track's pad map [samplerPads] from a built-in [kit]
+/// preset, initializing all 16 MIDI note slots (36..51) and choke groups.
+Future<void> applyDrumKitToPads(
+  Map<int, SamplerPad> samplerPads,
+  DrumKitPreset kit,
+) async {
+  for (final existing in samplerPads.values) {
+    existing.stopActive();
+    try {
+      if (existing.source != null && SoLoud.instance.isInitialized) {
+        SoLoud.instance.disposeSource(existing.source!);
+      }
+    } catch (_) {}
+  }
+  samplerPads.clear();
+  for (int i = 0; i < 16; i++) {
+    samplerPads[i] = SamplerPad()..midiNote = 36 + i;
+  }
+  for (final spec in kit.pads) {
+    final pad = samplerPads[spec.padIndex] ?? SamplerPad();
+    pad.midiNote = spec.midiNote;
+    pad.chokeGroup = spec.chokeGroup;
+    pad.name = spec.label;
+    samplerPads[spec.padIndex] = pad;
+    await pad.loadSample(spec.assetPath, label: spec.label);
   }
 }

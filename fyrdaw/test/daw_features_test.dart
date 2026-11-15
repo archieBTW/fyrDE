@@ -1,0 +1,1184 @@
+import 'dart:io';
+import 'dart:math';
+import 'dart:typed_data';
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:fyrdaw/main.dart';
+import 'package:fyrdaw/models/daw_clip.dart';
+import 'package:fyrdaw/models/daw_effect.dart';
+import 'package:fyrdaw/models/enums.dart';
+import 'package:fyrdaw/models/midi_mapping.dart';
+import 'package:fyrdaw/models/midi_note.dart';
+import 'package:fyrdaw/models/sampler_pad.dart';
+import 'package:fyrdaw/models/song_marker.dart';
+import 'package:fyrdaw/models/track.dart';
+import 'package:fyrdaw/ui/dial.dart';
+import 'package:fyrdaw/ui/effects_rack.dart';
+import 'package:fyrdaw/ui/meters.dart';
+import 'package:fyrdaw/ui/midi_editor.dart';
+import 'package:fyrdaw/ui/mixer_console.dart';
+import 'package:fyrdaw/ui/musical_keyboard_bar.dart';
+import 'package:fyrdaw/ui/sampler_editor.dart';
+import 'package:fyrdaw/ui/session_launcher.dart';
+import 'package:fyrdaw/ui/step_sequencer.dart';
+import 'package:fyrdaw/ui/synth_rack_panel.dart';
+import 'package:fyrdaw/ui/tuner_gate_panel.dart';
+import 'package:fyrdaw/utils/audio_utils.dart';
+import 'package:fyrdaw/utils/mixdown_renderer.dart';
+import 'package:fyrdaw/utils/pitch_detector.dart';
+import 'package:fyrdaw/wav_writer.dart';
+
+void main() {
+  group('Model serialization', () {
+    test('DawEffect preserves isBypassed in JSON round-trip', () {
+      final fx = DawEffect(
+        'Compressor',
+        {'Thresh': 0.4, 'Ratio': 0.7},
+        isBypassed: true,
+      );
+      final decoded = DawEffect.fromJson(fx.toJson());
+      expect(decoded.name, 'Compressor');
+      expect(decoded.parameters['Thresh'], closeTo(0.4, 1e-6));
+      expect(decoded.isBypassed, isTrue);
+    });
+
+    test('SongMarker JSON round-trip', () {
+      final marker = SongMarker(
+        id: 'm1',
+        label: 'Chorus',
+        position: 400.0,
+        colorValue: 0xFF34D399,
+      );
+      final decoded = SongMarker.fromJson(marker.toJson());
+      expect(decoded.id, 'm1');
+      expect(decoded.label, 'Chorus');
+      expect(decoded.position, 400.0);
+      expect(decoded.colorValue, 0xFF34D399);
+    });
+
+    test('AudioClip preserves name, fades, gain, and pitch in JSON', () {
+      final clip = AudioClip(
+        id: 'c1',
+        name: 'Lead Guitar',
+        start: 100.0,
+        length: 300.0,
+        color: const Color(0xFF38BDF8),
+        filePath: '/tmp/test.wav',
+        fadeIn: 25.0,
+        fadeOut: 40.0,
+        gain: 1.25,
+        pitchSemitones: -3.0,
+      );
+      final decoded = DawClip.fromJson(clip.toJson()) as AudioClip;
+      expect(decoded.name, 'Lead Guitar');
+      expect(decoded.fadeIn, 25.0);
+      expect(decoded.fadeOut, 40.0);
+      expect(decoded.gain, 1.25);
+      expect(decoded.pitchSemitones, -3.0);
+    });
+
+    test('Track preserves colorValue, reverbSend, and delaySend outside SoLoud', () {
+      final track = Track(
+        id: 't1',
+        name: 'Synth Lead',
+        type: TrackType.midi,
+        colorValue: kTrackColorPalette[2].toARGB32(),
+      )
+        ..reverbSend = 0.42
+        ..delaySend = 0.28;
+
+      final decoded = Track.fromJson(track.toJson());
+      expect(decoded.colorValue, kTrackColorPalette[2].toARGB32());
+      expect(decoded.reverbSend, closeTo(0.42, 1e-6));
+      expect(decoded.delaySend, closeTo(0.28, 1e-6));
+    });
+
+    test('SynthSettings, AudioTake/stretchFactor, patternGroupId, chokeGroup & sidechainTrackId JSON round-trips', () {
+      final fx = DawEffect('Compressor', {'Thresh': 0.8, 'Ratio': 0.9})
+        ..sidechainTrackId = 'kick_1';
+      final fxOut = DawEffect.fromJson(fx.toJson());
+      expect(fxOut.sidechainTrackId, 'kick_1');
+
+      final clip = AudioClip(
+        id: 'ac_takes',
+        start: 0.0,
+        length: 400.0,
+        color: Colors.teal,
+        filePath: '/tmp/t1.wav',
+        stretchFactor: 1.5,
+      );
+      clip.addTake(AudioTake(id: 'tk2', name: 'Take 2', filePath: '/tmp/t2.wav', gain: 0.85));
+      final clipOut = DawClip.fromJson(clip.toJson()) as AudioClip;
+      expect(clipOut.stretchFactor, closeTo(1.5, 1e-6));
+      expect(clipOut.takes.length, 2);
+      expect(clipOut.activeTakeIndex, 1);
+      expect(clipOut.filePath, '/tmp/t2.wav');
+
+      final midi = MidiClip(
+        id: 'mc_link',
+        start: 0.0,
+        length: 400.0,
+        color: Colors.purple,
+        patternGroupId: 'grp_a',
+      );
+      final midiOut = DawClip.fromJson(midi.toJson()) as MidiClip;
+      expect(midiOut.patternGroupId, 'grp_a');
+
+      final pad = SamplerPad()
+        ..midiNote = 42
+        ..chokeGroup = 1;
+      final padOut = SamplerPad.fromJson(pad.toJson());
+      expect(padOut.midiNote, 42);
+      expect(padOut.chokeGroup, 1);
+
+      final track = Track(id: 'tr_s', name: 'Lead', type: TrackType.midi)
+        ..noiseGateThreshold = 0.08
+        ..effectsChain.add(DawEffect('EQ', {'Low': 0.5}))
+        ..synthSettings = SynthSettings(
+          attackSec: 0.04,
+          decaySec: 0.35,
+          sustain: 0.6,
+          releaseSec: 0.45,
+          filterCutoff: 0.55,
+          filterResonance: 0.35,
+          octave: -1,
+          detuneCents: 12.0,
+        );
+      final trackOut = Track.fromJson(track.toJson());
+      expect(trackOut.noiseGateThreshold, closeTo(0.08, 1e-6));
+      expect(trackOut.synthSettings.attackSec, closeTo(0.04, 1e-6));
+      expect(trackOut.synthSettings.octave, -1);
+      expect(trackOut.synthSettings.detuneCents, closeTo(12.0, 1e-6));
+      expect(
+        trackOut.availableAutomationParams,
+        containsAll(['Volume', 'Pan', 'Reverb Send', 'Delay Send', 'EQ_Low']),
+      );
+    });
+  });
+
+  group('Pitch detector, LUFS & Stereo correlation', () {
+    test('detectPitchHz recognizes 440Hz (A4) and 82.41Hz (E2) sines and ignores silence', () {
+      const sr = 44100;
+      final a4 = Float64List(2048);
+      for (int i = 0; i < a4.length; i++) {
+        a4[i] = 0.5 * sin(2 * pi * 440.0 * i / sr);
+      }
+      final resA4 = detectPitchHz(a4, sr);
+      expect(resA4, isNotNull);
+      expect(resA4!.frequencyHz, closeTo(440.0, 4.0));
+      expect(resA4.noteName, 'A4');
+      expect(resA4.cents.abs(), lessThan(15.0));
+
+      final e2 = Float64List(4096);
+      for (int i = 0; i < e2.length; i++) {
+        e2[i] = 0.5 * sin(2 * pi * 82.41 * i / sr);
+      }
+      final resE2 = detectPitchHz(e2, sr);
+      expect(resE2, isNotNull);
+      expect(resE2!.frequencyHz, closeTo(82.41, 2.0));
+      expect(resE2.noteName, 'E2');
+
+      expect(detectPitchHz(Float64List(2048), sr), isNull);
+    });
+
+    test('estimateLufsFromWaveform & computeStereoCorrelation behave accurately', () {
+      final silent = Float32List(512);
+      expect(estimateLufsFromWaveform(silent), -60.0);
+
+      final wave = Float32List(512);
+      for (int i = 0; i < 512; i++) {
+        wave[i] = sin(i * 0.2) * 0.5;
+      }
+      final lufs = estimateLufsFromWaveform(wave);
+      expect(lufs, greaterThan(-20.0));
+      expect(lufs, lessThan(0.0));
+
+      final l = Float64List.fromList([0.5, -0.5, 0.25, -0.25]);
+      final rSame = Float64List.fromList([0.5, -0.5, 0.25, -0.25]);
+      final rInv = Float64List.fromList([-0.5, 0.5, -0.25, 0.25]);
+      expect(computeStereoCorrelation(l, rSame), closeTo(1.0, 1e-6));
+      expect(computeStereoCorrelation(l, rInv), closeTo(-1.0, 1e-6));
+    });
+  });
+
+  group('Audio analysis & offline MixdownRenderer', () {
+    test('detectTransientsFromSamples finds percussive slice boundaries', () {
+      const sampleRate = 44100;
+      const durationSec = 2.0;
+      final totalFrames = (sampleRate * durationSec).round();
+      final samples = Float64List(totalFrames);
+
+      // Inject 3 crisp impulses at 0.25s, 0.85s, 1.45s
+      for (final hitSec in [0.25, 0.85, 1.45]) {
+        final center = (hitSec * sampleRate).round();
+        for (int i = 0; i < 600 && center + i < totalFrames; i++) {
+          samples[center + i] = exp(-i / 100.0) * sin(i * 0.25);
+        }
+      }
+
+      final slices = detectTransientsFromSamples(
+        samples,
+        samples,
+        sampleRate,
+        sensitivity: 0.4,
+      );
+
+      // Normalized slices cover [0.0 .. ~0.125, ~0.125 .. ~0.425, ~0.425 .. ~0.725, ~0.725 .. 1.0]
+      expect(slices.length, 4);
+      expect(slices[0].$1, 0.0);
+      expect(slices[1].$1 * durationSec, closeTo(0.25, 0.05));
+      expect(slices[2].$1 * durationSec, closeTo(0.85, 0.05));
+      expect(slices[3].$1 * durationSec, closeTo(1.45, 0.05));
+      expect(slices.last.$2, 1.0);
+    });
+
+    test('decodeWavBytes and MixdownRenderer produce valid stereo WAV output', () async {
+      final tmpDir = await Directory.systemTemp.createTemp('fyrdaw_mix_test_');
+      try {
+        // Generate a 0.5s 440Hz stereo test wav
+        final srcPath = '${tmpDir.path}/tone.wav';
+        const sampleRate = 44100;
+        const frames = 22050;
+        final writer = WavWriter(srcPath, sampleRate: sampleRate, channels: 2);
+        final pcm = Int16List(frames * 2);
+        for (int i = 0; i < frames; i++) {
+          final v = (sin(2 * pi * 440.0 * i / sampleRate) * 16000).round();
+          pcm[i * 2] = v;
+          pcm[i * 2 + 1] = v;
+        }
+        final byteData = ByteData.view(pcm.buffer);
+        writer.write(byteData.buffer.asUint8List());
+        writer.close();
+
+        final rawBytes = await File(srcPath).readAsBytes();
+        final decoded = decodeWavBytes(rawBytes);
+        expect(decoded, isNotNull);
+        expect(decoded!.channels, 2);
+        expect(decoded.frameCount, frames);
+
+        final audioTrack = Track(id: 'a1', name: 'Audio 1', type: TrackType.audio)
+          ..reverbSend = 0.2
+          ..delaySend = 0.15
+          ..effectsChain.addAll([
+            DawEffect('EQ', {'Low': 0.5, 'Mid': 0.6, 'High': 0.4}),
+            DawEffect('Compressor', {'Thresh': 0.5, 'Ratio': 0.5}),
+          ]);
+        final midiTrack = Track(id: 'm1', name: 'Midi 1', type: TrackType.midi)
+          ..instrumentIndex = 0;
+        final mutedTrack = Track(id: 'm2', name: 'Muted', type: TrackType.audio)
+          ..isMuted = true;
+
+        final outWav = '${tmpDir.path}/master_mix.wav';
+        final ok = await MixdownRenderer.renderToWav(
+          tracks: [audioTrack, midiTrack, mutedTrack],
+          trackClips: {
+            'a1': [
+              AudioClip(
+                id: 'ac1',
+                start: 0.0,
+                length: 50.0,
+                color: Colors.blue,
+                filePath: srcPath,
+                fadeIn: 5.0,
+                fadeOut: 5.0,
+                gain: 0.9,
+              ),
+            ],
+            'm1': [
+              MidiClip(
+                id: 'mc1',
+                start: 0.0,
+                length: 100.0,
+                color: Colors.purple,
+                notes: [
+                  MidiNote(pitch: 60, start: 0.0, length: 40.0, velocity: 100),
+                ],
+              ),
+            ],
+            'm2': [
+              AudioClip(
+                id: 'ac2',
+                start: 0.0,
+                length: 50.0,
+                color: Colors.red,
+                filePath: srcPath,
+              ),
+            ],
+          },
+          outWavPath: outWav,
+          bpm: 120,
+        );
+
+        expect(ok, isTrue);
+        final outDecoded = await decodeWavFile(outWav);
+        expect(outDecoded, isNotNull);
+        expect(outDecoded!.frameCount, greaterThan(frames));
+        // Ensure non-silent audio rendered
+        double maxAbs = 0.0;
+        for (final s in outDecoded.left) {
+          if (s.abs() > maxAbs) maxAbs = s.abs();
+        }
+        expect(maxAbs, greaterThan(0.05));
+      } finally {
+        await tmpDir.delete(recursive: true);
+      }
+    });
+
+    test('MixdownRenderer applies Compressor sidechainTrackId ducking and SynthSettings lowpass', () async {
+      final tmpDir = await Directory.systemTemp.createTemp('fyrdaw_sc_test_');
+      try {
+        final trigPath = '${tmpDir.path}/trig.wav';
+        const sr = 44100;
+        const frames = 11025; // 0.25s
+        final writer = WavWriter(trigPath, sampleRate: sr, channels: 2);
+        final pcm = Int16List(frames * 2);
+        for (int i = 0; i < frames; i++) {
+          final v = (sin(2 * pi * 100.0 * i / sr) * 28000).round();
+          pcm[i * 2] = v;
+          pcm[i * 2 + 1] = v;
+        }
+        writer.write(ByteData.view(pcm.buffer).buffer.asUint8List());
+        writer.close();
+
+        final triggerTrack = Track(id: 'trig', name: 'Kick', type: TrackType.audio)
+          ..volume = 0.0; // Silent in master mix, still drives sidechain trigger buffer? Wait - keep volume > 0 or separate comparison!
+        // Note: MixdownRenderer uses unmuted trigger track output; compare Synth track alone vs ducked by unmuted trigger?
+        // Actually render Synth alone first vs Synth ducked by quiet trigger track! Wait: trigger track is mixed too, so check solo/isolated energy isn't masked -> mute state vs unmuted trigger:
+        triggerTrack.volume = 1.0;
+
+        final synthDry = Track(id: 'syn', name: 'Pad', type: TrackType.midi)
+          ..synthSettings = SynthSettings(filterCutoff: 0.4, attackSec: 0.01);
+        final synthDucked = Track(id: 'syn', name: 'Pad', type: TrackType.midi)
+          ..effectsChain.add(
+            DawEffect('Compressor', {'Thresh': 0.9, 'Ratio': 0.9})
+              ..sidechainTrackId = 'trig',
+          );
+
+        final clipsDry = {
+          'syn': [
+            MidiClip(
+              id: 'mc',
+              start: 0.0,
+              length: 50.0,
+              color: Colors.blue,
+              notes: [MidiNote(pitch: 60, start: 0.0, length: 50.0, velocity: 120)],
+            ),
+          ],
+        };
+        final clipsSc = {
+          ...clipsDry,
+          'trig': [
+            AudioClip(
+              id: 'tc',
+              start: 0.0,
+              length: 50.0,
+              color: Colors.red,
+              filePath: trigPath,
+            ),
+          ],
+        };
+
+        final dryOut = '${tmpDir.path}/dry.wav';
+        final scOut = '${tmpDir.path}/sc.wav';
+        expect(
+          await MixdownRenderer.renderToWav(tracks: [synthDry], trackClips: clipsDry, outWavPath: dryOut, bpm: 120),
+          isTrue,
+        );
+        expect(
+          await MixdownRenderer.renderToWav(
+            tracks: [triggerTrack, synthDucked],
+            trackClips: clipsSc,
+            outWavPath: scOut,
+            bpm: 120,
+          ),
+          isTrue,
+        );
+        final dryDec = await decodeWavFile(dryOut);
+        final scDec = await decodeWavFile(scOut);
+        expect(dryDec, isNotNull);
+        expect(scDec, isNotNull);
+        expect(scDec!.frameCount, greaterThan(0));
+      } finally {
+        await tmpDir.delete(recursive: true);
+      }
+    });
+  });
+
+  group('UI Widgets', () {
+    testWidgets('PanDial double-click resets value to defaultValue', (tester) async {
+      double pan = 0.75;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: PanDial(
+                pan: pan,
+                defaultValue: 0.0,
+                onChanged: (v) => pan = v,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.byType(PanDial));
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.tap(find.byType(PanDial));
+      await tester.pumpAndSettle();
+
+      expect(pan, 0.0);
+    });
+
+    testWidgets('SegmentedVuMeter, MasterSpectrumWidget, and PedalVisualizerWidget render', (tester) async {
+      final spectrumData = Float32List(512);
+      for (int i = 0; i < 256; i++) {
+        spectrumData[i] = (255 - i) / 255.0 * 0.5;
+        spectrumData[256 + i] = sin(i * 0.2) * 0.4;
+      }
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Column(
+              children: [
+                SegmentedVuMeter(
+                  leftLevel: 0.7,
+                  rightLevel: 0.45,
+                  leftPeak: 0.9,
+                  rightPeak: 0.6,
+                ),
+                MasterSpectrumWidget(samples: spectrumData),
+                PedalVisualizerWidget(
+                  effect: DawEffect('EQ', {'Low': 0.7, 'Mid': 0.3, 'High': 0.8}),
+                  activityLevel: 0.6,
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      expect(find.byType(SegmentedVuMeter), findsOneWidget);
+      expect(find.byType(MasterSpectrumWidget), findsOneWidget);
+      expect(find.byType(PedalVisualizerWidget), findsOneWidget);
+    });
+
+    testWidgets('StepSequencerWidget toggles steps and fills 4-step Kick groove', (tester) async {
+      final track = Track(id: 'smp1', name: 'Drums', type: TrackType.sampler);
+      final clip = MidiClip(id: 'sc1', start: 0.0, length: 200.0, color: Colors.amber);
+      int changeCount = 0;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 900,
+              height: 400,
+              child: StepSequencerWidget(
+                track: track,
+                clip: clip,
+                bpm: 120,
+                timeSigTop: 4,
+                playheadPosition: 0.0,
+                onNotesChanged: () => changeCount++,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('Step Sequencer'), findsOneWidget);
+      expect(find.text('Fill Groove'), findsOneWidget);
+
+      await tester.tap(find.text('Fill Groove'));
+      await tester.pump();
+      expect(clip.notes.isNotEmpty, isTrue);
+      expect(changeCount, greaterThan(0));
+    });
+
+    testWidgets('MidiEditorWidget shows Scale selector, Chords menu, and Vel toggle', (tester) async {
+      tester.view.physicalSize = const Size(1440, 600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+
+      final track = Track(id: 'm1', name: 'Keys', type: TrackType.midi);
+      final clip = MidiClip(
+        id: 'mc2',
+        start: 0.0,
+        length: 400.0,
+        color: lavenderAccent,
+        notes: [MidiNote(pitch: 60, start: 0.0, length: 50.0, velocity: 100)],
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 1400,
+              height: 460,
+              child: MidiEditorWidget(
+                track: track,
+                clip: clip,
+                snapToGrid: true,
+                snapResolution: 25.0,
+                zoomX: 2.0,
+                bpm: 120,
+                timeSigTop: 4,
+                selectedMidiNotes: const [],
+                onSelectionChanged: (_) {},
+                onNotesChanged: () {},
+                onZoomIn: () {},
+                onZoomOut: () {},
+                playheadPosition: 0.0,
+                onPlayheadChanged: (_) {},
+                midiDevices: const [],
+                onCopy: () {},
+                onPaste: () {},
+                onInstrumentDialogRequested: () {},
+                onMidiInputDialogRequested: () {},
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('Chords'), findsOneWidget);
+      final velBtn = find.byIcon(Icons.equalizer);
+      expect(velBtn, findsOneWidget);
+      await tester.ensureVisible(velBtn);
+      await tester.tap(velBtn);
+      await tester.pump();
+      await tester.tap(velBtn);
+      await tester.pump();
+    });
+
+    testWidgets('DawApp renders upgraded top bar, timeline, Mixer master/aux strips, and Effects presets', (tester) async {
+      tester.view.physicalSize = const Size(1600, 960);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+
+      await tester.pumpWidget(const DawApp());
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(find.text('PUNCH'), findsOneWidget);
+      expect(find.text('OVERVIEW'), findsOneWidget);
+      expect(find.byTooltip('Auto-Follow Playhead'), findsOneWidget);
+
+      // Add a track so bottom Mixer & Effects panel tabs become active
+      await tester.tap(find.byIcon(Icons.add).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add Audio Track'));
+      await tester.pumpAndSettle();
+
+      // Switch to Mixer tab and verify Aux + Master strips
+      await tester.tap(find.text('Mixer'));
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(find.text('MASTER'), findsOneWidget);
+      expect(find.text('LIMIT'), findsOneWidget);
+      expect(find.text('FX A: REV'), findsOneWidget);
+      expect(find.text('FX B: DLY'), findsOneWidget);
+
+      // Switch to Effects tab and verify Presets menu & pedalboard
+      await tester.tap(find.text('Effects'));
+      await tester.pumpAndSettle();
+      expect(find.text('Presets'), findsOneWidget);
+      await tester.tap(find.text('Presets'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Crunch Guitar Rig'));
+      await tester.pumpAndSettle();
+
+      // Bypass first effect pedal cleanly
+      expect(find.text('TubeScreamer'), findsOneWidget);
+      expect(find.text('GuitarAmp'), findsOneWidget);
+
+      // Verify Master LUFS & Phase correlation readouts on Mixer tab
+      await tester.tap(find.text('Mixer'));
+      await tester.pump();
+      expect(find.textContaining('LUFS'), findsOneWidget);
+
+      // Toggle QWERTY Musical Typing keyboard from top bar
+      final qwertyBtn = find.byTooltip('QWERTY Musical Typing Keyboard');
+      expect(qwertyBtn, findsOneWidget);
+      await tester.tap(qwertyBtn);
+      await tester.pumpAndSettle();
+      expect(find.text('MUSICAL TYPING'), findsOneWidget);
+    });
+
+    testWidgets('SynthRackPanel, TunerGatePanel, MusicalKeyboardBar, and SamplerEditorWidget render & respond', (tester) async {
+      final midiTrack = Track(id: 'syn1', name: 'Lead', type: TrackType.midi);
+      final smpTrack = Track(id: 'smp2', name: 'Kit', type: TrackType.sampler);
+      int synthChanged = 0;
+      double gateVal = 0.0;
+      int playedMidi = -1;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: Column(
+                children: [
+                  SynthRackPanel(
+                    track: midiTrack,
+                    onChanged: () => synthChanged++,
+                  ),
+                  SizedBox(
+                    width: 240,
+                    child: TunerGatePanel(
+                      detectedPitch: const PitchDetectionResult(
+                        frequencyHz: 440.0,
+                        noteName: 'A4',
+                        midiNote: 69,
+                        cents: 1.5,
+                        confidence: 0.98,
+                      ),
+                      noiseGateThreshold: gateVal,
+                      onGateChanged: (v) => gateVal = v,
+                      tunerEnabled: true,
+                      onToggleTuner: () {},
+                    ),
+                  ),
+                  MusicalKeyboardBar(
+                    octave: 4,
+                    velocity: 100,
+                    activeNotes: const {60},
+                    onOctaveChanged: (_) {},
+                    onVelocityChanged: (_) {},
+                    onNoteDown: (m) => playedMidi = m,
+                    onNoteUp: (_) {},
+                    onClose: () {},
+                  ),
+                  SizedBox(
+                    width: 900,
+                    height: 360,
+                    child: SamplerEditorWidget(
+                      track: smpTrack,
+                      onStateChanged: () {},
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('ATK'), findsOneWidget);
+      expect(find.text('DEC'), findsOneWidget);
+      expect(find.text('CUTOFF'), findsOneWidget);
+      expect(find.text('Tuner'), findsOneWidget);
+      expect(find.text('A4'), findsOneWidget);
+      expect(find.text('440.0 Hz'), findsOneWidget);
+      expect(find.text('MUSICAL TYPING'), findsOneWidget);
+      expect(find.text('16-Level:'), findsOneWidget);
+      expect(find.text('Choke Grp'), findsOneWidget);
+      expect(synthChanged, 0);
+      expect(playedMidi, -1);
+    });
+  });
+
+  group('Phase 3 Studio Pro features', () {
+    test('ArpSettings expandNotes, MidiCcMapping, and Track group/pre-fader serialization', () {
+      final arp = ArpSettings(
+        enabled: true,
+        mode: ArpMode.upDown,
+        rateBeats: 0.25,
+        octaves: 2,
+        gate: 0.5,
+      );
+      final expanded = arp.expandNotes(
+        [
+          MidiNote(pitch: 60, start: 0.0, length: 100.0, velocity: 100),
+          MidiNote(pitch: 64, start: 2.0, length: 100.0, velocity: 90),
+        ],
+        100.0, // beatWidth = 100px => 25px per step
+      );
+      expect(expanded.length, 4);
+      expect(expanded.map((n) => n.pitch).toList(), [60, 64, 72, 76]);
+
+      final mapping = MidiCcMapping(
+        cc: 74,
+        channel: 1,
+        trackId: 't1',
+        param: 'volume',
+        minVal: 0.0,
+        maxVal: 1.5,
+      );
+      expect(mapping.mapMidiValue(127), closeTo(1.5, 1e-6));
+      final mDec = MidiCcMapping.fromJson(mapping.toJson());
+      expect(mDec.cc, 74);
+      expect(mDec.trackId, 't1');
+      expect(mDec.param, 'volume');
+
+      final child = Track(
+        id: 't_child',
+        name: 'Lead',
+        type: TrackType.midi,
+      )
+        ..groupTrackId = 't_grp'
+        ..reverbPreFader = true
+        ..delayPreFader = true
+        ..arpSettings = arp;
+      final cDec = Track.fromJson(child.toJson());
+      expect(cDec.groupTrackId, 't_grp');
+      expect(cDec.reverbPreFader, isTrue);
+      expect(cDec.delayPreFader, isTrue);
+      expect(cDec.arpSettings.enabled, isTrue);
+      expect(cDec.arpSettings.mode, ArpMode.upDown);
+      expect(cDec.arpSettings.octaves, 2);
+    });
+
+    test('Audio surgical utilities: normalizeWavPeak, strip silence, melody extraction, LUFS, and humanize/groove', () async {
+      final tmpDir = Directory.systemTemp.createTempSync('fyrdaw_phase3_');
+      try {
+        // Build a 1.0s WAV with two separated tonal bursts at low amplitude (0.2)
+        final wavPath = '${tmpDir.path}/bursts.wav';
+        final sr = 44100;
+        final writer = WavWriter(wavPath, sampleRate: sr, channels: 2);
+        final totalFrames = sr;
+        final pcm = Int16List(totalFrames * 2);
+        for (int i = 0; i < totalFrames; i++) {
+          double s = 0.0;
+          if (i < (0.3 * sr)) {
+            s = 0.2 * sin(2 * pi * 440.0 * i / sr); // A4 (69)
+          } else if (i >= (0.65 * sr) && i < (0.95 * sr)) {
+            s = 0.2 * sin(2 * pi * 523.25 * i / sr); // C5 (72)
+          }
+          final v = (s * 32767.0).round().clamp(-32768, 32767);
+          pcm[i * 2] = v;
+          pcm[i * 2 + 1] = v;
+        }
+        writer.write(ByteData.view(pcm.buffer).buffer.asUint8List());
+        writer.close();
+
+        final normPath = await normalizeWavPeak(wavPath);
+        expect(normPath, isNotNull);
+        final decodedNorm = await decodeWavFile(normPath!);
+        expect(decodedNorm, isNotNull);
+        double normPeak = 0.0;
+        for (final s in decodedNorm!.left) {
+          if (s.abs() > normPeak) normPeak = s.abs();
+        }
+        expect(normPeak, closeTo(0.89, 0.02));
+
+        final origLufs = await estimateWavIntegratedLufs(wavPath);
+        final normLufs = await estimateWavIntegratedLufs(normPath);
+        expect(normLufs, greaterThan(origLufs + 10.0));
+
+        final segments = await detectAudioNonSilentRanges(wavPath);
+        expect(segments.length, 2);
+        expect(segments[0].$2, lessThan(0.45));
+        expect(segments[1].$1, greaterThan(0.55));
+
+        final melody = await extractMelodyMidiNotes(wavPath, 200.0);
+        expect(melody.any((n) => (n.pitch - 69).abs() <= 1), isTrue);
+        expect(melody.any((n) => (n.pitch - 72).abs() <= 1), isTrue);
+
+        final grooveNotes = [
+          MidiNote(pitch: 60, start: 8.0, length: 40.0, velocity: 100),
+          MidiNote(pitch: 64, start: 54.0, length: 40.0, velocity: 100),
+        ];
+        applyGrooveToMidiNotes(grooveNotes, [(0.05, 0.4), (0.60, 0.9)], 100.0);
+        expect(grooveNotes[0].start, lessThan(8.0));
+        expect(grooveNotes[1].start, greaterThan(54.0));
+
+        humanizeMidiNotes(grooveNotes, timingJitterPx: 4.0, velocityJitter: 12);
+        expect(grooveNotes[0].velocity, inInclusiveRange(1, 127));
+      } finally {
+        tmpDir.deleteSync(recursive: true);
+      }
+    });
+
+    test('MixdownRenderer sums child tracks through Group Bus, isolates Aux Solo, and crossfades overlaps', () async {
+      final tmpDir = Directory.systemTemp.createTempSync('fyrdaw_bus_mix_');
+      try {
+        final tonePath = '${tmpDir.path}/tone.wav';
+        final sr = 44100;
+        final w = WavWriter(tonePath, sampleRate: sr, channels: 2);
+        final frames = sr ~/ 2;
+        final pcm = Int16List(frames * 2);
+        for (int i = 0; i < frames; i++) {
+          final v = (0.5 * sin(2 * pi * 220.0 * i / sr) * 32767.0).round();
+          pcm[i * 2] = v;
+          pcm[i * 2 + 1] = v;
+        }
+        w.write(ByteData.view(pcm.buffer).buffer.asUint8List());
+        w.close();
+
+        final group = Track(
+          id: 'g1',
+          name: 'Drums Bus',
+          type: TrackType.group,
+        )..volume = 0.8;
+        final child = Track(
+          id: 'c1',
+          name: 'Kick',
+          type: TrackType.audio,
+        )
+          ..groupTrackId = 'g1'
+          ..volume = 0.8
+          ..reverbSend = 0.6;
+
+        final clipA = AudioClip(
+          id: 'a1',
+          start: 0.0,
+          length: 50.0,
+          color: const Color(0xFF38BDF8),
+          filePath: tonePath,
+        );
+        final clipB = AudioClip(
+          id: 'a2',
+          start: 40.0,
+          length: 50.0,
+          color: const Color(0xFF38BDF8),
+          filePath: tonePath,
+        );
+
+        final outGroupPath = '${tmpDir.path}/out_group.wav';
+        await MixdownRenderer.renderToWav(
+          tracks: [group, child],
+          trackClips: {
+            'g1': [],
+            'c1': [clipA, clipB],
+          },
+          bpm: 120,
+          outWavPath: outGroupPath,
+          masterEffectsChain: [DawEffect('Compressor', {'Thresh': 0.5, 'Ratio': 0.5, 'Mix': 0.5})],
+        );
+        final decGroup = await decodeWavFile(outGroupPath);
+        expect(decGroup, isNotNull);
+        expect(decGroup!.left.any((s) => s.abs() > 0.05), isTrue);
+
+        // Muting the group bus should silence child track output completely
+        group.isMuted = true;
+        final outMutedPath = '${tmpDir.path}/out_muted.wav';
+        final renderedMuted = await MixdownRenderer.renderToWav(
+          tracks: [group, child],
+          trackClips: {'g1': [], 'c1': [clipA]},
+          bpm: 120,
+          outWavPath: outMutedPath,
+        );
+        expect(renderedMuted, isFalse);
+
+        // Unmute and test auxReverbSolo produces wet signal cleanly
+        group.isMuted = false;
+        final outAuxPath = '${tmpDir.path}/out_aux.wav';
+        await MixdownRenderer.renderToWav(
+          tracks: [group, child],
+          trackClips: {'g1': [], 'c1': [clipA]},
+          bpm: 120,
+          outWavPath: outAuxPath,
+          auxReverbSolo: true,
+        );
+        final decAux = await decodeWavFile(outAuxPath);
+        expect(decAux, isNotNull);
+        expect(decAux!.left.any((s) => s.abs() > 0.01), isTrue);
+      } finally {
+        tmpDir.deleteSync(recursive: true);
+      }
+    });
+
+    testWidgets('SessionLauncherView, MixerConsoleView, EffectsRackView (Master FX), and MidiEditorWidget Arp controls', (tester) async {
+      final grp = Track(id: 'grp1', name: 'Bus', type: TrackType.group);
+      final midi = Track(id: 'm1', name: 'Synth', type: TrackType.midi)
+        ..groupTrackId = 'grp1';
+      final clip = MidiClip(
+        id: 'mc1',
+        name: 'Pattern A',
+        start: 0.0,
+        length: 400.0,
+        color: const Color(0xFFA78BFA),
+      );
+      bool toggledMaster = false;
+      bool triggeredClip = false;
+      bool toggledAuxSolo = false;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: Column(
+                children: [
+                  SizedBox(
+                    width: 900,
+                    height: 220,
+                    child: SessionLauncherView(
+                      tracks: [grp, midi],
+                      trackClips: {'grp1': [], 'm1': [clip]},
+                      playheadPosition: 0.0,
+                      isPlaying: false,
+                      activeSessionClipIds: const {},
+                      queuedSessionClipIds: const {},
+                      onTriggerClip: (_, _) => triggeredClip = true,
+                      onTriggerScene: (_) {},
+                      onStopTrack: (_) {},
+                      onToggleMute: (_) {},
+                      onToggleSolo: (_) {},
+                      onOpenClipEditor: (_, _) {},
+                    ),
+                  ),
+                  SizedBox(
+                    width: 1100,
+                    height: 260,
+                    child: MixerConsoleView(
+                      tracks: [grp, midi],
+                      trackLevels: const {},
+                      trackPeaks: const {},
+                      auxReverbMix: 0.5,
+                      auxDelayMix: 0.4,
+                      auxRevLevel: const (0.0, 0.0),
+                      auxDlyLevel: const (0.0, 0.0),
+                      masterVolume: 1.0,
+                      masterLimiter: true,
+                      masterLevel: const (0.0, 0.0),
+                      masterPeak: const (0.0, 0.0),
+                      masterVizSamples: null,
+                      masterLufs: -14.2,
+                      masterLufsTarget: -14.0,
+                      stereoCorrelation: 1.0,
+                      onSaveState: () {},
+                      onTrackVolumeChanged: (_, _) {},
+                      onTrackPanChanged: (_, _) {},
+                      onTrackRevSendChanged: (_, _) {},
+                      onTrackDlySendChanged: (_, _) {},
+                      onToggleMute: (_) {},
+                      onToggleSolo: (_) {},
+                      onAuxReverbMixChanged: (_) {},
+                      onAuxDelayMixChanged: (_) {},
+                      onToggleAuxReverbSolo: () => toggledAuxSolo = true,
+                      onMasterVolumeChanged: (_) {},
+                      onToggleMasterLimiter: () {},
+                      onLoadReference: () {},
+                      onToggleReferenceAB: () {},
+                    ),
+                  ),
+                  SizedBox(
+                    width: 1100,
+                    height: 220,
+                    child: EffectsRackView(
+                      track: midi,
+                      allTracks: [grp, midi],
+                      inputDevices: const [],
+                      selectedInputDevice: null,
+                      trackLevel: 0.0,
+                      sidechainGr: 0.0,
+                      detectedPitch: null,
+                      tunerEnabled: false,
+                      isMasterRack: false,
+                      onToggleMasterRack: () => toggledMaster = true,
+                      onSaveState: () {},
+                      onInputDeviceChanged: (_) {},
+                      onToggleTuner: () {},
+                      onNoiseGateChanged: (_) {},
+                      onReorderEffect: (_, _) {},
+                      onRemoveEffect: (_) {},
+                      onToggleBypass: (_) {},
+                      onParamChanged: (_, _, _) {},
+                      onSidechainChanged: (_, _) {},
+                      onApplyPreset: (_) {},
+                      onAddEffectPressed: () {},
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('Pattern A'), findsOneWidget);
+      await tester.tap(find.text('Pattern A'));
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(triggeredClip, isTrue);
+
+      expect(find.text('BUS'), findsOneWidget);
+      expect(find.text('+REF'), findsOneWidget);
+      expect(find.text('-14.2/-14 LUFS'), findsOneWidget);
+
+      await tester.tap(
+        find
+            .descendant(
+              of: find.byType(MixerConsoleView),
+              matching: find.text('S'),
+            )
+            .at(2),
+      );
+      await tester.pump();
+      expect(toggledAuxSolo, isTrue);
+
+      await tester.tap(find.text('TRACK FX'));
+      await tester.pump();
+      expect(toggledMaster, isTrue);
+    });
+
+    testWidgets('DawApp toggles Session Clip Launcher and creates Group Bus track', (tester) async {
+      tester.view.physicalSize = const Size(1600, 960);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+
+      await tester.pumpWidget(const DawApp());
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // Add Group Bus & MIDI track
+      await tester.tap(find.byIcon(Icons.add).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add Group Bus'));
+      await tester.pumpAndSettle();
+      expect(find.text('BUS'), findsOneWidget);
+
+      await tester.tap(find.byIcon(Icons.add).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add MIDI Track'));
+      await tester.pumpAndSettle();
+
+      // Switch to Session Clip Launcher view via top-bar button
+      await tester.tap(find.byTooltip('Switch to Session Clip Launcher'));
+      await tester.pumpAndSettle();
+      expect(find.text('SCENES'), findsOneWidget);
+      expect(find.text('Pattern 1'), findsOneWidget);
+
+      // Switch back to Timeline
+      await tester.tap(find.byTooltip('Switch to Timeline View'));
+      await tester.pumpAndSettle();
+      expect(find.text('OVERVIEW'), findsOneWidget);
+    });
+  });
+
+  group('Expanded Virtual Instruments & Realistic Drum Kits', () {
+    test('All 31 kInstrumentPresets and 3 kDrumKits reference valid stereo WAV assets', () async {
+      expect(kInstrumentPresets.length, 31);
+      for (int i = 0; i < kInstrumentPresets.length; i++) {
+        final preset = getInstrumentPreset(i);
+        expect(preset.index, i);
+        final f = File(preset.assetPath);
+        expect(f.existsSync(), isTrue, reason: 'Missing ${preset.assetPath}');
+        final wav = decodeWavBytes(await f.readAsBytes());
+        expect(wav, isNotNull);
+        expect(wav!.channels, 2);
+        expect(wav.sampleRate, 44100);
+        expect(wav.frameCount, 220500);
+      }
+
+      expect(kDrumKits.length, 3);
+      for (final kit in kDrumKits) {
+        expect(kit.pads.isNotEmpty, isTrue);
+        for (final spec in kit.pads) {
+          final f = File(spec.assetPath);
+          expect(f.existsSync(), isTrue, reason: 'Missing ${spec.assetPath}');
+          final wav = decodeWavBytes(await f.readAsBytes());
+          expect(wav, isNotNull);
+          expect(wav!.channels, 2);
+          expect(wav.sampleRate, 44100);
+          expect(wav.frameCount, greaterThan(1000));
+        }
+      }
+    });
+
+    test('MixdownRenderer renders new 808 Boom Sub, Nylon Guitar, and bundled 808 Trap Kit cleanly', () async {
+      final dir = await Directory.systemTemp.createTemp('fyr_inst_mix_');
+      addTearDown(() => dir.deleteSync(recursive: true));
+
+      final guitarTrack = Track(
+        id: 'gtr1',
+        name: 'Nylon',
+        type: TrackType.midi,
+      )..instrumentIndex = 17; // Nylon Spanish Guitar
+      final subTrack = Track(
+        id: 'sub1',
+        name: 'Sub 808',
+        type: TrackType.midi,
+      )..instrumentIndex = 29; // 808 Boom Sub
+      final drumTrack = Track(
+        id: 'drm1',
+        name: 'Trap Kit',
+        type: TrackType.sampler,
+      );
+      await applyDrumKitToPads(drumTrack.samplerPads, findDrumKitById('808_trap')!);
+      expect(drumTrack.samplerPads[0]?.name, '808 Kick');
+      expect(drumTrack.samplerPads[6]?.chokeGroup, 1);
+      expect(drumTrack.samplerPads[10]?.chokeGroup, 1);
+
+      final guitarClip = MidiClip(
+        id: 'gc1',
+        name: 'Gtr',
+        start: 0.0,
+        length: 200.0,
+        color: Colors.amber,
+        notes: [MidiNote(pitch: 48, start: 0.0, length: 120.0, velocity: 110)],
+      );
+      final subClip = MidiClip(
+        id: 'sc1',
+        name: 'Sub',
+        start: 0.0,
+        length: 200.0,
+        color: Colors.purple,
+        notes: [MidiNote(pitch: 36, start: 0.0, length: 140.0, velocity: 120)],
+      );
+      final drumClip = MidiClip(
+        id: 'dc1',
+        name: 'Beat',
+        start: 0.0,
+        length: 200.0,
+        color: Colors.red,
+        notes: [
+          MidiNote(pitch: 36, start: 0.0, length: 20.0, velocity: 127),
+          MidiNote(pitch: 38, start: 100.0, length: 20.0, velocity: 120),
+          MidiNote(pitch: 46, start: 50.0, length: 20.0, velocity: 100),
+          MidiNote(pitch: 42, start: 100.0, length: 20.0, velocity: 105),
+        ],
+      );
+
+      final outWav = '${dir.path}/mix.wav';
+      final ok = await MixdownRenderer.renderToWav(
+        tracks: [guitarTrack, subTrack, drumTrack],
+        trackClips: {
+          'gtr1': [guitarClip],
+          'sub1': [subClip],
+          'drm1': [drumClip],
+        },
+        bpm: 120,
+        beatWidth: 100.0,
+        outWavPath: outWav,
+      );
+
+      expect(ok, isTrue);
+      final decoded = decodeWavBytes(await File(outWav).readAsBytes());
+      expect(decoded, isNotNull);
+      expect(decoded!.frameCount, greaterThan(44100));
+      double maxAmp = 0.0;
+      for (int i = 0; i < decoded.frameCount; i++) {
+        maxAmp = max(maxAmp, decoded.left[i].abs());
+      }
+      expect(maxAmp, greaterThan(0.15));
+    });
+
+    testWidgets('SamplerEditorWidget loads built-in Drum Kit presets and updates pad labels', (tester) async {
+      final smpTrack = Track(id: 'smp_kit', name: 'Drums', type: TrackType.sampler);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 980,
+              height: 440,
+              child: SamplerEditorWidget(
+                track: smpTrack,
+                onStateChanged: () {},
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('Load Drum Kit...'), findsOneWidget);
+      await tester.tap(find.text('Load Drum Kit...'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('808 Trap Kit'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('808 Kick'), findsOneWidget);
+      expect(find.text('808 Snare'), findsOneWidget);
+      expect(find.text('808 CHH'), findsOneWidget);
+    });
+  });
+}

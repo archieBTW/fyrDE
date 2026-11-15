@@ -5,7 +5,6 @@ import 'package:flutter/services.dart';
 import 'dart:math';
 import 'dart:async';
 import 'dart:io';
-import 'package:dotted_border/dotted_border.dart';
 import 'dart:convert';
 import 'package:flutter_soloud/flutter_soloud.dart';
 import 'package:record/record.dart';
@@ -21,11 +20,23 @@ import 'package:fyrdaw/models/daw_clip.dart';
 import 'package:fyrdaw/models/daw_effect.dart';
 import 'package:fyrdaw/models/automation_point.dart';
 import 'package:fyrdaw/models/track.dart';
+import 'package:fyrdaw/models/sampler_pad.dart';
 import 'package:fyrdaw/models/midi_note.dart';
+import 'package:fyrdaw/models/midi_mapping.dart';
+import 'package:fyrdaw/models/song_marker.dart';
 import 'package:fyrdaw/ui/dial.dart';
 import 'package:fyrdaw/ui/painters.dart';
+import 'package:fyrdaw/ui/meters.dart';
 import 'package:fyrdaw/ui/midi_editor.dart';
 import 'package:fyrdaw/ui/sampler_editor.dart';
+import 'package:fyrdaw/ui/templates_dialog.dart';
+import 'package:fyrdaw/ui/mixer_console.dart';
+import 'package:fyrdaw/ui/effects_rack.dart';
+import 'package:fyrdaw/ui/musical_keyboard_bar.dart';
+import 'package:fyrdaw/ui/session_launcher.dart';
+import 'package:fyrdaw/utils/audio_utils.dart';
+import 'package:fyrdaw/utils/mixdown_renderer.dart';
+import 'package:fyrdaw/utils/pitch_detector.dart';
 import 'fyr_theme.dart';
 
 part 'ui/daw_main_screen.dart';
@@ -49,26 +60,37 @@ SoundHandle? triggerInstrumentNote(
   int midiPitch,
   int velocity, {
   double volumeScale = 1.0,
+  Bus? targetBus,
 }) {
-  if (!SoLoud.instance.isInitialized) return null;
+  try {
+    if (!SoLoud.instance.isInitialized) return null;
+  } catch (_) {
+    return null;
+  }
   final preset = getInstrumentPreset(track.instrumentIndex);
   final src = getInstrumentAudioSource(track);
   if (src == null) return null;
 
-  track.bus ??= Bus()..playOnEngine();
+  final s = track.synthSettings;
+  final busToUse = targetBus ?? (track.bus ??= Bus()..playOnEngine());
   final double targetVol =
       ((velocity.clamp(1, 127) / 127.0) *
               track.volume *
               preset.volumeMultiplier *
               volumeScale)
           .clamp(0.0, 2.5);
-  final double speed = pow(2.0, (midiPitch - preset.basePitch) / 12.0)
+  final double semitoneOffset =
+      (midiPitch - preset.basePitch) +
+      (s.octave * 12.0) +
+      (s.detuneCents / 100.0);
+  final double speed = pow(2.0, semitoneOffset / 12.0)
       .toDouble()
       .clamp(0.05, 16.0);
 
-  final handle = track.bus!.play(
+  final bool hasAttack = s.attackSec > 0.01;
+  final handle = busToUse.play(
     src,
-    volume: targetVol,
+    volume: hasAttack ? 0.001 : targetVol,
     pan: track.pan.clamp(-1.0, 1.0),
     paused: true,
   );
@@ -79,12 +101,34 @@ SoundHandle? triggerInstrumentNote(
   );
   SoLoud.instance.setRelativePlaySpeed(handle, speed);
   SoLoud.instance.setPause(handle, false);
+
+  final attackMs = (s.attackSec * 1000).round();
+  if (hasAttack) {
+    SoLoud.instance.fadeVolume(
+      handle,
+      targetVol,
+      Duration(milliseconds: attackMs),
+    );
+  }
+  if (s.sustain < 0.99 && s.decaySec > 0.01) {
+    Timer(Duration(milliseconds: max(10, attackMs)), () {
+      try {
+        if (SoLoud.instance.getIsValidVoiceHandle(handle)) {
+          SoLoud.instance.fadeVolume(
+            handle,
+            targetVol * s.sustain.clamp(0.0, 1.0),
+            Duration(milliseconds: (s.decaySec * 1000).round().clamp(20, 4000)),
+          );
+        }
+      } catch (_) {}
+    });
+  }
   return handle;
 }
 
 void releaseInstrumentNote(SoundHandle handle, {int releaseMs = 140}) {
-  if (!SoLoud.instance.isInitialized) return;
   try {
+    if (!SoLoud.instance.isInitialized) return;
     if (SoLoud.instance.getIsValidVoiceHandle(handle)) {
       final dur = Duration(milliseconds: max(20, releaseMs));
       SoLoud.instance.fadeVolume(handle, 0.0, dur);
@@ -128,6 +172,9 @@ void main() async {
       await SoLoud.instance.init();
     }
     SoLoud.instance.setGlobalVolume(1.0);
+    try {
+      SoLoud.instance.setVisualizationEnabled(true);
+    } catch (_) {}
     try {
       SoLoud.instance.setMaxActiveVoiceCount(64);
     } catch (_) {}
@@ -229,6 +276,7 @@ class _DawAppState extends State<DawApp> {
         _applyThemeColors();
         return MaterialApp(
           title: 'fyrDAW',
+          debugShowCheckedModeBanner: false,
           theme: isDarkMode
               ? ThemeData.dark().copyWith(
                   scaffoldBackgroundColor: bgDark,

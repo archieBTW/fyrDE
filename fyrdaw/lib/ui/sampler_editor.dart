@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:io';
@@ -6,9 +7,12 @@ import 'package:flutter_soloud/flutter_soloud.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:fyrdaw/main.dart';
 
+import 'package:fyrdaw/models/enums.dart';
 import 'package:fyrdaw/models/sampler_pad.dart';
 import 'package:fyrdaw/models/track.dart';
 import 'package:fyrdaw/ui/dial.dart';
+
+enum SamplerSixteenMode { off, velocity, pitch }
 
 class SamplerEditorWidget extends StatefulWidget {
   final Track track;
@@ -28,6 +32,7 @@ class SamplerEditorWidget extends StatefulWidget {
 
 class _SamplerEditorWidgetState extends State<SamplerEditorWidget> {
   int _selectedPadIndex = 0;
+  SamplerSixteenMode _sixteenMode = SamplerSixteenMode.off;
   Timer? _playbackTimer;
 
   @override
@@ -144,53 +149,215 @@ class _SamplerEditorWidgetState extends State<SamplerEditorWidget> {
       children: [
         Container(
           width: 320,
-          padding: EdgeInsets.all(16),
-          child: GridView.builder(
-            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 4,
-              crossAxisSpacing: 8,
-              mainAxisSpacing: 8,
-            ),
-            itemCount: 16,
-            itemBuilder: (context, index) {
-              bool isSelected = index == _selectedPadIndex;
-              bool hasSample =
-                  widget.track.samplerPads[index]?.filePath != null;
-              return GestureDetector(
-                onTap: () {
-                  setState(() => _selectedPadIndex = index);
-                  var p = widget.track.samplerPads[index];
-                  if (p != null) {
-                    p.play(
-                      127.0,
-                      widget.track.bus,
-                      widget.track.volume,
-                      widget.track.pan,
-                    );
-                  }
-                },
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: isSelected
-                        ? lavenderAccent
-                        : (hasSample ? panelLight : bgDark),
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(
-                      color: isSelected ? textMain : textFaint,
-                    ),
+          padding: EdgeInsets.all(12),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  Text(
+                    'Kit:',
+                    style: TextStyle(color: textMuted, fontSize: 10),
                   ),
-                  child: Center(
-                    child: Text(
-                      'Pad ${index + 1}',
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: isSelected ? Colors.black : Colors.white,
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: PopupMenuButton<DrumKitPreset>(
+                      tooltip: 'Load Built-In Drum Kit',
+                      color: panelDark,
+                      onSelected: (kit) async {
+                        await applyDrumKitToPads(widget.track.samplerPads, kit);
+                        if (mounted) {
+                          setState(() {});
+                          widget.onStateChanged();
+                        }
+                      },
+                      itemBuilder: (context) => kDrumKits
+                          .map(
+                            (kit) => PopupMenuItem<DrumKitPreset>(
+                              value: kit,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    kit.name,
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  Text(
+                                    kit.description,
+                                    style: TextStyle(
+                                      color: textMuted,
+                                      fontSize: 10,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          )
+                          .toList(),
+                      child: Container(
+                        padding: EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: bgDark,
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: textFaint),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Flexible(
+                              child: Text(
+                                'Load Drum Kit...',
+                                style: TextStyle(color: lavenderLight, fontSize: 11),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            Icon(Icons.arrow_drop_down, size: 16, color: lavenderLight),
+                          ],
+                        ),
                       ),
                     ),
                   ),
+                ],
+              ),
+              SizedBox(height: 4),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    '16-Level:',
+                    style: TextStyle(color: textMuted, fontSize: 10),
+                  ),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: DropdownButton<SamplerSixteenMode>(
+                      value: _sixteenMode,
+                      isDense: true,
+                      isExpanded: true,
+                      underline: SizedBox(),
+                      dropdownColor: panelDark,
+                      style: TextStyle(color: lavenderLight, fontSize: 11),
+                      items: const [
+                        DropdownMenuItem(
+                          value: SamplerSixteenMode.off,
+                          child: Text('Off (Pads 1-16)', overflow: TextOverflow.ellipsis),
+                        ),
+                        DropdownMenuItem(
+                          value: SamplerSixteenMode.velocity,
+                          child: Text('16-Level Velocity', overflow: TextOverflow.ellipsis),
+                        ),
+                        DropdownMenuItem(
+                          value: SamplerSixteenMode.pitch,
+                          child: Text('16-Level Pitch', overflow: TextOverflow.ellipsis),
+                        ),
+                      ],
+                      onChanged: (m) {
+                        if (m != null) setState(() => _sixteenMode = m);
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: 6),
+              Expanded(
+                child: GridView.builder(
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 4,
+                    crossAxisSpacing: 8,
+                    mainAxisSpacing: 8,
+                  ),
+                  itemCount: 16,
+                  itemBuilder: (context, index) {
+                    bool isSelected = index == _selectedPadIndex;
+                    final padItem = widget.track.samplerPads[index];
+                    bool hasSample = padItem?.filePath != null;
+                    final choke = padItem?.chokeGroup ?? 0;
+                    final label = _sixteenMode == SamplerSixteenMode.velocity
+                        ? 'V${((index + 1) / 16.0 * 127).round()}'
+                        : (_sixteenMode == SamplerSixteenMode.pitch
+                              ? '${(index - 7) >= 0 ? '+' : ''}${index - 7}st'
+                              : (padItem?.name ?? 'Pad ${index + 1}'));
+                    return GestureDetector(
+                      onTap: () {
+                        if (_sixteenMode == SamplerSixteenMode.off) {
+                          setState(() => _selectedPadIndex = index);
+                          var p = widget.track.samplerPads[index];
+                          p?.play(
+                            127.0,
+                            widget.track.bus,
+                            widget.track.volume,
+                            widget.track.pan,
+                            widget.track.samplerPads.values,
+                          );
+                        } else {
+                          var p = widget.track.samplerPads[_selectedPadIndex];
+                          if (p != null) {
+                            final vel = _sixteenMode == SamplerSixteenMode.velocity
+                                ? ((index + 1) / 16.0 * 127.0)
+                                : 120.0;
+                            final pitchMult = _sixteenMode == SamplerSixteenMode.pitch
+                                ? pow(2.0, (index - 7) / 12.0).toDouble()
+                                : 1.0;
+                            p.play(
+                              vel,
+                              widget.track.bus,
+                              widget.track.volume,
+                              widget.track.pan,
+                              widget.track.samplerPads.values,
+                              pitchMult,
+                            );
+                          }
+                        }
+                      },
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: _sixteenMode != SamplerSixteenMode.off
+                              ? panelLight
+                              : (isSelected
+                                    ? lavenderAccent
+                                    : (hasSample ? panelLight : bgDark)),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(
+                            color: isSelected ? textMain : textFaint,
+                          ),
+                        ),
+                        child: Stack(
+                          children: [
+                            Center(
+                              child: Text(
+                                label,
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  color: (_sixteenMode == SamplerSixteenMode.off && isSelected)
+                                      ? Colors.black
+                                      : Colors.white,
+                                ),
+                              ),
+                            ),
+                            if (_sixteenMode == SamplerSixteenMode.off && choke > 0)
+                              Positioned(
+                                top: 2,
+                                right: 4,
+                                child: Text(
+                                  String.fromCharCode(64 + choke),
+                                  style: TextStyle(
+                                    fontSize: 8,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.amberAccent,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
                 ),
-              );
-            },
+              ),
+            ],
           ),
         ),
         VerticalDivider(width: 1, color: textFaint),
@@ -207,19 +374,12 @@ class _SamplerEditorWidgetState extends State<SamplerEditorWidget> {
                         backgroundColor: panelLight,
                       ),
                       onPressed: () async {
-                        final p = await _pickAudioFile(title: 'Load Audio Sample');
-                        if (p != null) {
-                          pad.filePath = p;
-                          if (SoLoud.instance.isInitialized) {
-                            try {
-                              if (pad.source != null) {
-                                SoLoud.instance.disposeSource(pad.source!);
-                              }
-                              pad.source = await SoLoud.instance.loadFile(p);
-                              pad.source!.filters.pitchShiftFilter.activate();
-                              pad.extractWaveform();
-                            } catch (_) {}
-                          }
+                        final path = await _pickAudioFile(title: 'Load Audio Sample');
+                        if (path != null) {
+                          await pad.loadSample(
+                            path,
+                            label: p.basenameWithoutExtension(path),
+                          );
                           setState(() {});
                           widget.onStateChanged();
                         }
@@ -236,19 +396,12 @@ class _SamplerEditorWidgetState extends State<SamplerEditorWidget> {
                           backgroundColor: panelLight,
                         ),
                         onPressed: () async {
-                          String? p = await widget.onRecordSample!();
-                          if (p != null) {
-                            pad.filePath = p;
-                            if (SoLoud.instance.isInitialized) {
-                              try {
-                                if (pad.source != null) {
-                                  SoLoud.instance.disposeSource(pad.source!);
-                                }
-                                pad.source = await SoLoud.instance.loadFile(p);
-                                pad.source!.filters.pitchShiftFilter.activate();
-                                pad.extractWaveform();
-                              } catch (_) {}
-                            }
+                          String? path = await widget.onRecordSample!();
+                          if (path != null) {
+                            await pad.loadSample(
+                              path,
+                              label: p.basenameWithoutExtension(path),
+                            );
                             setState(() {});
                             widget.onStateChanged();
                           }
@@ -264,7 +417,37 @@ class _SamplerEditorWidgetState extends State<SamplerEditorWidget> {
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    SizedBox(width: 16),
+                    SizedBox(width: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          'Choke Grp',
+                          style: TextStyle(color: textMuted, fontSize: 10),
+                        ),
+                        SizedBox(height: 4),
+                        DropdownButton<int>(
+                          value: pad.chokeGroup.clamp(0, 4),
+                          isDense: true,
+                          dropdownColor: panelDark,
+                          style: TextStyle(color: Colors.amberAccent, fontSize: 11),
+                          items: const [
+                            DropdownMenuItem(value: 0, child: Text('Off')),
+                            DropdownMenuItem(value: 1, child: Text('Grp A')),
+                            DropdownMenuItem(value: 2, child: Text('Grp B')),
+                            DropdownMenuItem(value: 3, child: Text('Grp C')),
+                            DropdownMenuItem(value: 4, child: Text('Grp D')),
+                          ],
+                          onChanged: (v) {
+                            if (v != null) {
+                              setState(() => pad.chokeGroup = v);
+                              widget.onStateChanged();
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                    SizedBox(width: 12),
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
@@ -351,7 +534,7 @@ class _SamplerEditorWidgetState extends State<SamplerEditorWidget> {
                             ),
                           ),
                         ),
-                      if (pad.source == null)
+                      if (pad.source == null && pad.waveformData == null)
                         Center(
                           child: Text(
                             'No Audio Data',
