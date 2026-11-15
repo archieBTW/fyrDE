@@ -550,6 +550,8 @@ class _TorrentTask
     if (_fileManager!.isAllComplete) {
       events.emit(AllComplete());
       _whenTaskDownloadComplete();
+    } else if (_isEndgameMode()) {
+      _wakeIdlePeers();
     }
   }
 
@@ -578,6 +580,7 @@ class _TorrentTask
   void _processRejectRequest(PeerRejectEvent event) {
     var piece = _pieceManager?[event.index];
     piece?.pushSubPieceLast(event.begin ~/ DEFAULT_REQUEST_LENGTH);
+    _wakeIdlePeers();
   }
 
   void _processPeerDispose(PeerDisposeEvent event) {
@@ -615,16 +618,34 @@ class _TorrentTask
         _log.info('Error:', 'Piece overlaps with next piece');
         // will request the same piece below
       } else {
-        if (!piece.isCompleted) {
+        var subIndex = event.begin ~/ DEFAULT_REQUEST_LENGTH;
+        if (!piece.isCompleted &&
+            !piece.flushed &&
+            !piece.containsReceivedSubPiece(subIndex)) {
           pieceManager?.processReceivedBlock(
               event.index, event.begin, event.block);
+          _cancelDuplicateRequests(
+              event.index, event.begin, event.block.length,
+              exclude: event.peer);
         }
-        // request available subpiece
-        if (piece.haveAvailableSubPiece()) i = -1;
+        // Switch piece selection if this piece no longer has queued subpieces
+        if (!piece.haveAvailableSubPiece()) i = -1;
       }
     }
 
     Timer.run(() => requestPieces(event.peer, i));
+  }
+
+  void _cancelDuplicateRequests(int index, int begin, int length,
+      {Peer? exclude}) {
+    if (_peersManager == null) return;
+    for (var peer in [..._peersManager!.activePeers]) {
+      if (peer != exclude &&
+          !peer.isDisposed &&
+          peer.hasPendingRequest(index, begin)) {
+        peer.requestCancel(index, begin, length);
+      }
+    }
   }
 
   void _processPeerHandshake(PeerHandshakeEvent event) {
@@ -722,6 +743,20 @@ class _TorrentTask
       for (var index in completedPieces) {
         _pieceManager![index]?.removeAvailablePeer(event.peer);
       }
+      var reclaimed = event.peer.clearPendingRequestsOnChoke();
+      if (reclaimed.isNotEmpty) {
+        _pushSubPiecesBack(reclaimed);
+        _wakeIdlePeers(event.peer);
+      }
+    }
+  }
+
+  void _wakeIdlePeers([Peer? exclude]) {
+    if (_peersManager == null) return;
+    for (var p in [..._peersManager!.activePeers]) {
+      if (p != exclude && !p.isDisposed && !p.chokeMe && p.isSleeping) {
+        Timer.run(() => requestPieces(p));
+      }
     }
   }
 
@@ -729,9 +764,9 @@ class _TorrentTask
     if (_pieceManager == null || _peersManager == null) return;
     var flag = false;
     for (var request in requests) {
-      if (request[4] >= 3) {
+      if (request[4] >= 1) {
         flag = true;
-        Timer.run(() => peer.requestCancel(request[0], request[1], request[2]));
+        peer.forceCancelRequest(request[0], request[1], request[2]);
         var index = request[0];
         var begin = request[1];
         var subindex = begin ~/ DEFAULT_REQUEST_LENGTH;
@@ -739,13 +774,49 @@ class _TorrentTask
         piece?.pushSubPiece(subindex);
       }
     }
-    // Wake up other possibly idle peers.
+    // Wake up other possibly idle peers so timed-out blocks are reassigned immediately.
     if (flag) {
-      for (var p in _peersManager!.activePeers) {
-        if (p != peer && p.isSleeping) {
-          // TODO: should we request from all peers ?
-          Timer.run(() => requestPieces(p));
+      _wakeIdlePeers(peer);
+      final hasOtherPeer = _peersManager!.activePeers
+          .any((p) => p != peer && !p.isDisposed && !p.chokeMe);
+      if (!hasOtherPeer && !peer.isDisposed && !peer.chokeMe && peer.isSleeping) {
+        Timer.run(() => requestPieces(peer));
+      }
+    }
+  }
+
+  bool _isEndgameMode() {
+    if (_pieceManager == null || _fileManager == null) return false;
+    if (_fileManager!.isAllComplete) return false;
+    var hasIncomplete = false;
+    for (var piece in _pieceManager!.pieces.values) {
+      if (piece.isCompleted || piece.flushed) continue;
+      hasIncomplete = true;
+      if (piece.haveAvailableSubPiece() && piece.availablePeers.isNotEmpty) {
+        return false;
+      }
+    }
+    return hasIncomplete;
+  }
+
+  void _requestEndgamePiece(Peer peer) {
+    if (_pieceManager == null || _peersManager == null) return;
+    if (peer.isDisposed || peer.chokeMe) return;
+    for (var piece in _pieceManager!.pieces.values) {
+      if (piece.isCompleted || piece.flushed) continue;
+      if (peer.remoteHave(piece.index) != true) continue;
+      for (var subIndex in piece.missingInFlightSubPieces) {
+        var size = DEFAULT_REQUEST_LENGTH;
+        var begin = subIndex * size;
+        if ((begin + size) > piece.byteLength) {
+          size = piece.byteLength - begin;
         }
+        if (peer.hasPendingRequest(piece.index, begin)) continue;
+        if (!peer.sendRequest(piece.index, begin, size)) {
+          return;
+        }
+        Timer.run(() => requestPieces(peer));
+        return;
       }
     }
   }
@@ -772,7 +843,12 @@ class _TorrentTask
     // at this point we have a piece that we know is:
     // - available in the peer
     // - have subPieces
-    if (piece == null) return;
+    if (piece == null) {
+      if (_isEndgameMode()) {
+        _requestEndgamePiece(peer);
+      }
+      return;
+    }
 
     var subIndex = piece.popSubPiece();
     if (subIndex == null) return;
@@ -784,6 +860,9 @@ class _TorrentTask
     if (!peer.sendRequest(piece.index, begin, size)) {
       piece.pushSubPiece(subIndex);
     } else {
+      if (!piece.haveAvailableSubPiece() && _isEndgameMode()) {
+        _wakeIdlePeers(peer);
+      }
       Timer.run(() => requestPieces(peer, pieceIndex));
     }
   }

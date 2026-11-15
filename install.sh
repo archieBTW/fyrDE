@@ -230,9 +230,34 @@ reinstall_app() {
         cd ..
         
         setup_app_configs "$app"
+        cleanup_legacy_user_override "$app"
     else
         echo "Error: Directory ./$app not found!"
         exit 1
+    fi
+}
+
+cleanup_legacy_user_override() {
+    local app=$1
+    # Older installs placed bundles in ~/.local/share/fyrDE/$app and desktop files
+    # in ~/.local/share/applications/$app.desktop, which shadow /opt/$app and
+    # /usr/share/applications/$app.desktop. Clean those overrides up so updated
+    # /opt builds are always what launchers execute.
+    if [ -d "$HOME/.local/share/fyrDE/$app" ]; then
+        rm -rf "$HOME/.local/share/fyrDE/$app"
+    fi
+    if [ -f "$HOME/.local/share/applications/$app.desktop" ]; then
+        rm -f "$HOME/.local/share/applications/$app.desktop"
+        if command -v update-desktop-database &> /dev/null; then
+            update-desktop-database "$HOME/.local/share/applications" || true
+        fi
+    fi
+    if [ -e "$HOME/.local/bin/$app" ] || [ -L "$HOME/.local/bin/$app" ]; then
+        if [ -e "/usr/local/bin/$app" ]; then
+            ln -sf "/usr/local/bin/$app" "$HOME/.local/bin/$app"
+        else
+            rm -f "$HOME/.local/bin/$app"
+        fi
     fi
 }
 
@@ -971,21 +996,21 @@ setup_sway_config() {
 CONF="$HOME/.config/sway/floating.conf"
 if [ -f "$CONF" ] && grep -q "floating enable" "$CONF"; then
     echo "" > "$CONF"
-    swaymsg '[floating workspace="^[0-9]+$" app_id="(?!(fyrtaskbar|fyrdock|fyrsearch|fyroverview|fyrhelp|fyremoji)).*"] floating disable'
-    swaymsg '[tiling] border pixel 2'
+    swaymsg '[floating workspace="^[0-9]+$" app_id="^(?!(fyrtaskbar|fyrdock|fyrdesktop|fyrsearch|launcher|fyroverview|fyrwindowoverview|fyrhelp|fyremoji)$).*$"] floating disable'
+    swaymsg '[tiling] border auto 2'
     swaymsg 'gaps inner all set 20'
     swaymsg 'gaps outer all set 20'
 else
     echo 'for_window [class=".*"] floating enable' > "$CONF"
     echo 'for_window [app_id=".*"] floating enable' >> "$CONF"
-    echo 'for_window [class=".*"] border pixel 4' >> "$CONF"
-    echo 'for_window [app_id="(?!(fyrtaskbar|fyrdock|fyrsearch|fyroverview|fyrhelp|fyremoji)).*"] border pixel 4' >> "$CONF"
-    echo 'default_floating_border pixel 4' >> "$CONF"
+    echo 'for_window [class=".*"] border auto 4' >> "$CONF"
+    echo 'for_window [app_id="^(?!(fyrtaskbar|fyrdock|fyrdesktop|fyrsearch|launcher|fyroverview|fyrwindowoverview|fyrhelp|fyremoji)$).*$"] border auto 4' >> "$CONF"
+    echo 'default_floating_border auto 4' >> "$CONF"
     echo 'gaps inner 0' >> "$CONF"
     echo 'gaps outer 0' >> "$CONF"
     swaymsg '[tiling] floating enable'
-    swaymsg '[floating workspace="^[0-9]+$" class=".*"] border pixel 4'
-    swaymsg '[floating workspace="^[0-9]+$" app_id="(?!(fyrtaskbar|fyrdock|fyrsearch|fyroverview|fyrhelp|fyremoji)).*"] border pixel 4'
+    swaymsg '[floating workspace="^[0-9]+$" class=".*"] border auto 4'
+    swaymsg '[floating workspace="^[0-9]+$" app_id="^(?!(fyrtaskbar|fyrdock|fyrdesktop|fyrsearch|launcher|fyroverview|fyrwindowoverview|fyrhelp|fyremoji)$).*$"] border auto 4'
     swaymsg 'gaps inner all set 0'
     swaymsg 'gaps outer all set 0'
 fi

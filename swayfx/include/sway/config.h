@@ -583,6 +583,8 @@ struct sway_config {
 
 	enum sway_container_border border;
 	enum sway_container_border floating_border;
+	bool border_auto;
+	bool floating_border_auto;
 	int border_thickness;
 	int floating_border_thickness;
 	enum edge_border_types hide_edge_borders;

@@ -146,6 +146,25 @@ class Piece {
   // the piece is completed whether it's in the memory or disk
   bool get isCompleted => isCompletelyDownloaded || isCompletelyWritten;
 
+  bool containsReceivedSubPiece(int subIndex) {
+    return _inMemorySubPieces.contains(subIndex) ||
+        _onDiskSubPieces.contains(subIndex);
+  }
+
+  /// Returns sub-piece indices that are neither received nor queued (currently in-flight).
+  List<int> get missingInFlightSubPieces {
+    if (_subPiecesCount == 0 || isCompleted || _flushed) return const [];
+    final missing = <int>[];
+    for (var i = 0; i < _subPiecesCount; i++) {
+      if (!_inMemorySubPieces.contains(i) &&
+          !_onDiskSubPieces.contains(i) &&
+          !_subPiecesQueue.contains(i)) {
+        missing.add(i);
+      }
+    }
+    return missing;
+  }
+
   ///
   /// SubPiece download completed.
   ///
@@ -153,9 +172,13 @@ class Piece {
   /// If the subpiece has already been marked, return false; if it hasn't been marked
   /// yet, mark it as completed and return true.
   bool subPieceReceived(int begin, List<int> block) {
+    var subindex = begin ~/ DEFAULT_REQUEST_LENGTH;
+    if (_flushed || isCompleted || containsReceivedSubPiece(subindex)) {
+      _subPiecesQueue.remove(subindex);
+      return false;
+    }
     init();
     _block?.setRange(begin, begin + block.length, block);
-    var subindex = begin ~/ DEFAULT_REQUEST_LENGTH;
     _subPiecesQueue.remove(subindex);
     return _inMemorySubPieces.add(subindex);
   }

@@ -1,12 +1,24 @@
 #include <assert.h>
+#include <cairo.h>
 #include <drm_fourcc.h>
+#include <math.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <strings.h>
+#include <time.h>
 #include <wayland-server-core.h>
+#include <wlr/config.h>
+#include <wlr/interfaces/wlr_buffer.h>
+#include <wlr/types/wlr_buffer.h>
 #include <wlr/types/wlr_foreign_toplevel_management_v1.h>
 #include <wlr/types/wlr_linux_dmabuf_v1.h>
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_subcompositor.h>
+#include <wlr/types/wlr_xdg_shell.h>
+#if WLR_HAS_XWAYLAND
+#include <wlr/xwayland.h>
+#endif
 #include "linux-dmabuf-unstable-v1-protocol.h"
 #include "sway/config.h"
 #include "sway/desktop/transaction.h"
@@ -18,13 +30,306 @@
 #include "sway/output.h"
 #include "sway/server.h"
 #include "sway/tree/arrange.h"
+#include "sway/tree/root.h"
 #include "sway/tree/view.h"
 #include "sway/tree/workspace.h"
 #include "sway/xdg_decoration.h"
+#include "cairo_util.h"
 #include "list.h"
 #include "pango.h"
 #include "log.h"
 #include "stringop.h"
+
+#define FYR_TITLEBAR_INNER_HEIGHT 48
+#define FYR_BUTTONS_WIDTH 86
+
+struct fyr_cairo_buffer {
+	struct wlr_buffer base;
+	cairo_surface_t *surface;
+	cairo_t *cairo;
+};
+
+static void fyr_cairo_buffer_handle_destroy(struct wlr_buffer *wlr_buffer) {
+	struct fyr_cairo_buffer *buffer = wl_container_of(wlr_buffer, buffer, base);
+	cairo_surface_destroy(buffer->surface);
+	cairo_destroy(buffer->cairo);
+	free(buffer);
+}
+
+static bool fyr_cairo_buffer_handle_begin_data_ptr_access(
+		struct wlr_buffer *wlr_buffer, uint32_t flags, void **data,
+		uint32_t *format, size_t *stride) {
+	struct fyr_cairo_buffer *buffer = wl_container_of(wlr_buffer, buffer, base);
+	*data = cairo_image_surface_get_data(buffer->surface);
+	*stride = cairo_image_surface_get_stride(buffer->surface);
+	*format = DRM_FORMAT_ARGB8888;
+	return true;
+}
+
+static void fyr_cairo_buffer_handle_end_data_ptr_access(
+		struct wlr_buffer *wlr_buffer) {
+	// No-op
+}
+
+static const struct wlr_buffer_impl fyr_cairo_buffer_impl = {
+	.destroy = fyr_cairo_buffer_handle_destroy,
+	.begin_data_ptr_access = fyr_cairo_buffer_handle_begin_data_ptr_access,
+	.end_data_ptr_access = fyr_cairo_buffer_handle_end_data_ptr_access,
+};
+
+static bool fyr_titlebar_is_dark(void) {
+	static struct timespec last_check = {0};
+	static bool cached_dark = true;
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	long elapsed_ms = (now.tv_sec - last_check.tv_sec) * 1000L +
+		(now.tv_nsec - last_check.tv_nsec) / 1000000L;
+	if (last_check.tv_sec == 0 || elapsed_ms >= 500) {
+		last_check = now;
+		const char *home = getenv("HOME");
+		if (home) {
+			char path[512];
+			snprintf(path, sizeof(path), "%s/.config/fyr/theme_mode.txt", home);
+			FILE *f = fopen(path, "r");
+			if (f) {
+				char buf[32] = {0};
+				if (fgets(buf, sizeof(buf), f)) {
+					buf[strcspn(buf, " \t\r\n")] = '\0';
+					cached_dark = strcasecmp(buf, "light") != 0;
+				}
+				fclose(f);
+			}
+		}
+	}
+	return cached_dark;
+}
+
+static void fyr_titlebar_get_colors(float bg[4], float fg[4]) {
+	if (fyr_titlebar_is_dark()) {
+		bg[0] = 0.0f; bg[1] = 0.0f; bg[2] = 0.0f; bg[3] = 1.0f;
+		fg[0] = 1.0f; fg[1] = 1.0f; fg[2] = 1.0f; fg[3] = 1.0f;
+	} else {
+		bg[0] = 1.0f; bg[1] = 1.0f; bg[2] = 1.0f; bg[3] = 1.0f;
+		fg[0] = 0.1f; fg[1] = 0.1f; fg[2] = 0.1f; fg[3] = 1.0f;
+	}
+}
+
+static int fyr_get_max_output_scale(void) {
+	int scale = 1;
+	if (root && root->outputs) {
+		for (int i = 0; i < root->outputs->length; i++) {
+			struct sway_output *output = root->outputs->items[i];
+			if (output && output->wlr_output) {
+				int s = (int)ceilf(output->wlr_output->scale);
+				if (s > scale) {
+					scale = s;
+				}
+			}
+		}
+	}
+	if (scale < 1) scale = 1;
+	if (scale > 4) scale = 4;
+	return scale;
+}
+
+static struct wlr_buffer *fyr_get_buttons_wlr_buffer(int scale) {
+	static struct wlr_buffer *cached[5] = {NULL};
+	if (scale < 1) scale = 1;
+	if (scale > 4) scale = 4;
+	if (cached[scale]) {
+		return cached[scale];
+	}
+
+	int px_w = FYR_BUTTONS_WIDTH * scale;
+	int px_h = FYR_TITLEBAR_INNER_HEIGHT * scale;
+	cairo_surface_t *surface = cairo_image_surface_create(
+		CAIRO_FORMAT_ARGB32, px_w, px_h);
+	if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
+		cairo_surface_destroy(surface);
+		return NULL;
+	}
+	cairo_t *cr = cairo_create(surface);
+	if (cairo_status(cr) != CAIRO_STATUS_SUCCESS) {
+		cairo_destroy(cr);
+		cairo_surface_destroy(surface);
+		return NULL;
+	}
+
+	struct fyr_cairo_buffer *buf = calloc(1, sizeof(*buf));
+	if (!buf) {
+		cairo_destroy(cr);
+		cairo_surface_destroy(surface);
+		return NULL;
+	}
+
+	cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+	cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.0);
+	cairo_paint(cr);
+	cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+	cairo_scale(cr, scale, scale);
+
+	// Match FyrDE Flutter apps: left 20px, 14x14px circles, 8px spacing, 0.5px black26 border
+	static const double centers_x[3] = { 27.0, 49.0, 71.0 };
+	static const double colors[3][3] = {
+		{ 1.0, 82.0 / 255.0, 82.0 / 255.0 },     // Colors.redAccent (#FF5252)
+		{ 1.0, 171.0 / 255.0, 64.0 / 255.0 },    // Colors.orangeAccent (#FFAB40)
+		{ 105.0 / 255.0, 240.0 / 255.0, 174.0 / 255.0 }, // Colors.greenAccent (#69F0AE)
+	};
+	for (int i = 0; i < 3; i++) {
+		cairo_arc(cr, centers_x[i], 24.0, 7.0, 0.0, 6.28318530717958647692);
+		cairo_set_source_rgba(cr, colors[i][0], colors[i][1], colors[i][2], 1.0);
+		cairo_fill(cr);
+
+		cairo_arc(cr, centers_x[i], 24.0, 6.75, 0.0, 6.28318530717958647692);
+		cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.26);
+		cairo_set_line_width(cr, 0.5);
+		cairo_stroke(cr);
+	}
+	cairo_surface_flush(surface);
+
+	wlr_buffer_init(&buf->base, &fyr_cairo_buffer_impl, px_w, px_h);
+	buf->surface = surface;
+	buf->cairo = cr;
+	cached[scale] = &buf->base;
+	return cached[scale];
+}
+
+bool container_has_fyr_titlebar(struct sway_container *con) {
+	if (!con || !con->view) {
+		return false;
+	}
+	enum sway_container_border border = con->current.border;
+	if (!con->current.workspace && con->pending.border != B_NONE) {
+		border = con->pending.border;
+	}
+	if (border != B_NORMAL) {
+		return false;
+	}
+	struct sway_container *parent = con->current.parent ?
+		con->current.parent : con->pending.parent;
+	if (parent && (parent->current.layout == L_TABBED ||
+			parent->current.layout == L_STACKED ||
+			parent->pending.layout == L_TABBED ||
+			parent->pending.layout == L_STACKED)) {
+		return false;
+	}
+	return true;
+}
+
+enum fyr_titlebar_button container_titlebar_button_at(
+		struct sway_container *con, double lx, double ly) {
+	if (!con || !con->view || con->current.border != B_NORMAL ||
+			!container_has_fyr_titlebar(con) ||
+			!con->title_bar.buttons_buf ||
+			!con->title_bar.buttons_buf->node.enabled) {
+		return FYR_TITLEBAR_BTN_NONE;
+	}
+	int thickness = MAX(0, con->current.border_thickness);
+	int border_left = con->current.border_left ? thickness : 0;
+	int border_top = con->current.border_top ? thickness : 0;
+	double bx = lx - (con->current.x + border_left);
+	double by = ly - (con->current.y + border_top);
+	if (bx < 0 || bx >= FYR_BUTTONS_WIDTH ||
+			by < 0 || by >= FYR_TITLEBAR_INNER_HEIGHT) {
+		return FYR_TITLEBAR_BTN_NONE;
+	}
+	static const double centers_x[3] = { 27.0, 49.0, 71.0 };
+	static const enum fyr_titlebar_button btns[3] = {
+		FYR_TITLEBAR_BTN_CLOSE,
+		FYR_TITLEBAR_BTN_MINIMIZE,
+		FYR_TITLEBAR_BTN_MAXIMIZE,
+	};
+	double dy = by - 24.0;
+	for (int i = 0; i < 3; i++) {
+		double dx = bx - centers_x[i];
+		if (dx * dx + dy * dy <= 9.0 * 9.0) {
+			return btns[i];
+		}
+	}
+	return FYR_TITLEBAR_BTN_NONE;
+}
+
+bool container_execute_titlebar_button(struct sway_container *con,
+		enum fyr_titlebar_button btn) {
+	if (!con || !con->view || btn == FYR_TITLEBAR_BTN_NONE) {
+		return false;
+	}
+	switch (btn) {
+	case FYR_TITLEBAR_BTN_CLOSE:
+		view_close(con->view);
+		return true;
+	case FYR_TITLEBAR_BTN_MINIMIZE: {
+		struct sway_container *target = con;
+		while (target->pending.parent) {
+			target = target->pending.parent;
+		}
+		if (!target->scratchpad) {
+			root_scratchpad_add_container(target, NULL);
+		} else if (target->pending.workspace) {
+			root_scratchpad_hide(target);
+		}
+		transaction_commit_dirty();
+		return true;
+	}
+	case FYR_TITLEBAR_BTN_MAXIMIZE:
+		if (container_is_floating(con) && con->pending.workspace) {
+			if (con->pending.fullscreen_mode != FULLSCREEN_NONE) {
+				container_set_fullscreen(con, FULLSCREEN_NONE);
+			} else if (con->saved_width > 0) {
+				con->pending.x = con->saved_x;
+				con->pending.y = con->saved_y;
+				con->pending.width = con->saved_width;
+				con->pending.height = con->saved_height;
+				con->saved_width = 0;
+				if (con->view->type == SWAY_VIEW_XDG_SHELL &&
+						con->view->wlr_xdg_toplevel) {
+					wlr_xdg_toplevel_set_maximized(con->view->wlr_xdg_toplevel, false);
+				}
+#if WLR_HAS_XWAYLAND
+				else if (con->view->type == SWAY_VIEW_XWAYLAND &&
+						con->view->wlr_xwayland_surface) {
+					wlr_xwayland_surface_set_maximized(
+						con->view->wlr_xwayland_surface, false, false);
+				}
+#endif
+			} else {
+				struct wlr_box ws_box;
+				workspace_get_box(con->pending.workspace, &ws_box);
+				if (con->saved_width == 0) {
+					con->saved_x = con->pending.x;
+					con->saved_y = con->pending.y;
+					con->saved_width = con->pending.width;
+					con->saved_height = con->pending.height;
+				}
+				con->pending.x = ws_box.x;
+				con->pending.y = ws_box.y;
+				con->pending.width = ws_box.width;
+				con->pending.height = ws_box.height;
+				if (con->view->type == SWAY_VIEW_XDG_SHELL &&
+						con->view->wlr_xdg_toplevel) {
+					wlr_xdg_toplevel_set_maximized(con->view->wlr_xdg_toplevel, true);
+				}
+#if WLR_HAS_XWAYLAND
+				else if (con->view->type == SWAY_VIEW_XWAYLAND &&
+						con->view->wlr_xwayland_surface) {
+					wlr_xwayland_surface_set_maximized(
+						con->view->wlr_xwayland_surface, true, true);
+				}
+#endif
+			}
+		} else {
+			enum sway_fullscreen_mode mode =
+				con->pending.fullscreen_mode == FULLSCREEN_NONE ?
+				FULLSCREEN_WORKSPACE : FULLSCREEN_NONE;
+			container_set_fullscreen(con, mode);
+		}
+		arrange_root();
+		transaction_commit_dirty();
+		return true;
+	default:
+		return false;
+	}
+}
 
 static void handle_output_enter(
 		struct wl_listener *listener, void *data) {
@@ -119,6 +424,15 @@ struct sway_container *container_create(struct sway_view *view) {
 
 	c->title_bar.border = alloc_rect_node(c->title_bar.tree, &failed);
 	c->title_bar.background = alloc_rect_node(c->title_bar.tree, &failed);
+	if (!failed) {
+		c->title_bar.buttons_buf = wlr_scene_buffer_create(c->title_bar.tree, NULL);
+		if (!c->title_bar.buttons_buf) {
+			sway_log(SWAY_ERROR, "Failed to allocate titlebar buttons buffer");
+			failed = true;
+		} else {
+			wlr_scene_node_set_enabled(&c->title_bar.buttons_buf->node, false);
+		}
+	}
 
 	if (view) {
 		// only containers with views can have borders
@@ -310,28 +624,56 @@ void container_update(struct sway_container *con) {
 		}
 	}
 
-	scene_rect_set_color(con->title_bar.background, colors->background, alpha);
-	scene_rect_set_color(con->title_bar.border, colors->border, alpha);
+	if (container_has_fyr_titlebar(con)) {
+		float fyr_bg[4], fyr_fg[4];
+		fyr_titlebar_get_colors(fyr_bg, fyr_fg);
+		scene_rect_set_color(con->title_bar.background, fyr_bg, alpha);
+		scene_rect_set_color(con->title_bar.border, colors->child_border, alpha);
 
-	if (con->view) {
-		scene_rect_set_color(con->border.top, colors->child_border, alpha);
-		scene_rect_set_color(con->border.bottom, bottom, alpha);
-		scene_rect_set_color(con->border.left, colors->child_border, alpha);
-		scene_rect_set_color(con->border.right, right, alpha);
+		if (con->view) {
+			scene_rect_set_color(con->border.top, colors->child_border, alpha);
+			scene_rect_set_color(con->border.bottom, bottom, alpha);
+			scene_rect_set_color(con->border.left, colors->child_border, alpha);
+			scene_rect_set_color(con->border.right, right, alpha);
 
-		float *shadow_color = view_is_urgent(con->view) || con->current.focused ?
-				config->shadow_color : config->shadow_inactive_color;
-		scene_shadow_set_color(con->shadow, shadow_color, alpha);
-	}
+			float *shadow_color = view_is_urgent(con->view) || con->current.focused ?
+					config->shadow_color : config->shadow_inactive_color;
+			scene_shadow_set_color(con->shadow, shadow_color, alpha);
+		}
 
-	if (con->title_bar.title_text) {
-		sway_text_node_set_color(con->title_bar.title_text, colors->text);
-		sway_text_node_set_background(con->title_bar.title_text, colors->background);
-	}
+		if (con->title_bar.title_text) {
+			sway_text_node_set_color(con->title_bar.title_text, fyr_fg);
+			sway_text_node_set_background(con->title_bar.title_text, fyr_bg);
+		}
 
 	if (con->title_bar.marks_text) {
-		sway_text_node_set_color(con->title_bar.marks_text, colors->text);
-		sway_text_node_set_background(con->title_bar.marks_text, colors->background);
+			sway_text_node_set_color(con->title_bar.marks_text, fyr_fg);
+			sway_text_node_set_background(con->title_bar.marks_text, fyr_bg);
+		}
+	} else {
+		scene_rect_set_color(con->title_bar.background, colors->background, alpha);
+		scene_rect_set_color(con->title_bar.border, colors->border, alpha);
+
+		if (con->view) {
+			scene_rect_set_color(con->border.top, colors->child_border, alpha);
+			scene_rect_set_color(con->border.bottom, bottom, alpha);
+			scene_rect_set_color(con->border.left, colors->child_border, alpha);
+			scene_rect_set_color(con->border.right, right, alpha);
+
+			float *shadow_color = view_is_urgent(con->view) || con->current.focused ?
+					config->shadow_color : config->shadow_inactive_color;
+			scene_shadow_set_color(con->shadow, shadow_color, alpha);
+		}
+
+		if (con->title_bar.title_text) {
+			sway_text_node_set_color(con->title_bar.title_text, colors->text);
+			sway_text_node_set_background(con->title_bar.title_text, colors->background);
+		}
+
+	if (con->title_bar.marks_text) {
+			sway_text_node_set_color(con->title_bar.marks_text, colors->text);
+			sway_text_node_set_background(con->title_bar.marks_text, colors->background);
+		}
 	}
 
 	if (con->dim_rect) {
@@ -363,6 +705,122 @@ void container_arrange_title_bar(struct sway_container *con) {
 	int height = container_titlebar_height();
 
 	struct wlr_box text_box = { 0, 0, 0, 0 };
+
+	if (container_has_fyr_titlebar(con)) {
+		if (width <= 0 || height <= 0) {
+			if (con->title_bar.buttons_buf) {
+				wlr_scene_node_set_enabled(&con->title_bar.buttons_buf->node, false);
+			}
+			return;
+		}
+		int bthick = MAX(0, con->current.border_thickness);
+		int bleft = con->current.border_left ? bthick : 0;
+		int bright = con->current.border_right ? bthick : 0;
+		int btop = con->current.border_top ? bthick : 0;
+		int inner_w = MAX(0, (int)width - bleft - bright);
+		int inner_h = MAX(0, (int)height - btop);
+
+		if (con->title_bar.buttons_buf) {
+			if (inner_w >= FYR_BUTTONS_WIDTH && inner_h >= FYR_TITLEBAR_INNER_HEIGHT) {
+				int scale = fyr_get_max_output_scale();
+				struct wlr_buffer *btn_buf = fyr_get_buttons_wlr_buffer(scale);
+				if (btn_buf) {
+					wlr_scene_buffer_set_buffer(con->title_bar.buttons_buf, btn_buf);
+					wlr_scene_buffer_set_dest_size(con->title_bar.buttons_buf,
+						FYR_BUTTONS_WIDTH, FYR_TITLEBAR_INNER_HEIGHT);
+					wlr_scene_node_set_position(&con->title_bar.buttons_buf->node,
+						bleft, btop);
+					wlr_scene_node_set_enabled(&con->title_bar.buttons_buf->node, true);
+				} else {
+					wlr_scene_node_set_enabled(&con->title_bar.buttons_buf->node, false);
+				}
+			} else {
+				wlr_scene_node_set_enabled(&con->title_bar.buttons_buf->node, false);
+			}
+		}
+
+		int marks_reserve = 0;
+		if (con->title_bar.marks_text) {
+			struct sway_text_node *mnode = con->title_bar.marks_text;
+			int m_start_min = bleft + 94;
+			int mx = MAX(m_start_min, (int)width - bright - 16 - (int)mnode->width);
+			int m_alloc = MAX(0, MIN((int)mnode->width, (int)width - bright - 16 - mx));
+			sway_text_node_set_max_width(mnode, m_alloc);
+			wlr_scene_node_set_position(mnode->node, mx,
+				btop + MAX(0, (inner_h - (int)mnode->height) >> 1));
+			wlr_scene_node_set_enabled(mnode->node, m_alloc > 0);
+			if (m_alloc > 0) {
+				marks_reserve = m_alloc + 8;
+				text_box.x = mnode->node->x;
+				text_box.y = mnode->node->y;
+				text_box.width = m_alloc;
+				text_box.height = mnode->height;
+			}
+		}
+
+		if (con->title_bar.title_text) {
+			struct sway_text_node *tnode = con->title_bar.title_text;
+			int tx = bleft + 94;
+			int t_alloc = MAX(0, MIN((int)tnode->width,
+				(int)width - bright - 16 - tx - marks_reserve));
+			sway_text_node_set_max_width(tnode, t_alloc);
+			wlr_scene_node_set_position(tnode->node, tx,
+				btop + MAX(0, (inner_h - (int)tnode->height) >> 1));
+			wlr_scene_node_set_enabled(tnode->node, t_alloc > 0);
+			if (t_alloc > 0) {
+				text_box.x = tnode->node->x;
+				text_box.y = tnode->node->y;
+				text_box.width = MAX(text_box.width, t_alloc);
+				text_box.height = MAX(text_box.height, tnode->height);
+			}
+		}
+
+		int bg_corner = container_has_corner_radius(con) ? con->corner_radius : 0;
+		enum corner_location corners = bg_corner > 0 ?
+			CORNER_LOCATION_TOP : CORNER_LOCATION_NONE;
+
+		wlr_scene_node_set_position(&con->title_bar.background->node, bleft, btop);
+		wlr_scene_rect_set_size(con->title_bar.background, inner_w, inner_h);
+		wlr_scene_rect_set_corner_radius(con->title_bar.background, bg_corner, corners);
+
+		if (text_box.width > 0 && text_box.height > 0) {
+			text_box.x = MAX(0, text_box.x - bleft);
+			text_box.y = MAX(0, text_box.y - btop);
+		} else {
+			text_box = (struct wlr_box){0};
+		}
+		wlr_scene_rect_set_clipped_region(con->title_bar.background, (struct clipped_region) {
+				.corners = CORNER_LOCATION_NONE,
+				.area = text_box,
+		});
+
+		wlr_scene_rect_set_size(con->title_bar.border, width, height);
+		wlr_scene_rect_set_corner_radius(con->title_bar.border,
+			bg_corner > 0 ? bg_corner + bthick : 0, corners);
+		wlr_scene_rect_set_clipped_region(con->title_bar.border, (struct clipped_region) {
+				.corners = corners,
+				.corner_radius = bg_corner,
+				.area = {
+					.x = bleft,
+					.y = btop,
+					.width = inner_w,
+					.height = inner_h,
+				},
+		});
+
+		container_update(con);
+		return;
+	}
+
+	if (con->title_bar.buttons_buf) {
+		wlr_scene_node_set_enabled(&con->title_bar.buttons_buf->node, false);
+	}
+	if (con->title_bar.title_text) {
+		wlr_scene_node_set_enabled(con->title_bar.title_text->node, true);
+	}
+	if (con->title_bar.marks_text) {
+		wlr_scene_node_set_enabled(con->title_bar.marks_text->node, true);
+	}
 
 	if (con->title_bar.marks_text) {
 		struct sway_text_node *node = con->title_bar.marks_text;
@@ -512,7 +970,7 @@ void container_update_marks(struct sway_container *con) {
 	}
 
 	if (!buffer) {
-		if (con->title_bar.marks_text) {
+	if (con->title_bar.marks_text) {
 			wlr_scene_node_destroy(con->title_bar.marks_text->node);
 			con->title_bar.marks_text = NULL;
 		}
@@ -535,6 +993,12 @@ void container_update_title_bar(struct sway_container *con) {
 	}
 
 	struct border_colors *colors = container_get_current_colors(con);
+	float fyr_bg[4], fyr_fg[4];
+	float *title_fg = colors->text;
+	if (container_has_fyr_titlebar(con)) {
+		fyr_titlebar_get_colors(fyr_bg, fyr_fg);
+		title_fg = fyr_fg;
+	}
 
 	if (con->title_bar.title_text) {
 		wlr_scene_node_destroy(con->title_bar.title_text->node);
@@ -542,11 +1006,11 @@ void container_update_title_bar(struct sway_container *con) {
 	}
 
 	con->title_bar.title_text = sway_text_node_create(con->title_bar.tree,
-		con->formatted_title, colors->text, config->pango_markup);
+		con->formatted_title, title_fg, config->pango_markup);
 
 	// we always have to remake these text buffers completely for text font
 	// changes etc...
-	if (con->title_bar.marks_text) {
+if (con->title_bar.marks_text) {
 		wlr_scene_node_destroy(con->title_bar.marks_text->node);
 		con->title_bar.marks_text = NULL;
 	}
@@ -629,10 +1093,9 @@ void container_begin_destroy(struct sway_container *con) {
 		wl_list_remove(&con->output_leave.link);
 		wl_list_remove(&con->output_handler_destroy.link);
 	}
-	if (con->animation_state.animation->initialized) {
+	if (con->animation_state.animation && con->animation_state.animation->initialized) {
 		con->animation_state.animation->initialized = false;
 		wl_list_remove(&con->animation_state.animation->link);
-		free(con->animation_state.animation);
 	}
 }
 
@@ -904,7 +1367,9 @@ void container_update_representation(struct sway_container *con) {
 }
 
 size_t container_titlebar_height(void) {
-	return config->font_height + config->titlebar_v_padding * 2;
+	size_t sway_height = config->font_height + config->titlebar_v_padding * 2;
+	size_t fyr_height = FYR_TITLEBAR_INNER_HEIGHT + MAX(0, config->border_thickness);
+	return MAX(sway_height, fyr_height);
 }
 
 void floating_calculate_constraints(int *min_width, int *max_width,

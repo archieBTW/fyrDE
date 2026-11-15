@@ -90,8 +90,12 @@ class TorrentItem extends ChangeNotifier {
     _initListeners();
   }
 
+  Timer? _pollTimer;
+  dynamic _taskListener;
+
   void _initListeners() {
     final listener = task.createListener();
+    _taskListener = listener;
     listener.on<TaskCompleted>((event) {
       isCompleted = true;
       progress = 1.0;
@@ -99,7 +103,7 @@ class TorrentItem extends ChangeNotifier {
       notifyListeners();
     });
 
-    Timer.periodic(const Duration(seconds: 1), (timer) {
+    _pollTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (task.state == TaskState.stopped) {
         timer.cancel();
         listener.dispose();
@@ -107,8 +111,13 @@ class TorrentItem extends ChangeNotifier {
       }
       
       // SpeedCalculator in dtorrent_task returns KB/s; convert to B/s for UI
-      downloadSpeed = task.currentDownloadSpeed * 1024.0;
-      uploadSpeed = task.uploadSpeed * 1024.0;
+      if (isPaused) {
+        downloadSpeed = 0.0;
+        uploadSpeed = 0.0;
+      } else {
+        downloadSpeed = task.currentDownloadSpeed * 1024.0;
+        uploadSpeed = task.uploadSpeed * 1024.0;
+      }
       progress = task.progress;
       if (progress >= 1.0) {
         isCompleted = true;
@@ -128,6 +137,8 @@ class TorrentItem extends ChangeNotifier {
   void pause() {
     task.pause();
     isPaused = true;
+    downloadSpeed = 0.0;
+    uploadSpeed = 0.0;
     notifyListeners();
   }
 
@@ -138,6 +149,10 @@ class TorrentItem extends ChangeNotifier {
   }
 
   void stop() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    _taskListener?.dispose();
+    _taskListener = null;
     task.stop();
     notifyListeners();
   }
@@ -477,9 +492,11 @@ class TorrentService extends ChangeNotifier {
     item.stop();
     _items.remove(item);
     
-    final torrentFile = File(p.join(_torrentDir.path, '${item.infoHash}.torrent'));
-    if (torrentFile.existsSync()) {
-      torrentFile.deleteSync();
+    for (final candidate in {item.infoHash, item.infoHash.toLowerCase()}) {
+      final torrentFile = File(p.join(_torrentDir.path, '$candidate.torrent'));
+      if (torrentFile.existsSync()) {
+        torrentFile.deleteSync();
+      }
     }
 
     if (deleteFiles) {

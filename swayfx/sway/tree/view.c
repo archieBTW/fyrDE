@@ -464,7 +464,13 @@ void view_set_csd_from_server(struct sway_view *view, bool enabled) {
 
 void view_update_csd_from_client(struct sway_view *view, bool enabled) {
 	sway_log(SWAY_DEBUG, "View %p updated CSD to %i", view, enabled);
+	view->client_csd = enabled;
 	struct sway_container *con = view->container;
+	if (con && con->auto_border) {
+		con->pending.border = enabled ? B_PIXEL : B_NORMAL;
+		view->using_csd = enabled;
+		return;
+	}
 	if (enabled && con && con->pending.border != B_CSD) {
 		con->saved_border = con->pending.border;
 		if (container_is_floating(con)) {
@@ -870,16 +876,23 @@ void view_map(struct sway_view *view, struct wlr_surface *wlr_surface,
 	}
 	ipc_event_window(view->container, "new");
 
+	view->client_csd = decoration;
 	if (decoration) {
 		view_update_csd_from_client(view, decoration);
 	}
 
 	if (view->impl->wants_floating && view->impl->wants_floating(view)) {
-		view->container->pending.border = config->floating_border;
+		view->container->auto_border = config->floating_border_auto;
+		view->container->pending.border = config->floating_border_auto
+			? (view->client_csd ? B_PIXEL : B_NORMAL)
+			: config->floating_border;
 		view->container->pending.border_thickness = config->floating_border_thickness;
 		container_set_floating(view->container, true);
 	} else {
-		view->container->pending.border = config->border;
+		view->container->auto_border = config->border_auto;
+		view->container->pending.border = config->border_auto
+			? (view->client_csd ? B_PIXEL : B_NORMAL)
+			: config->border;
 		view->container->pending.border_thickness = config->border_thickness;
 		view_set_tiled(view, true);
 	}

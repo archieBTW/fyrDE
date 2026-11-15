@@ -28,6 +28,27 @@ static void set_border(struct sway_container *con,
 	if (con->view) {
 		con->view->using_csd = new_border == B_CSD;
 	}
+	con->auto_border = false;
+}
+
+static void set_border_auto(struct sway_container *con) {
+	con->auto_border = true;
+	if (!con->view) {
+		con->pending.border = B_PIXEL;
+		return;
+	}
+	if (con->view->client_csd) {
+		// Preserve client-side decorations (e.g. Flutter native apps, Firefox)
+		// while giving them SwayFX's focus pixel border.
+		con->pending.border = B_PIXEL;
+		con->view->using_csd = true;
+	} else {
+		if (con->view->using_csd) {
+			view_set_csd_from_server(con->view, false);
+		}
+		con->pending.border = B_NORMAL;
+		con->view->using_csd = false;
+	}
 }
 
 static void border_toggle(struct sway_container *con) {
@@ -74,6 +95,8 @@ struct cmd_results *cmd_border(int argc, char **argv) {
 		set_border(container, B_NORMAL);
 	} else if (strcmp(argv[0], "pixel") == 0) {
 		set_border(container, B_PIXEL);
+	} else if (strcmp(argv[0], "auto") == 0) {
+		set_border_auto(container);
 	} else if (strcmp(argv[0], "csd") == 0) {
 		if (!view->xdg_decoration) {
 			return cmd_results_new(CMD_INVALID,
@@ -84,8 +107,8 @@ struct cmd_results *cmd_border(int argc, char **argv) {
 		border_toggle(container);
 	} else {
 		return cmd_results_new(CMD_INVALID,
-				"Expected 'border <none|normal|pixel|csd|toggle>' "
-				"or 'border pixel <px>'");
+				"Expected 'border <none|normal|pixel|auto|csd|toggle>' "
+				"or 'border pixel|auto <px>'");
 	}
 	if (argc == 2) {
 		container->pending.border_thickness = atoi(argv[1]);

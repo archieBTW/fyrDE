@@ -173,6 +173,7 @@ void main() async {
   );
 
   if (Platform.isLinux) {
+    await windowManager.setTitleBarStyle(TitleBarStyle.hidden);
     await windowManager.show();
     await windowManager.focus();
   } else {

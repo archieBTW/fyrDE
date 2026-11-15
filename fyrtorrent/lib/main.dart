@@ -612,53 +612,75 @@ class TorrentListItem extends StatelessWidget {
     );
   }
 
+  Widget _buildRemoveButton() {
+    return IconButton(
+      constraints: const BoxConstraints(),
+      padding: EdgeInsets.zero,
+      tooltip: 'Remove torrent',
+      icon: const Icon(Icons.close, size: 20, color: Colors.redAccent),
+      onPressed: () {
+        TorrentService().removeTorrent(item);
+      },
+    );
+  }
+
+  Widget _buildPauseButton() {
+    return IconButton(
+      constraints: const BoxConstraints(),
+      padding: EdgeInsets.zero,
+      tooltip: item.isCompleted
+          ? (item.isPaused ? 'Resume seeding' : 'Pause seeding')
+          : (item.isPaused ? 'Resume' : 'Pause'),
+      icon: Icon(
+        item.isPaused ? Icons.play_arrow : Icons.pause,
+        size: 20,
+        color: FyrTheme.textColorMuted,
+      ),
+      onPressed: () {
+        if (item.isPaused) {
+          item.resume();
+        } else {
+          item.pause();
+        }
+      },
+    );
+  }
+
   Widget _buildActionButton() {
     if (item.isCompleted) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: Colors.greenAccent.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: const Text(
-          'Seeding',
-          style: TextStyle(
-            color: Colors.greenAccent,
-            fontSize: 12,
-            fontWeight: FontWeight.bold,
+      final badgeColor = item.isPaused ? Colors.amberAccent : Colors.greenAccent;
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: badgeColor.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              item.isPaused ? 'Paused' : 'Seeding',
+              style: TextStyle(
+                color: badgeColor,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
           ),
-        ),
+          const SizedBox(width: 8),
+          _buildPauseButton(),
+          const SizedBox(width: 8),
+          _buildRemoveButton(),
+        ],
       );
     }
 
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        IconButton(
-          constraints: const BoxConstraints(),
-          padding: EdgeInsets.zero,
-          icon: Icon(
-            item.isPaused ? Icons.play_arrow : Icons.pause,
-            size: 20,
-            color: FyrTheme.textColorMuted,
-          ),
-          onPressed: () {
-            if (item.isPaused) {
-              item.resume();
-            } else {
-              item.pause();
-            }
-          },
-        ),
+        _buildPauseButton(),
         const SizedBox(width: 8),
-        IconButton(
-          constraints: const BoxConstraints(),
-          padding: EdgeInsets.zero,
-          icon: const Icon(Icons.close, size: 20, color: Colors.redAccent),
-          onPressed: () {
-            TorrentService().removeTorrent(item);
-          },
-        ),
+        _buildRemoveButton(),
       ],
     );
   }

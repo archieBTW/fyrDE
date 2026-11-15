@@ -77,6 +77,7 @@ struct sway_container {
 
 		struct wlr_scene_rect *border;
 		struct wlr_scene_rect *background;
+		struct wlr_scene_buffer *buttons_buf;
 
 		struct sway_text_node *title_text;
 		struct sway_text_node *marks_text;
@@ -142,6 +143,7 @@ struct sway_container {
 	// Hidden scratchpad containers have a NULL parent.
 	bool scratchpad;
 	bool scratchpad_was_floating;
+	bool auto_border;
 
 	// Stores last output size and position for adjusting coordinates of
 	// scratchpad windows.
@@ -219,7 +221,22 @@ void container_update_representation(struct sway_container *container);
 /**
  * Return the height of a regular title bar.
  */
+enum fyr_titlebar_button {
+	FYR_TITLEBAR_BTN_NONE = 0,
+	FYR_TITLEBAR_BTN_CLOSE,
+	FYR_TITLEBAR_BTN_MINIMIZE,
+	FYR_TITLEBAR_BTN_MAXIMIZE,
+};
+
 size_t container_titlebar_height(void);
+
+bool container_has_fyr_titlebar(struct sway_container *con);
+
+enum fyr_titlebar_button container_titlebar_button_at(
+		struct sway_container *con, double lx, double ly);
+
+bool container_execute_titlebar_button(struct sway_container *con,
+		enum fyr_titlebar_button btn);
 
 void floating_calculate_constraints(int *min_width, int *max_width,
 		int *min_height, int *max_height);

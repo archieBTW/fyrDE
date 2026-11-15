@@ -81,6 +81,7 @@ struct sway_view {
 	int natural_width, natural_height;
 
 	bool using_csd;
+	bool client_csd;
 
 	struct timespec urgent;
 	bool allow_request_urgent;

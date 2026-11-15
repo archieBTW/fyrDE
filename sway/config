@@ -20,8 +20,10 @@ set $mod Mod4
 # -------------------------------------------------------------
 # Aesthetics & Window Styling
 # -------------------------------------------------------------
-default_border pixel 4
-default_floating_border pixel 4
+default_border auto 4
+default_floating_border auto 4
+titlebar_separator disable
+font pango:Sans Medium 10
 gaps inner 20
 gaps outer 20
 corner_radius 12
@@ -171,6 +173,9 @@ assign [app_id="fyrtaskbar"] output DP-5
 assign [app_id="fyrdock"] output DP-5
 # END PRIMARY OUTPUT SETTINGS
 include ~/.config/sway/floating.conf
+# Keep Fyr overlay/panel surfaces borderless and native Flutter CSD apps free of duplicate SSD titlebars
+for_window [app_id="^(fyrtaskbar|fyrdock|fyrdesktop|fyrsearch|launcher|fyroverview|fyrwindowoverview|fyrhelp|fyremoji)$"] border none
+for_window [app_id="^(com\.fyr\.browser|(com\.example\.)?(fyrapi|fyrav|fyrbrowser|fyrcalculator|fyrcalender|fyrcamera|fyrclock|fyrcode|fyrdaw|fyrfiles|fyrjournal|fyrmusic|fyrphone|fyrphotos|fyrsettings|fyrstore|fyrterm|fyrtext|fyrtorrent|fyrvideo|fyrvirt))$"] border pixel 4
 # DISPLAY OUTPUT SETTINGS
 output eDP-1 resolution 1920x1080 position 0 0
 # END DISPLAY OUTPUT SETTINGS

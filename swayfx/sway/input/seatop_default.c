@@ -13,6 +13,7 @@
 #include "sway/output.h"
 #include "sway/server.h"
 #include "sway/scene_descriptor.h"
+#include "sway/tree/container.h"
 #include "sway/tree/view.h"
 #include "sway/tree/workspace.h"
 #include "log.h"
@@ -25,6 +26,8 @@ struct seatop_default_event {
 	uint32_t pressed_buttons[SWAY_CURSOR_PRESSED_BUTTONS_CAP];
 	size_t pressed_button_count;
 	struct gesture_tracker gestures;
+	size_t pressed_titlebar_con_id;
+	enum fyr_titlebar_button pressed_titlebar_btn;
 };
 
 /*-----------------------------------------\
@@ -366,6 +369,35 @@ static void handle_button(struct sway_seat *seat, uint32_t time_msec,
 	if (trigger_pointer_button_binding(seat, device, button, state, modifiers,
 			on_titlebar, on_border, on_contents, on_workspace)) {
 		return;
+	}
+
+	// Handle Fyr titlebar traffic-light buttons (Close / Minimize / Maximize)
+	struct seatop_default_event *e = seat->seatop_data;
+	if (button == BTN_LEFT && state == WL_POINTER_BUTTON_STATE_RELEASED &&
+			e->pressed_titlebar_btn != FYR_TITLEBAR_BTN_NONE) {
+		size_t pressed_id = e->pressed_titlebar_con_id;
+		enum fyr_titlebar_button pressed_btn = e->pressed_titlebar_btn;
+		e->pressed_titlebar_con_id = 0;
+		e->pressed_titlebar_btn = FYR_TITLEBAR_BTN_NONE;
+		if (cont && cont->node.id == pressed_id &&
+				container_titlebar_button_at(cont, cursor->cursor->x,
+					cursor->cursor->y) == pressed_btn) {
+			container_execute_titlebar_button(cont, pressed_btn);
+		}
+		seat_pointer_notify_button(seat, time_msec, button, state);
+		return;
+	}
+	if (button == BTN_LEFT && state == WL_POINTER_BUTTON_STATE_PRESSED &&
+			!mod_pressed && titlebar_left_btn_pressed && cont) {
+		enum fyr_titlebar_button btn = container_titlebar_button_at(cont,
+			cursor->cursor->x, cursor->cursor->y);
+		if (btn != FYR_TITLEBAR_BTN_NONE) {
+			e->pressed_titlebar_con_id = cont->node.id;
+			e->pressed_titlebar_btn = btn;
+			seat_set_focus_container(seat, cont);
+			transaction_commit_dirty();
+			return;
+		}
 	}
 
 	// Handle clicking an empty workspace

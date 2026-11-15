@@ -315,7 +315,34 @@ abstract class Peer
 
   List<int>? removeRequest(int index, int begin, int length) {
     var request = _removeRequestFromBuffer(index, begin, length);
+    if (_requestBuffer.isEmpty) {
+      cancelRequestTimeout();
+    }
     return request;
+  }
+
+  bool hasPendingRequest(int index, int begin) {
+    return _findRequestIndexFromBuffer(index, begin, 0) != -1;
+  }
+
+  /// Remove pending requests dropped due to peer choke and return them so
+  /// their sub-pieces can be reassigned to unchoked peers immediately.
+  List<List<int>> clearPendingRequestsOnChoke() {
+    if (_requestBuffer.isEmpty) return const [];
+    final removed = <List<int>>[];
+    _requestBuffer.removeWhere((r) {
+      if (remoteEnableFastPeer && _remoteAllowFastPieces.contains(r[0])) {
+        return false;
+      }
+      removed.add(r);
+      return true;
+    });
+    if (_requestBuffer.isEmpty) {
+      cancelRequestTimeout();
+    } else {
+      startRequestDataTimeout();
+    }
+    return removed;
   }
 
   /// Add a request to the buffer.
@@ -989,6 +1016,14 @@ abstract class Peer
     }
   }
 
+  /// Send a CANCEL message even if the request was already popped from the local buffer (e.g. on timeout).
+  void forceCancelRequest(int index, int begin, int length) {
+    removeRequest(index, begin, length);
+    if (!isDisposed) {
+      _sendCancel(index, begin, length);
+    }
+  }
+
   @override
   void orderResendRequest(int index, int begin, int length, int resend) {
     _requestBuffer.add([
@@ -998,6 +1033,11 @@ abstract class Peer
       DateTime.now().microsecondsSinceEpoch,
       resend + 1
     ]);
+    if (!isDisposed &&
+        (!_chokeMe ||
+            (remoteEnableFastPeer && _remoteAllowFastPieces.contains(index)))) {
+      _sendRequestMessage(index, begin, length);
+    }
   }
 
   /// `bitfield: <len=0001+X><id=5><bitfield>`

@@ -526,7 +526,8 @@ static void handle_map(struct wl_listener *listener, void *data) {
 	xwayland_view->commit.notify = handle_commit;
 
 	// Put it back into the tree
-	view_map(view, xsurface->surface, xsurface->fullscreen, NULL, false);
+	bool csd = xsurface->decorations != WLR_XWAYLAND_SURFACE_DECORATIONS_ALL;
+	view_map(view, xsurface->surface, xsurface->fullscreen, NULL, csd);
 
 	xwayland_view->surface_tree = wlr_scene_subsurface_tree_create(
 		xwayland_view->view.content_tree, xsurface->surface);
