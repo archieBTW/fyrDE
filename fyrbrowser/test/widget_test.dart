@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:fyrbrowser/adblock_engine.dart';
 import 'package:fyrbrowser/browser_models.dart';
 import 'package:fyrbrowser/home_page.dart';
+import 'package:webview_cef/webview_cef.dart';
 
 void main() {
   group('AdBlockEngine', () {
@@ -25,10 +26,26 @@ void main() {
   });
 
   group('BrowserModels & Navigation', () {
+    test('defaults homepage to start.duckduckgo.com and migrates fyr://home', () {
+      final defaults = BrowserSettings();
+      expect(defaults.homePage, kDefaultHomePage);
+      expect(defaults.homePage, 'https://start.duckduckgo.com');
+
+      final migrated = BrowserSettings.fromJson({'homePage': 'fyr://home'});
+      expect(migrated.homePage, 'https://start.duckduckgo.com');
+    });
+
+    test('BrowserTab defaults isReady to false before CEF init', () {
+      final controller = WebviewManager().createWebView();
+      final tab = BrowserTab(id: 'tab_1', controller: controller);
+      expect(tab.isReady, isFalse);
+      expect(tab.url, 'https://start.duckduckgo.com');
+    });
+
     test('resolveNavigationInput routes URLs vs search queries', () {
       expect(
-        resolveNavigationInput('fyr://home', SearchEngine.duckDuckGo),
-        kFyrHomeUrl,
+        resolveNavigationInput('  ', SearchEngine.duckDuckGo),
+        'https://start.duckduckgo.com',
       );
       expect(
         resolveNavigationInput('https://google.com', SearchEngine.duckDuckGo),
@@ -61,35 +78,7 @@ void main() {
     });
   });
 
-  group('Home & Error Widgets', () {
-    testWidgets('FyrHomePage renders search input and navigates on submit',
-        (tester) async {
-      String? navigatedTo;
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: FyrHomePage(
-              searchEngine: SearchEngine.duckDuckGo,
-              adBlockEnabled: true,
-              bookmarks: const [
-                {'title': 'GitHub', 'url': 'https://github.com'},
-              ],
-              history: const [],
-              onNavigate: (value) => navigatedTo = value,
-              onOpenSettings: () {},
-            ),
-          ),
-        ),
-      );
-
-      expect(find.text('FyrBrowser'), findsOneWidget);
-      expect(find.text('GitHub'), findsOneWidget);
-
-      await tester.enterText(find.byType(TextField), 'flutter linux');
-      await tester.testTextInput.receiveAction(TextInputAction.done);
-      expect(navigatedTo, 'flutter linux');
-    });
-
+  group('Error Widget', () {
     testWidgets('FyrErrorPage triggers retry and home callbacks',
         (tester) async {
       bool retried = false;

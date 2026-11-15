@@ -4,6 +4,8 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+import 'package:intl/intl.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -36,7 +38,7 @@ class BrowserScreen extends StatefulWidget {
   State<BrowserScreen> createState() => _BrowserScreenState();
 }
 
-class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
+class _BrowserScreenState extends State<BrowserScreen> {
   final List<BrowserTab> _tabs = [];
   int _activeTabIndex = 0;
   int _nextTabId = 1;
@@ -59,7 +61,6 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
   Timer? _saveDebounce;
 
   bool _isEngineReady = false;
-  bool _isMaximized = false;
 
   BrowserTab? get _activeTab =>
       (_tabs.isNotEmpty && _activeTabIndex >= 0 && _activeTabIndex < _tabs.length)
@@ -69,7 +70,6 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
   @override
   void initState() {
     super.initState();
-    windowManager.addListener(this);
     HardwareKeyboard.instance.addHandler(_handleGlobalKeyEvent);
     _urlFocusNode.addListener(_onUrlFocusChanged);
     _urlController.addListener(_onUrlTextChanged);
@@ -79,8 +79,8 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
   @override
   void dispose() {
     _saveDebounce?.cancel();
+    _writeDataToDisk();
     _removeAutocompleteOverlay();
-    windowManager.removeListener(this);
     HardwareKeyboard.instance.removeHandler(_handleGlobalKeyEvent);
     _urlFocusNode.removeListener(_onUrlFocusChanged);
     _urlController.removeListener(_onUrlTextChanged);
@@ -94,21 +94,30 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
     super.dispose();
   }
 
-  @override
-  void onWindowMaximize() => setState(() => _isMaximized = true);
-
-  @override
-  void onWindowUnmaximize() => setState(() => _isMaximized = false);
-
   Future<void> _initBrowser() async {
+    DownloadManager().init();
     await _loadData();
-    try {
-      _isMaximized = await windowManager.isMaximized();
-    } catch (_) {}
 
     try {
       await WebviewManager().initialize(userAgent: _kUserAgent);
       await _syncAdBlockConfig();
+
+      WebviewManager().onPopupCreated = (controller) {
+        if (!mounted) return;
+        final popupTab = BrowserTab(
+          id: 'tab_${_nextTabId++}',
+          controller: controller,
+          url: 'about:blank',
+          isReady: true,
+        );
+        _bindTabListeners(popupTab);
+        setState(() {
+          _tabs.add(popupTab);
+          _activeTabIndex = _tabs.length - 1;
+          _urlController.text = popupTab.url;
+        });
+      };
+
       if (!mounted) return;
       setState(() => _isEngineReady = true);
 
@@ -200,7 +209,13 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
   }
 
   void _addToHistory(String title, String url) {
-    if (url.isEmpty || isInternalUrl(url) || url.startsWith('about:')) return;
+    if (widget.isAppMode ||
+        url.isEmpty ||
+        isInternalUrl(url) ||
+        url.startsWith('data:') ||
+        url.startsWith('blob:')) {
+      return;
+    }
     if (_history.isNotEmpty && _history.first['url'] == url) {
       if (title.isNotEmpty && _history.first['title'] != title) {
         _history.first['title'] = title;
@@ -220,12 +235,12 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
   }
 
   bool _isBookmarked(String url) {
-    if (isInternalUrl(url)) return false;
+    if (url.isEmpty || isInternalUrl(url)) return false;
     return _bookmarks.any((b) => b['url'] == url);
   }
 
   void _toggleBookmark(BrowserTab tab) {
-    if (tab.isHomePage || tab.url.isEmpty) return;
+    if (tab.url.isEmpty || isInternalUrl(tab.url)) return;
     setState(() {
       final idx = _bookmarks.indexWhere((b) => b['url'] == tab.url);
       if (idx >= 0) {
@@ -241,15 +256,16 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
   }
 
   Future<void> _addNewTab({String? initialUrl}) async {
-    final target = (initialUrl ?? kFyrHomeUrl).trim();
-    final isHome = target == kFyrHomeUrl;
+    final raw = (initialUrl ?? _settings.homePage).trim();
+    final target = raw.isNotEmpty ? raw : kDefaultHomePage;
     final controller = WebviewManager().createWebView();
     final tab = BrowserTab(
       id: 'tab_${_nextTabId++}',
       controller: controller,
-      title: isHome ? 'New Tab' : target,
-      url: isHome ? kFyrHomeUrl : target,
-      isLoading: !isHome,
+      title: 'New Tab',
+      url: target,
+      isReady: false,
+      isLoading: true,
     );
 
     _bindTabListeners(tab);
@@ -260,28 +276,34 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
     });
     _syncUrlBarWithActiveTab();
 
-    await controller.initialize(isHome ? 'about:blank' : target);
+    await controller.initialize(target);
+    if (!mounted) return;
+    setState(() {
+      tab.isReady = true;
+    });
   }
 
   void _bindTabListeners(BrowserTab tab) {
     tab.controller.setWebviewListener(
       WebviewEventsListener(
         onTitleChanged: (title) {
-          if (!mounted || tab.isHomePage) return;
-          if (title.isEmpty || title == 'about:blank') return;
+          if (!mounted || title.isEmpty || title == 'about:blank') return;
           setState(() => tab.title = title);
+          if (_activeTab?.id == tab.id && widget.isAppMode) {
+            windowManager.setTitle(title);
+          }
         },
         onUrlChanged: (url) {
           if (!mounted) return;
-          if (tab.isHomePage && url == 'about:blank') return;
+          if (url == 'about:blank' && !tab.isReady) return;
           setState(() => tab.url = url);
           if (_activeTab?.id == tab.id && !_urlFocusNode.hasFocus) {
-            _urlController.text = tab.isHomePage ? '' : url;
+            _urlController.text = url;
           }
         },
         onLoadStart: (controller, url) {
           if (!mounted) return;
-          if (tab.isHomePage && url == 'about:blank') return;
+          if (url == 'about:blank' && !tab.isReady) return;
           setState(() {
             tab.isLoading = true;
             tab.loadError = null;
@@ -292,17 +314,17 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
           }
         },
         onLoadEnd: (controller, url) {
-          if (!mounted) return;
-          if (tab.isHomePage || url == 'about:blank') return;
+          if (!mounted || url == 'about:blank') return;
           setState(() => tab.isLoading = false);
-          _applyCosmeticAdBlock(tab, url);
-          _checkPwaStatus(tab);
+          if (tab.isReady && tab.controller.value) {
+            _applyCosmeticAdBlock(tab, url);
+            _checkPwaStatus(tab);
+          }
           _addToHistory(tab.title, url);
         },
         onLoadError: (controller, errorCode, errorText, failedUrl) {
           // Ignore ERR_ABORTED (-3) from user Stop or fast redirects.
-          if (!mounted || errorCode == -3) return;
-          if (tab.isHomePage || failedUrl == 'about:blank') return;
+          if (!mounted || errorCode == -3 || failedUrl == 'about:blank') return;
           setState(() {
             tab.isLoading = false;
             tab.loadError = LoadErrorInfo(
@@ -313,7 +335,7 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
           });
         },
         onLoadingStateChanged: (isLoading, canGoBack, canGoForward) {
-          if (!mounted || tab.isHomePage) return;
+          if (!mounted) return;
           setState(() {
             tab.isLoading = isLoading;
             tab.canGoBack = canGoBack;
@@ -335,12 +357,7 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
           if (!mounted || targetUrl.isEmpty) return;
           _addNewTab(initialUrl: targetUrl);
         },
-        onExternalProtocol: (url) async {
-          final uri = Uri.tryParse(url);
-          if (uri != null && await canLaunchUrl(uri)) {
-            await launchUrl(uri);
-          }
-        },
+        onExternalProtocol: (url) => _showExternalProtocolPrompt(url),
         onDownloadStart: (suggestedName, url) {
           if (!mounted) return;
           DownloadManager().startDownload(suggestedName, url);
@@ -382,19 +399,33 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
 
   Future<void> _handleFileDialog(int callbackId) async {
     List<String> files = [];
-    try {
-      final result = await Process.run('zenity', ['--file-selection']);
-      if (result.exitCode == 0) {
-        final chosen = result.stdout.toString().trim();
-        if (chosen.isNotEmpty) files = [chosen];
-      }
-    } catch (_) {}
+    for (final picker in [
+      ['fyrfiles', '--picker'],
+      ['zenity', '--file-selection'],
+    ]) {
+      try {
+        final result = await Process.run(picker.first, picker.sublist(1));
+        if (result.exitCode == 0) {
+          final lines = result.stdout
+              .toString()
+              .trim()
+              .split('\n')
+              .where((s) => s.isNotEmpty)
+              .toList();
+          if (lines.isNotEmpty) {
+            files = lines;
+            break;
+          }
+        }
+      } catch (_) {}
+    }
     await WebviewManager()
         .pluginChannel
         .invokeMethod('continueFileDialog', [callbackId, files]);
   }
 
   Future<void> _applyCosmeticAdBlock(BrowserTab tab, String url) async {
+    if (!tab.isReady || !tab.controller.value) return;
     final script = _shouldBlockOnUrl(url)
         ? AdBlockEngine.cosmeticCssScript
         : AdBlockEngine.removeCosmeticCssScript;
@@ -402,6 +433,7 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
   }
 
   Future<void> _checkPwaStatus(BrowserTab tab) async {
+    if (widget.isAppMode || !tab.isReady || !tab.controller.value) return;
     try {
       final raw = await tab.controller.evaluateJavascript('''
         (function() {
@@ -428,15 +460,66 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
     } catch (_) {}
   }
 
+  Future<void> _installPwa(BrowserTab tab) async {
+    if (tab.url.isEmpty || isInternalUrl(tab.url)) return;
+    try {
+      final uri = Uri.parse(tab.url);
+      final appId = uri.host.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
+      final title = tab.title.replaceAll(RegExp(r'["\$`]'), '').trim();
+      final home = Platform.environment['HOME'] ?? '/tmp';
+      String iconPath = '';
+
+      if (tab.faviconUrl != null) {
+        try {
+          final response = await http.get(Uri.parse(tab.faviconUrl!));
+          if (response.statusCode == 200) {
+            final iconsDir =
+                Directory(p.join(home, '.local', 'share', 'icons', 'fyrpwa'));
+            if (!iconsDir.existsSync()) iconsDir.createSync(recursive: true);
+            final iconFile = File(p.join(iconsDir.path, '$appId.png'));
+            await iconFile.writeAsBytes(response.bodyBytes);
+            iconPath = iconFile.path;
+          }
+        } catch (_) {}
+      }
+
+      final appsDir = Directory(p.join(home, '.local', 'share', 'applications'));
+      if (!appsDir.existsSync()) appsDir.createSync(recursive: true);
+      final desktopFile = File(p.join(appsDir.path, 'fyrpwa_$appId.desktop'));
+      await desktopFile.writeAsString('''
+[Desktop Entry]
+Version=1.0
+Name=${title.isNotEmpty ? title : uri.host}
+Exec=/usr/local/bin/fyrbrowser --app=${tab.url}
+Icon=$iconPath
+Terminal=false
+Type=Application
+Categories=Network;WebBrowser;
+''');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Installed ${title.isNotEmpty ? title : uri.host} as PWA',
+            ),
+            backgroundColor: FyrTheme.accentColor,
+          ),
+        );
+      }
+    } catch (e) {
+      logger.w('Failed to install PWA: $e');
+    }
+  }
+
   void _closeTab(int index) {
     if (index < 0 || index >= _tabs.length) return;
-    if (_tabs.length == 1) {
-      _navigateActiveTabTo(kFyrHomeUrl);
+    if (_tabs.length <= 1) {
+      windowManager.close();
       return;
     }
 
     final closing = _tabs[index];
-    if (!closing.isHomePage && closing.url.isNotEmpty) {
+    if (closing.url.isNotEmpty && !isInternalUrl(closing.url)) {
       _closedTabUrls.add(closing.url);
       if (_closedTabUrls.length > 20) _closedTabUrls.removeAt(0);
     }
@@ -455,6 +538,10 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
 
   void _selectTab(int index) {
     if (index < 0 || index >= _tabs.length) return;
+    final prev = _activeTab;
+    if (prev != null && prev.isReady && prev.controller.value) {
+      prev.controller.setClientFocus(false);
+    }
     setState(() => _activeTabIndex = index);
     _syncUrlBarWithActiveTab();
   }
@@ -462,31 +549,16 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
   void _syncUrlBarWithActiveTab() {
     final tab = _activeTab;
     if (tab == null) return;
-    _urlController.text = tab.isHomePage ? '' : tab.url;
+    _urlController.text = tab.url;
   }
 
   Future<void> _navigateActiveTabTo(String rawInput) async {
     final tab = _activeTab;
-    if (tab == null) return;
+    if (tab == null || !tab.isReady || !tab.controller.value) return;
 
     final resolved = resolveNavigationInput(rawInput, _settings.searchEngine);
     _urlFocusNode.unfocus();
     _removeAutocompleteOverlay();
-
-    if (resolved == kFyrHomeUrl) {
-      await tab.controller.stopLoad();
-      await tab.controller.loadUrl('about:blank');
-      setState(() {
-        tab.url = kFyrHomeUrl;
-        tab.title = 'New Tab';
-        tab.isLoading = false;
-        tab.loadError = null;
-        tab.isPwa = false;
-        tab.blockedCount = 0;
-      });
-      _urlController.text = '';
-      return;
-    }
 
     setState(() {
       tab.url = resolved;
@@ -499,8 +571,7 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
 
   Future<void> _reloadOrStop() async {
     final tab = _activeTab;
-    if (tab == null) return;
-    if (tab.isHomePage) return;
+    if (tab == null || !tab.isReady || !tab.controller.value) return;
 
     if (tab.isLoading) {
       await tab.controller.stopLoad();
@@ -523,7 +594,7 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
 
   Future<void> _adjustZoom(double delta) async {
     final tab = _activeTab;
-    if (tab == null || tab.isHomePage) return;
+    if (tab == null || !tab.isReady || !tab.controller.value) return;
     final next = (tab.zoomLevel + delta).clamp(-3.0, 5.0);
     setState(() => tab.zoomLevel = next);
     await tab.controller.setZoomLevel(next);
@@ -531,7 +602,7 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
 
   Future<void> _resetZoom() async {
     final tab = _activeTab;
-    if (tab == null || tab.isHomePage) return;
+    if (tab == null || !tab.isReady || !tab.controller.value) return;
     setState(() => tab.zoomLevel = 0.0);
     await tab.controller.setZoomLevel(0.0);
   }
@@ -542,7 +613,8 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
   }
 
   void _openFindBar() {
-    if (_activeTab?.isHomePage ?? true) return;
+    final tab = _activeTab;
+    if (tab == null || !tab.isReady) return;
     setState(() => _showFindBar = true);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -560,12 +632,15 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
       _findMatchCount = 0;
       _findActiveOrdinal = 0;
     });
-    _activeTab?.controller.stopFinding();
+    final tab = _activeTab;
+    if (tab != null && tab.isReady && tab.controller.value) {
+      tab.controller.stopFinding();
+    }
   }
 
   void _runFind({bool forward = true, bool findNext = false}) {
     final tab = _activeTab;
-    if (tab == null || tab.isHomePage) return;
+    if (tab == null || !tab.isReady || !tab.controller.value) return;
     final query = _findController.text;
     if (query.isEmpty) {
       tab.controller.stopFinding();
@@ -656,7 +731,7 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
       _removeAutocompleteOverlay();
       final tab = _activeTab;
       if (tab != null) {
-        _urlController.text = tab.isHomePage ? '' : tab.url;
+        _urlController.text = tab.url;
       }
     }
   }
@@ -701,7 +776,7 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
         child: CompositedTransformFollower(
           link: _urlBarLink,
           showWhenUnlinked: false,
-          offset: const Offset(0, 38),
+          offset: const Offset(0, 40),
           child: Material(
             elevation: 8,
             color: FyrTheme.bgColor,
@@ -773,6 +848,43 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
     _autocompleteOverlay = null;
   }
 
+  void _showExternalProtocolPrompt(String url) {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: FyrTheme.bgColor,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: FyrTheme.dividerColor),
+        ),
+        title: Text(
+          'Open External Application?',
+          style: TextStyle(color: FyrTheme.textColor),
+        ),
+        content: Text(
+          'Open "$url" in its default handler?',
+          style: TextStyle(color: FyrTheme.textColor.withValues(alpha: 0.8)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.of(context).pop();
+              final uri = Uri.tryParse(url);
+              if (uri != null && await canLaunchUrl(uri)) {
+                await launchUrl(uri);
+              }
+            },
+            child: const Text('Open'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _showWebContextMenu({
     required BrowserTab tab,
     required double x,
@@ -781,10 +893,16 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
     required String selectionText,
   }) async {
     if (!mounted) return;
+    final headerOffset = widget.isAppMode ? 34.0 : 100.0;
     final action = await showMenu<String>(
       context: context,
       color: FyrTheme.bgColor,
-      position: RelativeRect.fromLTRB(x, y + 84, x + 1, y + 85),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: FyrTheme.dividerColor),
+      ),
+      position:
+          RelativeRect.fromLTRB(x, y + headerOffset, x + 1, y + headerOffset + 1),
       items: [
         PopupMenuItem(
           enabled: tab.canGoBack,
@@ -815,7 +933,7 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
       ],
     );
 
-    if (!mounted || action == null) return;
+    if (!mounted || action == null || !tab.isReady) return;
     switch (action) {
       case 'back':
         tab.controller.goBack();
@@ -854,7 +972,7 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
           _syncAdBlockConfig();
           _scheduleSaveData();
           final tab = _activeTab;
-          if (tab != null && !tab.isHomePage) {
+          if (tab != null && tab.isReady) {
             _applyCosmeticAdBlock(tab, tab.url);
           }
         },
@@ -876,53 +994,86 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: FyrTheme.bgColor,
-        title: Text('Downloads', style: TextStyle(color: FyrTheme.textColor)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: FyrTheme.dividerColor),
+        ),
+        title: Row(
+          children: [
+            Text('Downloads', style: TextStyle(color: FyrTheme.textColor)),
+            const Spacer(),
+            TextButton(
+              onPressed: () {
+                DownloadManager().clearHistory();
+                Navigator.of(context).pop();
+                setState(() {});
+              },
+              child: const Text('Clear'),
+            ),
+          ],
+        ),
         content: SizedBox(
           width: 420,
-          height: 280,
-          child: DownloadManager().tasks.isEmpty
-              ? Center(
+          height: 300,
+          child: ListenableBuilder(
+            listenable: DownloadManager(),
+            builder: (context, _) {
+              final tasks = DownloadManager().tasks;
+              if (tasks.isEmpty) {
+                return Center(
                   child: Text(
-                    'No downloads yet.',
+                    'No downloads',
                     style: TextStyle(
-                      color: FyrTheme.textColor.withValues(alpha: 0.55),
+                      color: FyrTheme.textColor.withValues(alpha: 0.5),
                     ),
                   ),
-                )
-              : ListView.builder(
-                  itemCount: DownloadManager().tasks.length,
-                  itemBuilder: (context, index) {
-                    final task = DownloadManager().tasks[index];
-                    return ListTile(
+                );
+              }
+              return ListView.builder(
+                itemCount: tasks.length,
+                itemBuilder: (context, index) {
+                  final task = tasks[index];
+                  return ListenableBuilder(
+                    listenable: task,
+                    builder: (context, _) => ListTile(
                       dense: true,
+                      leading: Icon(
+                        task.isComplete
+                            ? Icons.insert_drive_file
+                            : Icons.downloading,
+                        color: task.isComplete
+                            ? Colors.greenAccent
+                            : FyrTheme.accentColor,
+                      ),
                       title: Text(
                         task.suggestedName,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: FyrTheme.textColor, fontSize: 13),
+                        style:
+                            TextStyle(color: FyrTheme.textColor, fontSize: 13),
                       ),
                       subtitle: Text(
                         task.isComplete
-                            ? 'Completed (~/Downloads)'
+                            ? DateFormat('MMM d, HH:mm').format(task.startTime)
                             : '${task.progress}%',
                         style: TextStyle(
-                          color: FyrTheme.textColor.withValues(alpha: 0.6),
+                          color: FyrTheme.textColor.withValues(alpha: 0.55),
                           fontSize: 11,
                         ),
                       ),
-                    );
-                  },
-                ),
+                      onTap: () {
+                        if (task.savePath != null) {
+                          Process.run('fyrfiles', [p.dirname(task.savePath!)]);
+                        }
+                      },
+                    ),
+                  );
+                },
+              );
+            },
+          ),
         ),
         actions: [
-          TextButton(
-            onPressed: () {
-              DownloadManager().clearHistory();
-              Navigator.of(context).pop();
-              setState(() {});
-            },
-            child: const Text('Clear'),
-          ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('Close'),
@@ -935,124 +1086,185 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: FyrTheme.bgColor,
-      body: Column(
-        children: [
-          if (!widget.isAppMode) ...[
-            _buildTabStrip(),
-            _buildToolbar(),
+      backgroundColor: Colors.transparent,
+      body: ClipRRect(
+        borderRadius: BorderRadius.circular(widget.isAppMode ? 0 : 12),
+        child: Container(
+          color: FyrTheme.bgColor,
+          child: Column(
+            children: [
+              if (widget.isAppMode)
+                _buildAppModeHeader()
+              else ...[
+                _buildTabStrip(),
+                _buildToolbar(),
+              ],
+              if (_showFindBar) _buildFindBar(),
+              Expanded(child: _buildViewport()),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTrafficLight(Color color, VoidCallback onTap) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 12,
+          height: 12,
+          decoration: BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.black26, width: 0.5),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTrafficLightsRow() {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _buildTrafficLight(Colors.redAccent, () => windowManager.close()),
+        const SizedBox(width: 8),
+        _buildTrafficLight(
+            Colors.orangeAccent, () => windowManager.minimize()),
+        const SizedBox(width: 8),
+        _buildTrafficLight(Colors.greenAccent, () async {
+          if (await windowManager.isMaximized()) {
+            await windowManager.unmaximize();
+          } else {
+            await windowManager.maximize();
+          }
+        }),
+      ],
+    );
+  }
+
+  Widget _buildAppModeHeader() {
+    return DragToMoveArea(
+      child: Container(
+        height: 34,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        decoration: BoxDecoration(
+          color: FyrTheme.isDark ? Colors.black : Colors.white,
+          border: Border(bottom: BorderSide(color: FyrTheme.dividerColor)),
+        ),
+        child: Row(
+          children: [
+            _buildTrafficLightsRow(),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Text(
+                _activeTab?.title ?? 'PWA',
+                style: TextStyle(
+                  color: FyrTheme.textColor,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
           ],
-          if (_showFindBar) _buildFindBar(),
-          Expanded(child: _buildViewport()),
-        ],
+        ),
       ),
     );
   }
 
   Widget _buildTabStrip() {
-    return Container(
-      height: 38,
-      color: FyrTheme.bgColor,
-      padding: const EdgeInsets.only(left: 8, right: 4),
-      child: Row(
-        children: [
-          Expanded(
-            child: Row(
-              children: [
-                Flexible(
-                  child: ListView.builder(
-                    scrollDirection: Axis.horizontal,
-                    shrinkWrap: true,
-                    itemCount: _tabs.length,
-                    itemBuilder: (context, index) => _buildTabChip(index),
-                  ),
-                ),
-                IconButton(
-                  onPressed: () => _addNewTab(),
-                  tooltip: 'New Tab (Ctrl+T)',
-                  iconSize: 16,
-                  padding: EdgeInsets.zero,
-                  constraints:
-                      const BoxConstraints(minWidth: 30, minHeight: 30),
-                  icon: Icon(
-                    Icons.add,
-                    color: FyrTheme.textColor.withValues(alpha: 0.75),
-                  ),
-                ),
-                const Expanded(
-                  child: DragToMoveArea(child: SizedBox.expand()),
-                ),
-              ],
+    return DragToMoveArea(
+      child: Container(
+        height: 40,
+        decoration: BoxDecoration(
+          color: FyrTheme.isDark
+              ? Colors.black.withValues(alpha: 0.5)
+              : Colors.grey.withValues(alpha: 0.2),
+        ),
+        child: Stack(
+          children: [
+            Positioned(
+              left: 16,
+              top: 14,
+              child: _buildTrafficLightsRow(),
             ),
-          ),
-          _buildWindowControls(),
-        ],
+            Padding(
+              padding: const EdgeInsets.only(left: 80, top: 6, right: 16),
+              child: ListView.builder(
+                scrollDirection: Axis.horizontal,
+                itemCount: _tabs.length + 1,
+                itemBuilder: (context, index) {
+                  if (index == _tabs.length) {
+                    return IconButton(
+                      icon: const Icon(Icons.add, size: 18),
+                      onPressed: () => _addNewTab(),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 34),
+                      tooltip: 'New Tab (Ctrl+T)',
+                    );
+                  }
+                  return _buildTabChip(index);
+                },
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildTabChip(int index) {
     final tab = _tabs[index];
-    final active = index == _activeTabIndex;
+    final selected = index == _activeTabIndex;
     return GestureDetector(
       key: ValueKey(tab.id),
       onTap: () => _selectTab(index),
       child: Container(
-        constraints: const BoxConstraints(minWidth: 110, maxWidth: 200),
-        margin: const EdgeInsets.only(top: 5, right: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 10),
+        height: 34,
+        margin: const EdgeInsets.only(right: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
         decoration: BoxDecoration(
-          color: active
-              ? FyrTheme.textColor.withValues(alpha: 0.1)
-              : FyrTheme.textColor.withValues(alpha: 0.03),
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
-          border: active
+          color: selected ? FyrTheme.bgColor : Colors.transparent,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(10)),
+          border: selected
               ? Border(
-                  top: BorderSide(color: FyrTheme.accentColor, width: 2),
+                  left: BorderSide(color: FyrTheme.dividerColor),
+                  right: BorderSide(color: FyrTheme.dividerColor),
+                  top: BorderSide(color: FyrTheme.dividerColor),
                 )
               : null,
         ),
         child: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
             if (tab.isLoading)
-              SizedBox(
-                width: 12,
-                height: 12,
-                child: CircularProgressIndicator(
-                  strokeWidth: 1.8,
-                  color: FyrTheme.accentColor,
+              const Padding(
+                padding: EdgeInsets.only(right: 8),
+                child: SizedBox(
+                  width: 12,
+                  height: 12,
+                  child: CircularProgressIndicator(strokeWidth: 2),
                 ),
-              )
-            else
-              Icon(
-                tab.isHomePage ? Icons.home_outlined : Icons.public,
-                size: 13,
-                color: FyrTheme.textColor.withValues(alpha: 0.65),
               ),
-            const SizedBox(width: 7),
-            Expanded(
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 140),
               child: Text(
                 tab.title.isNotEmpty ? tab.title : tab.url,
-                maxLines: 1,
+                style: TextStyle(color: FyrTheme.textColor, fontSize: 12),
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: active
-                      ? FyrTheme.textColor
-                      : FyrTheme.textColor.withValues(alpha: 0.68),
-                  fontSize: 12,
-                ),
               ),
             ),
-            InkWell(
+            const SizedBox(width: 8),
+            GestureDetector(
               onTap: () => _closeTab(index),
-              borderRadius: BorderRadius.circular(10),
-              child: Padding(
-                padding: const EdgeInsets.all(2),
-                child: Icon(
-                  Icons.close,
-                  size: 13,
-                  color: FyrTheme.textColor.withValues(alpha: 0.55),
-                ),
+              child: Icon(
+                Icons.close,
+                size: 14,
+                color: FyrTheme.textColor.withValues(alpha: 0.5),
               ),
             ),
           ],
@@ -1061,87 +1273,52 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
     );
   }
 
-  Widget _buildWindowControls() {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        IconButton(
-          onPressed: () => windowManager.minimize(),
-          iconSize: 15,
-          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-          icon: Icon(Icons.remove, color: FyrTheme.textColor.withValues(alpha: 0.75)),
-        ),
-        IconButton(
-          onPressed: () async {
-            if (await windowManager.isMaximized()) {
-              await windowManager.unmaximize();
-            } else {
-              await windowManager.maximize();
-            }
-          },
-          iconSize: 14,
-          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-          icon: Icon(
-            _isMaximized ? Icons.filter_none : Icons.crop_square,
-            color: FyrTheme.textColor.withValues(alpha: 0.75),
-          ),
-        ),
-        IconButton(
-          onPressed: () => windowManager.close(),
-          iconSize: 15,
-          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-          icon: Icon(Icons.close, color: FyrTheme.textColor.withValues(alpha: 0.75)),
-        ),
-      ],
-    );
-  }
-
   Widget _buildToolbar() {
     final tab = _activeTab;
-    final canBack = tab?.canGoBack ?? false;
-    final canForward = tab?.canGoForward ?? false;
-    final isHome = tab?.isHomePage ?? true;
+    final ready = tab?.isReady == true;
+    final canBack = ready && (tab?.canGoBack ?? false);
+    final canForward = ready && (tab?.canGoForward ?? false);
 
     return Container(
-      height: 46,
-      padding: const EdgeInsets.symmetric(horizontal: 10),
+      height: 54,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
         color: FyrTheme.bgColor,
-        border: Border(
-          bottom: BorderSide(
-            color: FyrTheme.dividerColor.withValues(alpha: 0.25),
-          ),
-        ),
+        border: Border(bottom: BorderSide(color: FyrTheme.dividerColor)),
       ),
       child: Row(
         children: [
           _navButton(
-            icon: Icons.arrow_back,
+            icon: Icons.arrow_back_ios_new,
+            size: 16,
             tooltip: 'Back',
             enabled: canBack,
             onPressed: () => tab?.controller.goBack(),
           ),
           _navButton(
-            icon: Icons.arrow_forward,
+            icon: Icons.arrow_forward_ios,
+            size: 16,
             tooltip: 'Forward',
             enabled: canForward,
             onPressed: () => tab?.controller.goForward(),
           ),
           _navButton(
             icon: (tab?.isLoading ?? false) ? Icons.close : Icons.refresh,
+            size: 19,
             tooltip: (tab?.isLoading ?? false) ? 'Stop' : 'Reload (Ctrl+R)',
-            enabled: tab != null && !isHome,
+            enabled: ready,
             onPressed: _reloadOrStop,
           ),
           _navButton(
             icon: Icons.home_outlined,
+            size: 19,
             tooltip: 'Home',
-            enabled: tab != null,
+            enabled: ready,
             onPressed: () => _navigateActiveTabTo(_settings.homePage),
           ),
           const SizedBox(width: 8),
           Expanded(child: _buildUrlBar(tab)),
-          const SizedBox(width: 6),
+          const SizedBox(width: 8),
           if (tab != null && tab.zoomLevel != 0.0)
             TextButton(
               onPressed: _resetZoom,
@@ -1150,11 +1327,12 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
                 style: TextStyle(color: FyrTheme.accentColor, fontSize: 12),
               ),
             ),
-          if (tab != null && !isHome) _buildShieldMenu(tab),
+          if (tab != null) _buildShieldMenu(tab),
           _navButton(
             icon: DownloadManager().tasks.any((t) => !t.isComplete)
                 ? Icons.downloading
                 : Icons.download_outlined,
+            size: 18,
             tooltip: 'Downloads',
             enabled: true,
             onPressed: _showDownloadsDialog,
@@ -1167,6 +1345,7 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
 
   Widget _navButton({
     required IconData icon,
+    required double size,
     required String tooltip,
     required bool enabled,
     required VoidCallback onPressed,
@@ -1174,19 +1353,19 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
     return IconButton(
       onPressed: enabled ? onPressed : null,
       tooltip: tooltip,
-      iconSize: 18,
+      iconSize: size,
       constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
       icon: Icon(
         icon,
         color: enabled
-            ? FyrTheme.textColor.withValues(alpha: 0.85)
+            ? FyrTheme.textColor.withValues(alpha: 0.78)
             : FyrTheme.textColor.withValues(alpha: 0.25),
       ),
     );
   }
 
   Widget _buildUrlBar(BrowserTab? tab) {
-    final url = tab?.url ?? kFyrHomeUrl;
+    final url = tab?.url ?? kDefaultHomePage;
     final isSecure = url.startsWith('https://');
     final isError = tab?.loadError != null;
     final bookmarked = tab != null && _isBookmarked(url);
@@ -1194,27 +1373,25 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
     return CompositedTransformTarget(
       link: _urlBarLink,
       child: Container(
-        height: 34,
+        height: 36,
         decoration: BoxDecoration(
-          color: FyrTheme.textColor.withValues(alpha: 0.06),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(
-            color: _urlFocusNode.hasFocus
-                ? FyrTheme.accentColor.withValues(alpha: 0.7)
-                : FyrTheme.dividerColor.withValues(alpha: 0.25),
-          ),
+          color: FyrTheme.isDark
+              ? Colors.white.withValues(alpha: 0.09)
+              : Colors.black.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(10),
+          border: _urlFocusNode.hasFocus
+              ? Border.all(color: FyrTheme.accentColor.withValues(alpha: 0.6))
+              : null,
         ),
         child: Row(
           children: [
-            const SizedBox(width: 12),
+            const SizedBox(width: 10),
             Icon(
               isError
                   ? Icons.warning_amber_rounded
-                  : isInternalUrl(url)
-                      ? Icons.search
-                      : isSecure
-                          ? Icons.lock_outline
-                          : Icons.lock_open,
+                  : isSecure
+                      ? Icons.lock_outline
+                      : Icons.lock_open,
               size: 14,
               color: isError
                   ? Colors.orangeAccent
@@ -1242,22 +1419,28 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
                 onSubmitted: _navigateActiveTabTo,
               ),
             ),
-            if (tab != null && !tab.isHomePage)
+            if (tab != null) ...[
+              if (tab.isPwa)
+                IconButton(
+                  icon: Icon(
+                    Icons.install_desktop,
+                    size: 17,
+                    color: FyrTheme.accentColor,
+                  ),
+                  tooltip: 'Install PWA',
+                  onPressed: () => _installPwa(tab),
+                ),
               IconButton(
                 onPressed: () => _toggleBookmark(tab),
                 tooltip: bookmarked ? 'Remove Bookmark' : 'Bookmark Page',
                 iconSize: 16,
-                constraints:
-                    const BoxConstraints(minWidth: 32, minHeight: 32),
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
                 icon: Icon(
                   bookmarked ? Icons.star : Icons.star_border,
-                  color: bookmarked
-                      ? Colors.amber
-                      : FyrTheme.textColor.withValues(alpha: 0.55),
+                  color: bookmarked ? FyrTheme.accentColor : FyrTheme.textColor.withValues(alpha: 0.5),
                 ),
-              )
-            else
-              const SizedBox(width: 8),
+              ),
+            ],
           ],
         ),
       ),
@@ -1266,8 +1449,7 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
 
   Widget _buildShieldMenu(BrowserTab tab) {
     final host = AdBlockEngine.extractHost(tab.url);
-    final whitelisted =
-        host.isNotEmpty && _settings.isHostWhitelisted(host);
+    final whitelisted = host.isNotEmpty && _settings.isHostWhitelisted(host);
     final active = _settings.adBlockEnabled && !whitelisted;
 
     return PopupMenuButton<String>(
@@ -1334,7 +1516,7 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
               active ? Icons.shield : Icons.shield_outlined,
               size: 18,
               color: active
-                  ? Colors.greenAccent
+                  ? FyrTheme.accentColor
                   : FyrTheme.textColor.withValues(alpha: 0.45),
             ),
             if (active && tab.blockedCount > 0) ...[
@@ -1358,11 +1540,12 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
       tooltip: 'Menu',
       color: FyrTheme.bgColor,
       icon: Icon(
-        Icons.more_vert,
+        Icons.settings,
         size: 18,
-        color: FyrTheme.textColor.withValues(alpha: 0.8),
+        color: FyrTheme.textColor.withValues(alpha: 0.75),
       ),
       onSelected: (action) {
+        final tab = _activeTab;
         switch (action) {
           case 'find':
             _openFindBar();
@@ -1376,6 +1559,9 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
           case 'zoom_reset':
             _resetZoom();
             break;
+          case 'install_pwa':
+            if (tab != null) _installPwa(tab);
+            break;
           case 'history':
             _openSettingsModal(initialTab: 1);
             break;
@@ -1386,7 +1572,7 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
             _openSettingsModal(initialTab: 0);
             break;
           case 'devtools':
-            _activeTab?.controller.openDevTools();
+            if (tab != null && tab.isReady) tab.controller.openDevTools();
             break;
         }
       },
@@ -1397,6 +1583,7 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
         PopupMenuItem(value: 'zoom_out', child: Text('Zoom Out (Ctrl+-)')),
         PopupMenuItem(value: 'zoom_reset', child: Text('Reset Zoom (Ctrl+0)')),
         PopupMenuDivider(),
+        PopupMenuItem(value: 'install_pwa', child: Text('Install as PWA')),
         PopupMenuItem(value: 'history', child: Text('History')),
         PopupMenuItem(value: 'bookmarks', child: Text('Bookmarks')),
         PopupMenuItem(value: 'settings', child: Text('Settings')),
@@ -1413,9 +1600,7 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
       decoration: BoxDecoration(
         color: FyrTheme.bgColor,
         border: Border(
-          bottom: BorderSide(
-            color: FyrTheme.dividerColor.withValues(alpha: 0.25),
-          ),
+          bottom: BorderSide(color: FyrTheme.dividerColor),
         ),
       ),
       child: Row(
@@ -1478,38 +1663,33 @@ class _BrowserScreenState extends State<BrowserScreen> with WindowListener {
 
     return IndexedStack(
       index: _activeTabIndex,
-      children: _tabs.map((tab) {
-        final hideWebView = tab.isHomePage || tab.loadError != null;
-        return Stack(
-          key: ValueKey('stack_${tab.id}'),
-          children: [
-            IgnorePointer(
-              ignoring: hideWebView,
-              child: WebView(
-                tab.controller,
-                key: ValueKey('webview_${tab.id}'),
-              ),
-            ),
-            if (tab.isHomePage)
-              Positioned.fill(
-                child: FyrHomePage(
-                  searchEngine: _settings.searchEngine,
-                  adBlockEnabled: _settings.adBlockEnabled,
-                  bookmarks: _bookmarks,
-                  history: _history,
-                  onNavigate: _navigateActiveTabTo,
-                  onOpenSettings: () => _openSettingsModal(initialTab: 0),
+      children: _tabs.asMap().entries.map((entry) {
+        final idx = entry.key;
+        final tab = entry.value;
+        return ExcludeFocus(
+          key: ValueKey('exclude_${tab.id}'),
+          excluding: idx != _activeTabIndex,
+          child: Stack(
+            children: [
+              if (tab.isReady)
+                WebView(
+                  tab.controller,
+                  key: ValueKey('webview_${tab.id}'),
+                )
+              else
+                Center(
+                  child: CircularProgressIndicator(color: FyrTheme.accentColor),
                 ),
-              )
-            else if (tab.loadError != null)
-              Positioned.fill(
-                child: FyrErrorPage(
-                  error: tab.loadError!,
-                  onRetry: _reloadOrStop,
-                  onGoHome: () => _navigateActiveTabTo(kFyrHomeUrl),
+              if (tab.loadError != null)
+                Positioned.fill(
+                  child: FyrErrorPage(
+                    error: tab.loadError!,
+                    onRetry: _reloadOrStop,
+                    onGoHome: () => _navigateActiveTabTo(_settings.homePage),
+                  ),
                 ),
-              ),
-          ],
+            ],
+          ),
         );
       }).toList(),
     );

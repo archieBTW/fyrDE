@@ -1,12 +1,13 @@
 import 'package:webview_cef/webview_cef.dart';
 import 'adblock_engine.dart';
 
-const String kFyrHomeUrl = 'fyr://home';
+const String kDefaultHomePage = 'https://start.duckduckgo.com';
 
-bool isInternalUrl(String url) => url == kFyrHomeUrl || url.startsWith('fyr://');
+bool isInternalUrl(String url) =>
+    url == 'about:blank' || url.startsWith('fyr://');
 
 enum SearchEngine {
-  duckDuckGo('DuckDuckGo', 'https://duckduckgo.com/?q='),
+  duckDuckGo('DuckDuckGo', 'https://start.duckduckgo.com/?q='),
   google('Google', 'https://www.google.com/search?q='),
   brave('Brave Search', 'https://search.brave.com/search?q='),
   startpage('Startpage', 'https://www.startpage.com/do/search?query='),
@@ -67,7 +68,7 @@ class BrowserSettings {
 
   BrowserSettings({
     this.searchEngine = SearchEngine.duckDuckGo,
-    this.homePage = kFyrHomeUrl,
+    this.homePage = kDefaultHomePage,
     this.adBlockEnabled = true,
     List<String>? adBlockWhitelist,
   }) : adBlockWhitelist = adBlockWhitelist ?? [];
@@ -112,9 +113,13 @@ class BrowserSettings {
             .toList()
         : <String>[];
     final rawHome = (json['homePage'] as String?)?.trim();
+    final resolvedHome =
+        (rawHome != null && rawHome.isNotEmpty && rawHome != 'fyr://home')
+            ? rawHome
+            : kDefaultHomePage;
     return BrowserSettings(
       searchEngine: SearchEngine.fromName(json['searchEngine'] as String?),
-      homePage: (rawHome != null && rawHome.isNotEmpty) ? rawHome : kFyrHomeUrl,
+      homePage: resolvedHome,
       adBlockEnabled: json['adBlockEnabled'] is bool
           ? json['adBlockEnabled'] as bool
           : true,
@@ -128,6 +133,7 @@ class BrowserTab {
   final WebViewController controller;
   String title;
   String url;
+  bool isReady;
   bool isLoading;
   bool canGoBack;
   bool canGoForward;
@@ -141,7 +147,8 @@ class BrowserTab {
     required this.id,
     required this.controller,
     this.title = 'New Tab',
-    this.url = kFyrHomeUrl,
+    this.url = kDefaultHomePage,
+    this.isReady = false,
     this.isLoading = false,
     this.canGoBack = false,
     this.canGoForward = false,
@@ -151,15 +158,12 @@ class BrowserTab {
     this.blockedCount = 0,
     this.loadError,
   });
-
-  bool get isHomePage => url == kFyrHomeUrl;
 }
 
-/// Resolves user input from the address bar or start page into a target URL.
+/// Resolves user input from the address bar into a target URL.
 String resolveNavigationInput(String rawInput, SearchEngine engine) {
   final trimmed = rawInput.trim();
-  if (trimmed.isEmpty) return kFyrHomeUrl;
-  if (isInternalUrl(trimmed)) return trimmed;
+  if (trimmed.isEmpty) return kDefaultHomePage;
 
   final lower = trimmed.toLowerCase();
   if (lower.startsWith('http://') ||

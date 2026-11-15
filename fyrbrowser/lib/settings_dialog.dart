@@ -63,7 +63,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     widget.onSettingsChanged(
       BrowserSettings(
         searchEngine: _engine,
-        homePage: trimmedHome.isEmpty ? kFyrHomeUrl : trimmedHome,
+        homePage: trimmedHome.isEmpty ? kDefaultHomePage : trimmedHome,
         adBlockEnabled: _adBlockEnabled,
         adBlockWhitelist: List<String>.from(_whitelist),
       ),
@@ -226,17 +226,17 @@ class _SettingsDialogState extends State<SettingsDialog> {
               child: TextField(
                 controller: _homeController,
                 style: TextStyle(color: FyrTheme.textColor, fontSize: 13),
-                decoration: _inputDecoration(hint: kFyrHomeUrl),
+                decoration: _inputDecoration(hint: kDefaultHomePage),
                 onSubmitted: (_) => _emitSettings(),
               ),
             ),
             const SizedBox(width: 8),
             TextButton(
               onPressed: () {
-                _homeController.text = kFyrHomeUrl;
+                _homeController.text = kDefaultHomePage;
                 _emitSettings();
               },
-              child: const Text('Use Built-in'),
+              child: const Text('Use Default'),
             ),
             TextButton(
               onPressed: _emitSettings,
