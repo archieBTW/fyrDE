@@ -30,17 +30,154 @@ class SamplerEditorWidget extends StatefulWidget {
   State<SamplerEditorWidget> createState() => _SamplerEditorWidgetState();
 }
 
+class _KitMenuSelection {
+  final DrumKitPreset? builtIn;
+  final SavedSamplerKit? saved;
+
+  const _KitMenuSelection.builtIn(this.builtIn) : saved = null;
+  const _KitMenuSelection.saved(this.saved) : builtIn = null;
+}
+
 class _SamplerEditorWidgetState extends State<SamplerEditorWidget> {
   int _selectedPadIndex = 0;
   SamplerSixteenMode _sixteenMode = SamplerSixteenMode.off;
   Timer? _playbackTimer;
+  List<SavedSamplerKit> _savedKits = [];
+  String? _activeKitName;
 
   @override
   void initState() {
     super.initState();
+    _refreshSavedKits();
     _playbackTimer = Timer.periodic(Duration(milliseconds: 30), (_) {
       if (mounted) setState(() {});
     });
+  }
+
+  Future<void> _refreshSavedKits() async {
+    final kits = await SavedSamplerKitStore.loadAll();
+    if (!mounted) return;
+    setState(() => _savedKits = kits);
+  }
+
+  Future<void> _deleteSavedKit(
+    SavedSamplerKit kit,
+    BuildContext menuContext,
+  ) async {
+    Navigator.of(menuContext).pop();
+    await SavedSamplerKitStore.delete(kit.id);
+    if (_activeKitName == kit.name) {
+      _activeKitName = null;
+    }
+    await _refreshSavedKits();
+  }
+
+  Future<void> _showSaveSamplerDialog() async {
+    final controller = TextEditingController(
+      text: _activeKitName ?? widget.track.name,
+    );
+    controller.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: controller.text.length,
+    );
+
+    final result = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: panelDark,
+        title: Text(
+          'Save Sampler Kit',
+          style: TextStyle(color: textMain, fontSize: 15),
+        ),
+        content: SizedBox(
+          width: 320,
+          child: ValueListenableBuilder<TextEditingValue>(
+            valueListenable: controller,
+            builder: (context, value, _) {
+              final trimmed = value.text.trim();
+              final willOverwrite = trimmed.isNotEmpty &&
+                  _savedKits.any(
+                    (k) => k.name.toLowerCase() == trimmed.toLowerCase(),
+                  );
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    key: const Key('save_sampler_name_field'),
+                    controller: controller,
+                    autofocus: true,
+                    style: TextStyle(color: textMain, fontSize: 13),
+                    decoration: InputDecoration(
+                      labelText: 'Sampler Name',
+                      labelStyle: TextStyle(color: textMuted, fontSize: 12),
+                      hintText: 'e.g. Custom Lo-Fi Kit',
+                      hintStyle: TextStyle(color: textFaint, fontSize: 12),
+                      enabledBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: textFaint),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: lavenderAccent),
+                      ),
+                      isDense: true,
+                    ),
+                    onSubmitted: (text) {
+                      if (text.trim().isNotEmpty) {
+                        Navigator.of(dialogContext).pop(text.trim());
+                      }
+                    },
+                  ),
+                  if (willOverwrite) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'A saved sampler with this name already exists and will be updated.',
+                      style: TextStyle(color: Colors.amberAccent, fontSize: 11),
+                    ),
+                  ],
+                ],
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text('Cancel', style: TextStyle(color: textMuted)),
+          ),
+          ValueListenableBuilder<TextEditingValue>(
+            valueListenable: controller,
+            builder: (context, value, _) {
+              final canSave = value.text.trim().isNotEmpty;
+              return ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: lavenderAccent,
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: canSave
+                    ? () => Navigator.of(dialogContext).pop(value.text.trim())
+                    : null,
+                child: const Text('Save'),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+
+    if (result == null || result.trim().isEmpty) return;
+    final saved = await SavedSamplerKitStore.save(
+      name: result.trim(),
+      samplerPads: widget.track.samplerPads,
+    );
+    await _refreshSavedKits();
+    if (!mounted) return;
+    setState(() => _activeKitName = saved.name);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Saved sampler "${saved.name}"'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   @override
@@ -160,44 +297,150 @@ class _SamplerEditorWidgetState extends State<SamplerEditorWidget> {
                   ),
                   const SizedBox(width: 6),
                   Expanded(
-                    child: PopupMenuButton<DrumKitPreset>(
-                      tooltip: 'Load Built-In Drum Kit',
+                    child: PopupMenuButton<_KitMenuSelection>(
+                      tooltip: 'Load Drum Kit or Saved Sampler',
                       color: panelDark,
-                      onSelected: (kit) async {
-                        await applyDrumKitToPads(widget.track.samplerPads, kit);
-                        if (mounted) {
-                          setState(() {});
-                          widget.onStateChanged();
+                      onSelected: (selection) async {
+                        if (selection.builtIn != null) {
+                          final kit = selection.builtIn!;
+                          await applyDrumKitToPads(widget.track.samplerPads, kit);
+                          if (mounted) {
+                            setState(() => _activeKitName = kit.name);
+                            widget.onStateChanged();
+                          }
+                        } else if (selection.saved != null) {
+                          final kit = selection.saved!;
+                          await applySavedSamplerKitToPads(
+                            widget.track.samplerPads,
+                            kit,
+                          );
+                          if (mounted) {
+                            setState(() => _activeKitName = kit.name);
+                            widget.onStateChanged();
+                          }
                         }
                       },
-                      itemBuilder: (context) => kDrumKits
-                          .map(
-                            (kit) => PopupMenuItem<DrumKitPreset>(
-                              value: kit,
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                mainAxisSize: MainAxisSize.min,
+                      itemBuilder: (menuContext) => [
+                        PopupMenuItem<_KitMenuSelection>(
+                          enabled: false,
+                          height: 24,
+                          child: Text(
+                            'PRESET KITS',
+                            style: TextStyle(
+                              color: textMuted,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 0.6,
+                            ),
+                          ),
+                        ),
+                        ...kDrumKits.map(
+                          (kit) => PopupMenuItem<_KitMenuSelection>(
+                            value: _KitMenuSelection.builtIn(kit),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  kit.name,
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                Text(
+                                  kit.description,
+                                  style: TextStyle(
+                                    color: textMuted,
+                                    fontSize: 10,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const PopupMenuDivider(),
+                        PopupMenuItem<_KitMenuSelection>(
+                          enabled: false,
+                          height: 24,
+                          child: Text(
+                            'SAVED SAMPLERS',
+                            style: TextStyle(
+                              color: textMuted,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 0.6,
+                            ),
+                          ),
+                        ),
+                        if (_savedKits.isEmpty)
+                          PopupMenuItem<_KitMenuSelection>(
+                            enabled: false,
+                            height: 30,
+                            child: Text(
+                              'No saved samplers yet',
+                              style: TextStyle(
+                                color: textFaint,
+                                fontSize: 11,
+                                fontStyle: FontStyle.italic,
+                              ),
+                            ),
+                          )
+                        else
+                          ..._savedKits.map(
+                            (kit) => PopupMenuItem<_KitMenuSelection>(
+                              value: _KitMenuSelection.saved(kit),
+                              child: Row(
                                 children: [
-                                  Text(
-                                    kit.name,
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600,
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          kit.name,
+                                          style: TextStyle(
+                                            color: lavenderLight,
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        Text(
+                                          '${kit.sampleCount} / 16 pads loaded',
+                                          style: TextStyle(
+                                            color: textMuted,
+                                            fontSize: 10,
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ),
-                                  Text(
-                                    kit.description,
-                                    style: TextStyle(
-                                      color: textMuted,
-                                      fontSize: 10,
+                                  const SizedBox(width: 6),
+                                  Tooltip(
+                                    message: 'Delete Saved Sampler',
+                                    child: InkWell(
+                                      key: Key('delete_saved_kit_${kit.name}'),
+                                      borderRadius: BorderRadius.circular(4),
+                                      onTap: () =>
+                                          _deleteSavedKit(kit, menuContext),
+                                      child: Padding(
+                                        padding: const EdgeInsets.all(4),
+                                        child: Icon(
+                                          Icons.delete_outline,
+                                          size: 16,
+                                          color: textMuted,
+                                        ),
+                                      ),
                                     ),
                                   ),
                                 ],
                               ),
                             ),
-                          )
-                          .toList(),
+                          ),
+                      ],
                       child: Container(
                         padding: EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                         decoration: BoxDecoration(
@@ -210,12 +453,50 @@ class _SamplerEditorWidgetState extends State<SamplerEditorWidget> {
                           children: [
                             Flexible(
                               child: Text(
-                                'Load Drum Kit...',
+                                _activeKitName ?? 'Load Drum Kit...',
                                 style: TextStyle(color: lavenderLight, fontSize: 11),
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
                             Icon(Icons.arrow_drop_down, size: 16, color: lavenderLight),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Tooltip(
+                    message: 'Save Current Sampler',
+                    child: InkWell(
+                      key: const Key('save_sampler_button'),
+                      borderRadius: BorderRadius.circular(4),
+                      onTap: _showSaveSamplerDialog,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: bgDark,
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: textFaint),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.save_outlined,
+                              size: 13,
+                              color: lavenderLight,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Save',
+                              style: TextStyle(
+                                color: lavenderLight,
+                                fontSize: 11,
+                              ),
+                            ),
                           ],
                         ),
                       ),

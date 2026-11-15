@@ -174,6 +174,7 @@ class FyrTheme {
       await file.writeAsString(mode == ThemeMode.light ? 'light' : 'dark');
       themeModeNotifier.value = mode;
       await _updateGtkSettings(mode);
+      Process.run('swaymsg', ['reload']);
     } catch (e) {
       // Ignore
     }

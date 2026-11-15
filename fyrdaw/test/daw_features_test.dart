@@ -27,6 +27,7 @@ import 'package:fyrdaw/utils/audio_utils.dart';
 import 'package:fyrdaw/utils/mixdown_renderer.dart';
 import 'package:fyrdaw/utils/pitch_detector.dart';
 import 'package:fyrdaw/wav_writer.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   group('Model serialization', () {
@@ -1153,6 +1154,7 @@ void main() {
     });
 
     testWidgets('SamplerEditorWidget loads built-in Drum Kit presets and updates pad labels', (tester) async {
+      SharedPreferences.setMockInitialValues({});
       final smpTrack = Track(id: 'smp_kit', name: 'Drums', type: TrackType.sampler);
 
       await tester.pumpWidget(
@@ -1179,6 +1181,130 @@ void main() {
       expect(find.text('808 Kick'), findsOneWidget);
       expect(find.text('808 Snare'), findsOneWidget);
       expect(find.text('808 CHH'), findsOneWidget);
+    });
+
+    test('SavedSamplerKitStore saves, overwrites, restores, and deletes custom kits', () async {
+      SharedPreferences.setMockInitialValues({});
+
+      final pads = <int, SamplerPad>{
+        for (int i = 0; i < 16; i++) i: SamplerPad()..midiNote = 36 + i,
+      };
+      pads[0]!
+        ..filePath = 'assets/drums/808_kick.wav'
+        ..name = 'Heavy 808'
+        ..trimStart = 0.05
+        ..trimEnd = 0.88
+        ..volume = 0.75
+        ..pitch = 1.15
+        ..fadeIn = 0.02
+        ..fadeOut = 0.1
+        ..chokeGroup = 2;
+      pads[4]!
+        ..filePath = 'assets/drums/lofi_snare.wav'
+        ..name = 'Crack Snare';
+
+      final saved = await SavedSamplerKitStore.save(
+        name: 'My Punchy Kit',
+        samplerPads: pads,
+      );
+      expect(saved.name, 'My Punchy Kit');
+      expect(saved.sampleCount, 2);
+
+      // Case-insensitive same-name save updates existing entry without duplicates.
+      pads[0]!.volume = 0.9;
+      await SavedSamplerKitStore.save(
+        name: 'my punchy kit',
+        samplerPads: pads,
+      );
+      var all = await SavedSamplerKitStore.loadAll();
+      expect(all.length, 1);
+      expect(all.first.name, 'my punchy kit');
+
+      final targetPads = <int, SamplerPad>{};
+      await applySavedSamplerKitToPads(targetPads, all.first);
+      expect(targetPads[0]!.name, 'Heavy 808');
+      expect(targetPads[0]!.trimStart, closeTo(0.05, 1e-6));
+      expect(targetPads[0]!.trimEnd, closeTo(0.88, 1e-6));
+      expect(targetPads[0]!.volume, closeTo(0.9, 1e-6));
+      expect(targetPads[0]!.pitch, closeTo(1.15, 1e-6));
+      expect(targetPads[0]!.fadeIn, closeTo(0.02, 1e-6));
+      expect(targetPads[0]!.fadeOut, closeTo(0.1, 1e-6));
+      expect(targetPads[0]!.chokeGroup, 2);
+      expect(targetPads[4]!.name, 'Crack Snare');
+
+      await SavedSamplerKitStore.delete(all.first.id);
+      all = await SavedSamplerKitStore.loadAll();
+      expect(all, isEmpty);
+    });
+
+    testWidgets('SamplerEditorWidget saves a named sampler, loads it back, and deletes it', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final smpTrack = Track(id: 'smp_save', name: 'Drums', type: TrackType.sampler);
+      smpTrack.samplerPads[0] = SamplerPad()
+        ..midiNote = 36
+        ..name = 'CustomKick'
+        ..filePath = 'assets/drums/808_kick.wav'
+        ..pitch = 1.25;
+
+      int stateChanges = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 980,
+              height: 440,
+              child: SamplerEditorWidget(
+                track: smpTrack,
+                onStateChanged: () => stateChanges++,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('CustomKick'), findsOneWidget);
+
+      // Open save dialog, enter a custom kit name, and save.
+      await tester.tap(find.byKey(const Key('save_sampler_button')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('save_sampler_name_field')),
+        'Late Night Boom',
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(ElevatedButton, 'Save'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Late Night Boom'), findsOneWidget);
+
+      // Switch to a built-in preset kit so pad 0 changes away from CustomKick.
+      await tester.tap(find.text('Late Night Boom'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('808 Trap Kit'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('808 Kick'), findsOneWidget);
+      expect(find.text('CustomKick'), findsNothing);
+
+      // Load our named custom sampler back from the kit dropdown.
+      await tester.tap(find.text('808 Trap Kit'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Late Night Boom'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('CustomKick'), findsOneWidget);
+      expect(smpTrack.samplerPads[0]!.pitch, closeTo(1.25, 1e-6));
+      expect(stateChanges, greaterThanOrEqualTo(2));
+
+      // Open dropdown again and delete the saved sampler.
+      await tester.tap(find.text('Late Night Boom'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('delete_saved_kit_Late Night Boom')));
+      await tester.pumpAndSettle();
+
+      final remaining = await SavedSamplerKitStore.loadAll();
+      expect(remaining, isEmpty);
     });
   });
 }

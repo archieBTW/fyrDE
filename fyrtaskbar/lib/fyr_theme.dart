@@ -237,6 +237,7 @@ class FyrTheme {
       await tempFile.rename(file.path);
       themeModeNotifier.value = mode;
       await _updateGtkSettings(mode);
+      Process.run('swaymsg', ['reload']);
     } catch (e) {
       // Ignore
     }

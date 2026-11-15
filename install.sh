@@ -255,6 +255,8 @@ cleanup_legacy_user_override() {
     if [ -e "$HOME/.local/bin/$app" ] || [ -L "$HOME/.local/bin/$app" ]; then
         if [ -e "/usr/local/bin/$app" ]; then
             ln -sf "/usr/local/bin/$app" "$HOME/.local/bin/$app"
+        elif [ -e "/opt/$app/$app" ]; then
+            ln -sf "/opt/$app/$app" "$HOME/.local/bin/$app"
         else
             rm -f "$HOME/.local/bin/$app"
         fi
@@ -826,6 +828,9 @@ Type=Application
 Categories=Development;Network;
 EOF
             ;;
+        "fyrdock"|"fyrtaskbar"|"fyroverview"|"fyrwindowoverview"|"fyrsearch"|"fyrhelp"|"fyremoji")
+            sudo ln -sf "/opt/$app/$app" "/usr/local/bin/$app"
+            ;;
     esac
     
     if command -v update-desktop-database &> /dev/null; then
@@ -1264,6 +1269,18 @@ setup_sddm() {
         sudo cp -r ./sddm/theme/* /usr/share/sddm/themes/fyr/
         sudo mkdir -p /etc/sddm.conf.d
         sudo cp ./sddm/sddm.conf /etc/sddm.conf.d/fyr.conf
+        sudo mkdir -p /etc/X11/xorg.conf.d
+        sudo tee /etc/X11/xorg.conf.d/30-touchpad.conf > /dev/null <<'XORG_TOUCHPAD_EOF'
+Section "InputClass"
+    Identifier "touchpad"
+    Driver "libinput"
+    MatchIsTouchpad "on"
+    Option "Tapping" "on"
+    Option "TappingDrag" "on"
+    Option "TappingButtonMap" "lrm"
+    Option "DisableWhileTyping" "on"
+EndSection
+XORG_TOUCHPAD_EOF
         sudo systemctl enable sddm || true
         
         echo "Setting up ACLs for SDDM user..."

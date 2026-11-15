@@ -1,8 +1,8 @@
 output * bg ~/.config/fyr/space.jpg fill
 
-exec ~/.local/bin/fyrtaskbar
-exec ~/.local/bin/fyrtaskbar --desktop
-exec ~/.local/bin/fyrdock
+exec /opt/fyrtaskbar/fyrtaskbar
+exec /opt/fyrtaskbar/fyrtaskbar --desktop
+exec /opt/fyrdock/fyrdock
 exec --no-startup-id /opt/fyrsearch/fyrsearch
 
 # Taskbar window rules
@@ -163,7 +163,7 @@ bindsym $mod+Ctrl exec ~/.config/fyr/help_toggle.sh
 # ==========================================
 # Fyremoji Sway Configuration
 # ==========================================
-exec ~/.local/bin/fyremoji
+exec /opt/fyremoji/fyremoji
 for_window [app_id="fyremoji"] floating enable, border none, resize set width 400 px height 250 px, move scratchpad
 bindsym $mod+period exec ~/.config/fyr/emoji_toggle.sh
 
@@ -176,6 +176,15 @@ include ~/.config/sway/floating.conf
 # Keep Fyr overlay/panel surfaces borderless and native Flutter CSD apps free of duplicate SSD titlebars
 for_window [app_id="^(fyrtaskbar|fyrdock|fyrdesktop|fyrsearch|launcher|fyroverview|fyrwindowoverview|fyrhelp|fyremoji)$"] border none
 for_window [app_id="^(com\.fyr\.browser|(com\.example\.)?(fyrapi|fyrav|fyrbrowser|fyrcalculator|fyrcalender|fyrcamera|fyrclock|fyrcode|fyrdaw|fyrfiles|fyrjournal|fyrmusic|fyrphone|fyrphotos|fyrsettings|fyrstore|fyrterm|fyrtext|fyrtorrent|fyrvideo|fyrvirt))$"] border pixel 4
+# TOUCHPAD SETTINGS
+input "type:touchpad" {
+    tap enabled
+    tap_button_map lrm
+    drag enabled
+    dwt enabled
+    natural_scroll disabled
+}
+# END TOUCHPAD SETTINGS
 # DISPLAY OUTPUT SETTINGS
 output eDP-1 resolution 1920x1080 position 0 0
 # END DISPLAY OUTPUT SETTINGS

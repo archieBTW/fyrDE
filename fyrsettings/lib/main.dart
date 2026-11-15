@@ -9,6 +9,7 @@ import 'panes/power_pane.dart';
 import 'panes/personalization_pane.dart';
 import 'panes/default_apps_pane.dart';
 import 'panes/sound_pane.dart';
+import 'panes/touchpad_pane.dart';
 import 'fyr_theme.dart';
 
 void main(List<String> args) async {
@@ -36,6 +37,8 @@ void main(List<String> args) async {
       initialIndex = 1;
     } else if (arg == 'wifi' || arg == 'network') {
       initialIndex = 0;
+    } else if (arg == 'touchpad' || arg == 'mouse' || arg == 'input') {
+      initialIndex = 7;
     }
   }
 
@@ -125,6 +128,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       SettingsCategory('Personalization', Icons.palette, PersonalizationPane()),
       SettingsCategory('Default Apps', Icons.apps, DefaultAppsPane()),
       SettingsCategory('Power', Icons.battery_charging_full, PowerPane()),
+      SettingsCategory('Mouse & Touchpad', Icons.touch_app, TouchpadPane()),
     ];
 
     return Scaffold(
