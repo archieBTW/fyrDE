@@ -627,7 +627,7 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                   child: Row(
                     children: [
                       Text(
-                        widget.track!.midiInputId == null
+                        widget.track?.midiInputId == null
                             ? 'All Inputs'
                             : 'Midi Device',
                         style: TextStyle(color: Colors.white, fontSize: 12),

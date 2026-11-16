@@ -16,6 +16,8 @@ class DawMainScreen extends StatefulWidget {
 class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   List<Track> tracks = [];
   int? selectedTrackIndex;
+  Set<String> multiSelectedTrackIds = {};
+  int? _trackSelectionAnchorIndex;
   int selectedBottomTab = 0;
   bool isBottomPanelExpanded = true;
 
@@ -36,8 +38,11 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   List<MidiNote> clipboardMidiNotes = [];
   List<Map<String, dynamic>> clipboardClips = [];
   bool isSelecting = false;
-  double? selectionStartDx;
-  double? selectionEndDx;
+  Offset? _lastTimelinePointerDownGlobal;
+  Offset? _marqueeStart;
+  Offset? _marqueeEnd;
+  Set<String> _marqueeBaseTrackIds = {};
+  List<DawClip> _marqueeBaseClips = [];
 
   bool snapToGrid = true;
   double _zoomX = 1.0;
@@ -327,6 +332,8 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         songMarkers.clear();
         tempoMarkers.clear();
         selectedTrackIndex = null;
+        multiSelectedTrackIds.clear();
+        _trackSelectionAnchorIndex = null;
         selectedClip = null;
         multiSelectedClips.clear();
         currentProjectPath = null;
@@ -1465,6 +1472,8 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           playheadPosition = 0;
           selectedClip = null;
           multiSelectedClips.clear();
+          multiSelectedTrackIds.clear();
+          _trackSelectionAnchorIndex = null;
           if (selectedTrackIndex != null &&
               selectedTrackIndex! >= tracks.length) {
             selectedTrackIndex = tracks.isNotEmpty ? tracks.length - 1 : null;
@@ -4299,7 +4308,12 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   }
 
   void _syncTrackMonitoringHandles() {
-    if (!SoLoud.instance.isInitialized) return;
+    if (!_isSoloudReady) return;
+    try {
+      if (!SoLoud.instance.isInitialized) return;
+    } catch (_) {
+      return;
+    }
     final bool anySolo = tracks.any((t) => t.isSolo);
     for (final t in tracks) {
       if (t.type != TrackType.audio) continue;
@@ -4308,7 +4322,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         if (t.monitorSource == null) {
           try {
             t.monitorSource = SoLoud.instance.setBufferStream(
-              maxBufferSizeBytes: 1024 * 64,
+              maxBufferSizeBytes: 1024 * 256,
               bufferingType: BufferingType.released,
               bufferingTimeNeeds: 0.0,
               sampleRate: 44100,
@@ -4500,13 +4514,18 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         );
         final Uint8List floatBytes =
             trackProcessed.floatSamples.buffer.asUint8List();
-        // Bound buffered monitoring audio to < 18ms (6350 bytes of stereo f32le at 44.1kHz)
-        // so live monitoring stays ultra-low-latency and never accumulates lag
+        // Bound buffered monitoring audio to <= 16KB (~46ms of stereo f32le at
+        // 44.1kHz) via tail-slicing/backpressure instead of resetBufferStream,
+        // because flutter_soloud's resetBuffer() acquires buffer_lock_mutex then
+        // soloud.seek() (AB-BA deadlock against the audio mixing thread).
         final int bufferedBytes = SoLoud.instance.getBufferSize(src);
-        if (bufferedBytes > 6350) {
-          SoLoud.instance.resetBufferStream(src);
+        final Uint8List toQueue = sliceLatestStereoFloatPcmFrames(
+          floatBytes,
+          currentlyBufferedBytes: bufferedBytes,
+        );
+        if (toQueue.isNotEmpty) {
+          SoLoud.instance.addAudioDataStream(src, toQueue);
         }
-        SoLoud.instance.addAudioDataStream(src, floatBytes);
 
         final double effVol =
             (t.isMuted || (anySolo && !t.isSolo)) ? 0.0 : t.volume;
@@ -4625,8 +4644,8 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
             '--format=s16le',
             '--rate=44100',
             '--channels=$_activeCaptureChannels',
-            '--latency-msec=5',
-            '--process-time-msec=2',
+            '--latency-msec=8',
+            '--process-time-msec=4',
             if (cleanDeviceId.isNotEmpty) '--device=$cleanDeviceId',
           ];
           final proc = await Process.start('parecord', args);
@@ -5104,6 +5123,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       }
       tracks.remove(track);
       trackClips.remove(track.id);
+      multiSelectedTrackIds.remove(track.id);
       if (selectedTrackIndex != null && selectedTrackIndex! >= tracks.length) {
         selectedTrackIndex = tracks.isNotEmpty ? tracks.length - 1 : null;
       }
@@ -6667,8 +6687,12 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                 if (!_isTrackVisibleInArrange(track)) {
                   return const SizedBox.shrink();
                 }
-                final isSelected = selectedTrackIndex == index;
+                final isSelected = _isTrackSelected(track, index);
+                final isPrimarySelected = selectedTrackIndex == index;
                 final parentGroup = _groupForTrack(track);
+                final bool batchDeleteSelected =
+                    multiSelectedTrackIds.length > 1 &&
+                    multiSelectedTrackIds.contains(track.id);
                 return GestureDetector(
                   onSecondaryTapUp: (d) {
                     final RenderBox overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
@@ -6688,50 +6712,53 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                           ),
                         PopupMenuItem(value: 'bounce', child: Text('Bounce Track to Audio')),
                         PopupMenuDivider(),
-                        PopupMenuItem(value: 'delete', child: Text('Delete Track', style: TextStyle(color: Colors.red))),
+                        PopupMenuItem(
+                          value: 'delete',
+                          child: Text(
+                            batchDeleteSelected
+                                ? 'Delete ${multiSelectedTrackIds.length} Selected Tracks'
+                                : 'Delete Track',
+                            style: TextStyle(color: Colors.red),
+                          ),
+                        ),
                       ],
                     ).then((value) {
                       if (value == 'color') _showTrackColorPicker(track);
                       if (value == 'assign_group') _assignTrackToGroupDialog(track);
                       if (value == 'bounce') _bounceTrackToAudio(track);
-                      if (value == 'delete') _deleteTrack(track);
-                    });
-                  },
-                  onTap: () {
-                    setState(() {
-                      bool wasSelected = selectedTrackIndex == index;
-                      if (!wasSelected) {
-                        selectedClip = null;
-                        multiSelectedClips.clear();
-                      }
-                      selectedTrackIndex = index;
-                      if ((track.type == TrackType.audio ||
-                              track.type == TrackType.group) &&
-                          (selectedBottomTab == 0 || selectedBottomTab == 3)) {
-                        selectedBottomTab = track.type == TrackType.audio ? 4 : 2;
-                      } else if (track.type == TrackType.midi &&
-                          (selectedBottomTab == 3 || selectedBottomTab == 4)) {
-                        selectedBottomTab = 0;
-                      } else if (track.type == TrackType.group &&
-                          selectedBottomTab == 4) {
-                        selectedBottomTab = 2;
-                      }
-                      if (!wasSelected && track.type == TrackType.sampler) {
-                        selectedBottomTab = 3;
-                        isBottomPanelExpanded = true;
-                        if (_bottomPanelHeight < 400) {
-                          _bottomPanelHeight = 400;
+                      if (value == 'delete') {
+                        if (batchDeleteSelected) {
+                          _deleteTracks(_targetTracksForTrackAction(track));
+                        } else {
+                          _deleteTrack(track);
                         }
                       }
                     });
                   },
+                  onTap: () {
+                    setState(() {
+                      _handleTrackSelectionClick(index);
+                    });
+                  },
                   child: Container(
+                    key: Key('track_header_${track.id}'),
                     height: track.showAutomation ? 140 : 100,
                     decoration: BoxDecoration(
-                      color: isSelected ? panelLight : Colors.transparent,
+                      color: isSelected
+                          ? (isPrimarySelected
+                                ? panelLight
+                                : panelLight.withValues(alpha: 0.72))
+                          : Colors.transparent,
                       border: Border(
-                        left: BorderSide(color: track.color, width: 4),
-                        bottom: BorderSide(color: textFaint),
+                        left: BorderSide(
+                          color: track.color,
+                          width: isSelected ? 5 : 4,
+                        ),
+                        bottom: BorderSide(
+                          color: isSelected && multiSelectedTrackIds.length > 1
+                              ? Colors.cyanAccent.withValues(alpha: 0.65)
+                              : textFaint,
+                        ),
                       ),
                     ),
                     padding: EdgeInsets.all(8),
@@ -6970,9 +6997,12 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                               'M',
                               track.isMuted,
                               () {
-                                setState(
-                                  () => track.isMuted = !track.isMuted,
-                                );
+                                final nextMute = !track.isMuted;
+                                setState(() {
+                                  for (final t in _targetTracksForTrackAction(track)) {
+                                    t.isMuted = nextMute;
+                                  }
+                                });
                                 _syncTrackMonitoringHandles();
                               },
                               Colors.redAccent,
@@ -6982,7 +7012,12 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                               'S',
                               track.isSolo,
                               () {
-                                setState(() => track.isSolo = !track.isSolo);
+                                final nextSolo = !track.isSolo;
+                                setState(() {
+                                  for (final t in _targetTracksForTrackAction(track)) {
+                                    t.isSolo = nextSolo;
+                                  }
+                                });
                                 _syncTrackMonitoringHandles();
                               },
                               Colors.amber,
@@ -6993,9 +7028,14 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                                 'R',
                                 track.isArmed,
                                 () async {
-                                  setState(
-                                    () => track.isArmed = !track.isArmed,
-                                  );
+                                  final nextArm = !track.isArmed;
+                                  setState(() {
+                                    for (final t in _targetTracksForTrackAction(track)) {
+                                      if (t.type != TrackType.group) {
+                                        t.isArmed = nextArm;
+                                      }
+                                    }
+                                  });
                                   await _updateMicState();
                                 },
                                 activeRecord,
@@ -7007,8 +7047,13 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                                 '',
                                 track.isMonitoring,
                                 () async {
+                                  final nextMon = !track.isMonitoring;
                                   setState(() {
-                                    track.isMonitoring = !track.isMonitoring;
+                                    for (final t in _targetTracksForTrackAction(track)) {
+                                      if (t.type == TrackType.audio) {
+                                        t.isMonitoring = nextMon;
+                                      }
+                                    }
                                   });
                                   await _updateMicState();
                                 },
@@ -7195,6 +7240,255 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     );
   }
 
+  bool _isTrackSelected(Track track, int index) =>
+      multiSelectedTrackIds.contains(track.id) ||
+      (multiSelectedTrackIds.isEmpty && selectedTrackIndex == index);
+
+  List<Track> _targetTracksForTrackAction(Track clickedTrack) {
+    if (multiSelectedTrackIds.length > 1 &&
+        multiSelectedTrackIds.contains(clickedTrack.id)) {
+      return tracks.where((t) => multiSelectedTrackIds.contains(t.id)).toList();
+    }
+    return [clickedTrack];
+  }
+
+  void _deleteTracks(List<Track> toDelete) {
+    if (toDelete.length <= 1) {
+      if (toDelete.isNotEmpty) _deleteTrack(toDelete.first);
+      return;
+    }
+    final bool hasAnyClips = toDelete.any(
+      (t) => (trackClips[t.id] ?? []).isNotEmpty,
+    );
+    void runDeleteAll() {
+      for (final t in [...toDelete]) {
+        if (tracks.contains(t)) {
+          _executeDeleteTrack(t);
+        }
+      }
+    }
+
+    if (hasAnyClips) {
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('Delete ${toDelete.length} Tracks'),
+          content: Text(
+            'Selected tracks contain clips. Are you sure you want to delete them?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                runDeleteAll();
+              },
+              child: const Text('Delete', style: TextStyle(color: Colors.red)),
+            ),
+          ],
+        ),
+      );
+    } else {
+      runDeleteAll();
+    }
+  }
+
+  void _handleTrackSelectionClick(int index, {bool clearClipsOnSingle = false}) {
+    final keys = HardwareKeyboard.instance.logicalKeysPressed;
+    final bool isShift =
+        HardwareKeyboard.instance.isShiftPressed ||
+        keys.contains(LogicalKeyboardKey.shiftLeft) ||
+        keys.contains(LogicalKeyboardKey.shiftRight);
+    final bool isCtrlOrMeta =
+        HardwareKeyboard.instance.isControlPressed ||
+        HardwareKeyboard.instance.isMetaPressed ||
+        keys.contains(LogicalKeyboardKey.controlLeft) ||
+        keys.contains(LogicalKeyboardKey.controlRight) ||
+        keys.contains(LogicalKeyboardKey.metaLeft) ||
+        keys.contains(LogicalKeyboardKey.metaRight);
+
+    final Set<String> baseIds = multiSelectedTrackIds.isNotEmpty
+        ? multiSelectedTrackIds
+        : (selectedTrackIndex != null && selectedTrackIndex! < tracks.length
+              ? {tracks[selectedTrackIndex!].id}
+              : const <String>{});
+
+    final res = resolveTrackClickSelection(
+      trackIds: tracks.map((t) => t.id).toList(),
+      trackVisible: tracks.map(_isTrackVisibleInArrange).toList(),
+      currentSelectedIds: baseIds,
+      anchorIndex: _trackSelectionAnchorIndex ?? selectedTrackIndex,
+      clickedIndex: index,
+      isShiftPressed: isShift,
+      isCtrlOrMetaPressed: isCtrlOrMeta,
+    );
+
+    final bool wasSingleSame =
+        !isShift &&
+        !isCtrlOrMeta &&
+        selectedTrackIndex == index &&
+        multiSelectedTrackIds.length <= 1;
+
+    multiSelectedTrackIds = res.selectedTrackIds;
+    _trackSelectionAnchorIndex = res.anchorIndex;
+    selectedTrackIndex = res.primaryIndex;
+
+    if (clearClipsOnSingle || (!isShift && !isCtrlOrMeta && !wasSingleSame)) {
+      selectedClip = null;
+      multiSelectedClips.clear();
+    }
+
+    if (selectedTrackIndex != null && selectedTrackIndex! < tracks.length) {
+      final track = tracks[selectedTrackIndex!];
+      if ((track.type == TrackType.audio || track.type == TrackType.group) &&
+          (selectedBottomTab == 0 || selectedBottomTab == 3)) {
+        selectedBottomTab = track.type == TrackType.audio ? 4 : 2;
+      } else if (track.type == TrackType.midi &&
+          (selectedBottomTab == 3 || selectedBottomTab == 4)) {
+        selectedBottomTab = 0;
+      } else if (track.type == TrackType.group && selectedBottomTab == 4) {
+        selectedBottomTab = 2;
+      }
+      if (!wasSingleSame && track.type == TrackType.sampler) {
+        selectedBottomTab = 3;
+        isBottomPanelExpanded = true;
+        if (_bottomPanelHeight < 400) {
+          _bottomPanelHeight = 400;
+        }
+      }
+    }
+  }
+
+  Offset? _globalToTimelineContentPoint(Offset globalPos) {
+    final box =
+        _timelineLaneListKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return null;
+    final local = box.globalToLocal(globalPos);
+    final double scrollOffset = _timelineScrollController.hasClients
+        ? _timelineScrollController.offset
+        : 0.0;
+    final double timelineX =
+        (local.dx / _zoomX).clamp(0.0, _timelineTotalUnits);
+    final double contentY = max(0.0, local.dy + scrollOffset);
+    return Offset(timelineX, contentY);
+  }
+
+  void _applyMarqueeSelection() {
+    if (_marqueeStart == null || _marqueeEnd == null) return;
+    final double minX = min(_marqueeStart!.dx, _marqueeEnd!.dx);
+    final double maxX = max(_marqueeStart!.dx, _marqueeEnd!.dx);
+    final double minY = min(_marqueeStart!.dy, _marqueeEnd!.dy);
+    final double maxY = max(_marqueeStart!.dy, _marqueeEnd!.dy);
+
+    final rows = <TimelineTrackRowLayout>[];
+    double yCursor = 0.0;
+    for (final t in tracks) {
+      if (!_isTrackVisibleInArrange(t)) continue;
+      final double rowH = t.showAutomation ? 140.0 : 100.0;
+      final clips = (trackClips[t.id] ?? const <DawClip>[])
+          .map(
+            (c) => TimelineClipLayout(
+              clipId: c.id,
+              start: c.start,
+              length: c.length,
+            ),
+          )
+          .toList();
+      rows.add(
+        TimelineTrackRowLayout(
+          trackId: t.id,
+          top: yCursor,
+          bottom: yCursor + rowH,
+          clips: clips,
+        ),
+      );
+      yCursor += rowH;
+    }
+
+    final result = computeTimelineMarqueeSelection(
+      rows,
+      minX: minX,
+      maxX: maxX,
+      minY: minY,
+      maxY: maxY,
+    );
+
+    final nextTracks = {..._marqueeBaseTrackIds, ...result.trackIds};
+    multiSelectedTrackIds = nextTracks;
+    if (nextTracks.isNotEmpty) {
+      if (selectedTrackIndex == null ||
+          selectedTrackIndex! >= tracks.length ||
+          !nextTracks.contains(tracks[selectedTrackIndex!].id)) {
+        final idx = tracks.indexWhere((t) => nextTracks.contains(t.id));
+        if (idx != -1) {
+          selectedTrackIndex = idx;
+          _trackSelectionAnchorIndex = idx;
+        }
+      }
+    }
+
+    final nextClips = <DawClip>[..._marqueeBaseClips];
+    for (final t in tracks) {
+      for (final c in trackClips[t.id] ?? const <DawClip>[]) {
+        if (result.clipIds.contains(c.id) && !nextClips.contains(c)) {
+          nextClips.add(c);
+        }
+      }
+    }
+    multiSelectedClips = nextClips;
+    selectedClip = nextClips.isNotEmpty ? nextClips.last : null;
+  }
+
+  void _startTimelineMarquee(Offset globalPos) {
+    final startPt = _globalToTimelineContentPoint(
+      _lastTimelinePointerDownGlobal ?? globalPos,
+    );
+    final endPt = _globalToTimelineContentPoint(globalPos) ?? startPt;
+    _lastTimelinePointerDownGlobal = null;
+    if (startPt == null || endPt == null) return;
+    final bool additive = HardwareKeyboard.instance.isShiftPressed;
+    setState(() {
+      if (additive) {
+        _marqueeBaseClips = [...multiSelectedClips];
+        _marqueeBaseTrackIds = {...multiSelectedTrackIds};
+      } else {
+        _marqueeBaseClips = [];
+        _marqueeBaseTrackIds = {};
+        multiSelectedClips.clear();
+        multiSelectedTrackIds.clear();
+        selectedClip = null;
+      }
+      isSelecting = true;
+      _marqueeStart = startPt;
+      _marqueeEnd = endPt;
+      _applyMarqueeSelection();
+    });
+  }
+
+  void _updateTimelineMarquee(Offset globalPos) {
+    if (!isSelecting || _marqueeStart == null) return;
+    final pt = _globalToTimelineContentPoint(globalPos);
+    if (pt == null) return;
+    setState(() {
+      _marqueeEnd = pt;
+      _applyMarqueeSelection();
+    });
+  }
+
+  void _endTimelineMarquee() {
+    if (!isSelecting && _marqueeStart == null && _marqueeEnd == null) return;
+    setState(() {
+      isSelecting = false;
+      _marqueeStart = null;
+      _marqueeEnd = null;
+      _marqueeBaseClips = [];
+      _marqueeBaseTrackIds = {};
+    });
+  }
+
   bool _canMoveClipToTrack(DawClip clip, Track targetTrack) {
     if (targetTrack.type == TrackType.group) return false;
     if (clip is AudioClip) return targetTrack.type == TrackType.audio;
@@ -7318,6 +7612,8 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           int tIdx = tracks.indexWhere((t) => t.id == trackId);
           if (tIdx != -1) {
             selectedTrackIndex = tIdx;
+            _trackSelectionAnchorIndex = tIdx;
+            multiSelectedTrackIds = {trackId};
           }
         }),
         onDoubleTapDown: (_) {},
@@ -8182,44 +8478,31 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                                   ),
                                 );
                               },
-                              builder: (ctx, cand, rej) => GestureDetector(
+                              builder: (ctx, cand, rej) => Listener(
+                            onPointerDown: (e) =>
+                                _lastTimelinePointerDownGlobal = e.position,
+                            child: GestureDetector(
+                            supportedDevices: const {
+                              PointerDeviceKind.mouse,
+                              PointerDeviceKind.touch,
+                              PointerDeviceKind.stylus,
+                            },
                             onTapDown: (d) => setState(() {
-                              selectedClip = null;
-                              multiSelectedClips.clear();
-                              selectedTrackIndex = index;
+                              _handleTrackSelectionClick(
+                                index,
+                                clearClipsOnSingle: true,
+                              );
                             }),
                             onSecondaryTapUp: (d) {
                               _seekPlayhead(d.localPosition.dx / _zoomX);
                               _showTimelineMenu(d.globalPosition);
                             },
-                            onLongPressStart: (d) => setState(() {
-                              isSelecting = true;
-                              selectionStartDx = d.localPosition.dx / _zoomX;
-                              selectionEndDx = d.localPosition.dx / _zoomX;
-                              multiSelectedClips.clear();
-                            }),
-                            onLongPressMoveUpdate: (d) => setState(() {
-                              selectionEndDx = d.localPosition.dx / _zoomX;
-                              multiSelectedClips.clear();
-                              double minX = min(
-                                selectionStartDx!,
-                                selectionEndDx!,
-                              );
-                              double maxX = max(
-                                selectionStartDx!,
-                                selectionEndDx!,
-                              );
-                              for (var t in tracks) {
-                                for (var c in trackClips[t.id] ?? []) {
-                                  if (c.start < maxX &&
-                                      c.start + c.length > minX) {
-                                    multiSelectedClips.add(c);
-                                  }
-                                }
-                              }
-                            }),
-                            onLongPressEnd: (d) =>
-                                setState(() => isSelecting = false),
+                            onPanStart: (d) =>
+                                _startTimelineMarquee(d.globalPosition),
+                            onPanUpdate: (d) =>
+                                _updateTimelineMarquee(d.globalPosition),
+                            onPanEnd: (_) => _endTimelineMarquee(),
+                            onPanCancel: _endTimelineMarquee,
                             onDoubleTapDown: (d) {
                               final double clickX = d.localPosition.dx / _zoomX;
                               final bool hitExisting =
@@ -8255,14 +8538,22 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                               }
                             },
                             child: Container(
+                              key: Key('timeline_lane_${track.id}'),
                               height: track.showAutomation ? 140 : 100,
                               decoration: BoxDecoration(
                                 color: (_dragTargetTrackId == track.id &&
                                         _dragTargetTrackId != _dragSourceTrackId)
                                     ? Colors.cyanAccent.withValues(alpha: 0.14)
-                                    : (track.type == TrackType.group
-                                          ? panelDark.withValues(alpha: 0.45)
-                                          : null),
+                                    : ((_isTrackSelected(track, index) &&
+                                            multiSelectedTrackIds.length > 1)
+                                          ? Colors.blueAccent.withValues(
+                                              alpha: 0.08,
+                                            )
+                                          : (track.type == TrackType.group
+                                                ? panelDark.withValues(
+                                                    alpha: 0.45,
+                                                  )
+                                                : null)),
                                 border: Border(
                                   bottom: BorderSide(
                                     color: (_dragTargetTrackId == track.id &&
@@ -8320,33 +8611,6 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                                             ),
                                           ),
                                         ),
-                                  if (isSelecting &&
-                                      selectionStartDx != null &&
-                                      selectionEndDx != null)
-                                    Positioned(
-                                      left:
-                                          min(
-                                            selectionStartDx!,
-                                            selectionEndDx!,
-                                          ) *
-                                          _zoomX,
-                                      width:
-                                          (selectionEndDx! - selectionStartDx!)
-                                              .abs() *
-                                          _zoomX,
-                                      top: 0,
-                                      bottom: 0,
-                                      child: Container(
-                                        decoration: BoxDecoration(
-                                          color: Colors.blueAccent.withOpacity(
-                                            0.3,
-                                          ),
-                                          border: Border.all(
-                                            color: Colors.blueAccent,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
                                   if (track.type == TrackType.audio &&
                                       isRecording &&
                                       track.isArmed &&
@@ -8391,10 +8655,54 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                               ),
                             ),
                           ),
+                          ),
                         ),
                       );
                     },
                       ),
+                      if (isSelecting &&
+                          _marqueeStart != null &&
+                          _marqueeEnd != null)
+                        Builder(
+                          builder: (ctx) {
+                            final double scrollOffset =
+                                _timelineScrollController.hasClients
+                                    ? _timelineScrollController.offset
+                                    : 0.0;
+                            final double leftPx =
+                                min(_marqueeStart!.dx, _marqueeEnd!.dx) *
+                                _zoomX;
+                            final double rightPx =
+                                max(_marqueeStart!.dx, _marqueeEnd!.dx) *
+                                _zoomX;
+                            final double topPx =
+                                min(_marqueeStart!.dy, _marqueeEnd!.dy) -
+                                scrollOffset;
+                            final double bottomPx =
+                                max(_marqueeStart!.dy, _marqueeEnd!.dy) -
+                                scrollOffset;
+                            return Positioned(
+                              key: const Key('timeline_marquee_box'),
+                              left: leftPx,
+                              top: topPx,
+                              width: max(2.0, rightPx - leftPx),
+                              height: max(2.0, bottomPx - topPx),
+                              child: IgnorePointer(
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    color: Colors.blueAccent.withValues(
+                                      alpha: 0.24,
+                                    ),
+                                    border: Border.all(
+                                      color: Colors.blueAccent,
+                                      width: 1.5,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
                       Positioned(
                         left: playheadPosition * _zoomX - 10,
                         top: 0,

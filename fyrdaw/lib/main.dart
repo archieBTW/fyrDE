@@ -42,6 +42,7 @@ import 'package:fyrdaw/ui/audio_clip_editor.dart';
 import 'package:fyrdaw/utils/audio_input_channel.dart';
 import 'package:fyrdaw/utils/audio_output_routing.dart';
 import 'package:fyrdaw/utils/recording_sync.dart';
+import 'package:fyrdaw/utils/selection_helpers.dart';
 import 'package:fyrdaw/utils/audio_utils.dart';
 import 'package:fyrdaw/utils/bus_metering.dart';
 import 'package:fyrdaw/utils/metronome_synth.dart';

@@ -28,6 +28,7 @@ import 'package:fyrdaw/ui/parametric_eq_widget.dart';
 import 'package:fyrdaw/ui/sample_browser_drawer.dart';
 import 'package:fyrdaw/ui/sampler_editor.dart';
 import 'package:fyrdaw/ui/session_launcher.dart';
+import 'package:fyrdaw/utils/selection_helpers.dart';
 import 'package:fyrdaw/ui/step_sequencer.dart';
 import 'package:fyrdaw/ui/synth_rack_panel.dart';
 import 'package:fyrdaw/ui/tempo_signature_lane.dart';
@@ -2729,6 +2730,41 @@ void main() {
       expect(selectedChannel, 'mono:0');
     });
 
+    test('sliceLatestStereoFloatPcmFrames bounds monitor latency without overflowing queue', () {
+      // 4 stereo f32le frames (4 * 8 = 32 bytes), marked with unique first-byte tags per frame
+      final chunk = Uint8List(32);
+      for (int f = 0; f < 4; f++) {
+        chunk[f * 8] = f + 1;
+      }
+
+      // Plenty of headroom: passes whole aligned chunk through
+      final pass = sliceLatestStereoFloatPcmFrames(
+        chunk,
+        currentlyBufferedBytes: 0,
+        maxQueuedBytes: 64,
+      );
+      expect(pass.length, 32);
+      expect(pass[0], 1);
+
+      // Only 16 bytes of room left: slices newest 2 frames (frames 3 and 4)
+      final tail = sliceLatestStereoFloatPcmFrames(
+        chunk,
+        currentlyBufferedBytes: 48,
+        maxQueuedBytes: 64,
+      );
+      expect(tail.length, 16);
+      expect(tail[0], 3);
+      expect(tail[8], 4);
+
+      // Buffer full or over threshold: returns empty instead of overflowing
+      final full = sliceLatestStereoFloatPcmFrames(
+        chunk,
+        currentlyBufferedBytes: 64,
+        maxQueuedBytes: 64,
+      );
+      expect(full, isEmpty);
+    });
+
     test('detectPitchHz handles quiet DC-biased signals and RealtimePitchTracker tracks streaming audio', () {
       const sr = 44100;
       // Quiet E2 guitar string (0.005 amp) with a 0.04 DC offset
@@ -3204,6 +3240,188 @@ Default Source: alsa_input.usb-Focusrite_Scarlett_Solo_USB_Y7PE74V22E69FD-00.Dir
       expect(midiClip.length, greaterThan(500.0));
       expect(midiClip.originalLength, greaterThan(500.0));
       expect(noteChanges, greaterThan(0));
+    });
+  });
+
+  group('Filesystem-Style 2D Marquee & Shift Multi-Track Selection', () {
+    test('computeTimelineMarqueeSelection isolates tracks horizontally and spans across tracks only when dragged vertically', () {
+      const rows = [
+        TimelineTrackRowLayout(
+          trackId: 't0',
+          top: 0.0,
+          bottom: 100.0,
+          clips: [
+            TimelineClipLayout(clipId: 'c0_a', start: 50.0, length: 100.0),
+            TimelineClipLayout(clipId: 'c0_b', start: 350.0, length: 80.0),
+          ],
+        ),
+        TimelineTrackRowLayout(
+          trackId: 't1',
+          top: 100.0,
+          bottom: 200.0,
+          clips: [
+            TimelineClipLayout(clipId: 'c1_a', start: 60.0, length: 90.0),
+          ],
+        ),
+        TimelineTrackRowLayout(
+          trackId: 't2',
+          top: 200.0,
+          bottom: 300.0,
+          clips: [
+            TimelineClipLayout(clipId: 'c2_a', start: 60.0, length: 90.0),
+          ],
+        ),
+      ];
+
+      // Horizontal drag inside Track 0 only -> selects only t0 & c0_a, NOT t1/t2 or their aligned clips
+      final singleTrackRes = computeTimelineMarqueeSelection(
+        rows,
+        minX: 20.0,
+        maxX: 180.0,
+        minY: 30.0,
+        maxY: 60.0,
+      );
+      expect(singleTrackRes.trackIds, {'t0'});
+      expect(singleTrackRes.clipIds, {'c0_a'});
+
+      // Diagonal drag across Track 0 -> Track 1 -> selects t0, t1 & c0_a, c1_a, NOT t2 or c2_a or c0_b
+      final twoTrackRes = computeTimelineMarqueeSelection(
+        rows,
+        minX: 40.0,
+        maxX: 160.0,
+        minY: 40.0,
+        maxY: 160.0,
+      );
+      expect(twoTrackRes.trackIds, {'t0', 't1'});
+      expect(twoTrackRes.clipIds, {'c0_a', 'c1_a'});
+    });
+
+    test('resolveTrackClickSelection handles plain click, Shift range, and Ctrl toggle', () {
+      const ids = ['t0', 't1', 't2', 't3'];
+      const vis = [true, true, false, true]; // t2 collapsed inside group
+
+      final single = resolveTrackClickSelection(
+        trackIds: ids,
+        trackVisible: vis,
+        currentSelectedIds: const {'t0'},
+        anchorIndex: 0,
+        clickedIndex: 1,
+        isShiftPressed: false,
+        isCtrlOrMetaPressed: false,
+      );
+      expect(single.selectedTrackIds, {'t1'});
+      expect(single.anchorIndex, 1);
+
+      final shiftRange = resolveTrackClickSelection(
+        trackIds: ids,
+        trackVisible: vis,
+        currentSelectedIds: single.selectedTrackIds,
+        anchorIndex: single.anchorIndex,
+        clickedIndex: 3,
+        isShiftPressed: true,
+        isCtrlOrMetaPressed: false,
+      );
+      expect(shiftRange.selectedTrackIds, {'t1', 't3'});
+      expect(shiftRange.anchorIndex, 1);
+      expect(shiftRange.primaryIndex, 3);
+
+      final ctrlToggleOff = resolveTrackClickSelection(
+        trackIds: ids,
+        trackVisible: vis,
+        currentSelectedIds: shiftRange.selectedTrackIds,
+        anchorIndex: shiftRange.anchorIndex,
+        clickedIndex: 1,
+        isShiftPressed: false,
+        isCtrlOrMetaPressed: true,
+      );
+      expect(ctrlToggleOff.selectedTrackIds, {'t3'});
+      expect(ctrlToggleOff.primaryIndex, 3);
+    });
+
+    testWidgets('DawApp supports Shift-click multi-track selection and 2D marquee selection without selecting all tracks', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      tester.view.physicalSize = const Size(1440, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+
+      await tester.pumpWidget(const MaterialApp(home: DawApp()));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // Add 3 tracks total
+      for (int i = 0; i < 3; i++) {
+        await tester.tap(find.byIcon(Icons.add).first);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Add MIDI Track'));
+        await tester.pumpAndSettle();
+      }
+
+      final state = tester.state(find.byType(DawMainScreen)) as dynamic;
+      expect((state.tracks as List).length, 3);
+      final t0 = state.tracks[0];
+      final t1 = state.tracks[1];
+      final t2 = state.tracks[2];
+
+      // Put one clip at x=100..220 on EACH track
+      final c0 = MidiClip(id: 'mq_c0', start: 100, length: 120, color: Colors.blue);
+      final c1 = MidiClip(id: 'mq_c1', start: 100, length: 120, color: Colors.green);
+      final c2 = MidiClip(id: 'mq_c2', start: 100, length: 120, color: Colors.orange);
+      state.setState(() {
+        state.selectedClip = null;
+        state.multiSelectedClips.clear();
+        state.trackClips[t0.id] = [c0];
+        state.trackClips[t1.id] = [c1];
+        state.trackClips[t2.id] = [c2];
+      });
+      await tester.pumpAndSettle();
+
+      // 1) Click Track 0 header, then Shift+Click Track 2 header -> all 3 tracks selected
+      await tester.tap(find.byKey(Key('track_header_${t0.id}')));
+      await tester.pumpAndSettle();
+      expect(state.multiSelectedTrackIds, {t0.id});
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.tap(find.byKey(Key('track_header_${t2.id}')));
+      await tester.pumpAndSettle();
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+
+      expect(state.multiSelectedTrackIds, {t0.id, t1.id, t2.id});
+
+      // Clicking 'M' on one selected track toggles mute across all multi-selected tracks
+      final t0Header = find.byKey(Key('track_header_${t0.id}'));
+      await tester.tap(find.descendant(of: t0Header, matching: find.text('M')));
+      await tester.pumpAndSettle();
+      expect(t0.isMuted, isTrue);
+      expect(t1.isMuted, isTrue);
+      expect(t2.isMuted, isTrue);
+
+      // 2) Drag horizontally inside Track 0 only (from empty x=20 to x=260, keeping y inside Track 0):
+      // should ONLY select Track 0 & c0 (NOT t1, t2, c1, c2!)
+      final lane0Box = tester.getRect(find.byKey(Key('timeline_lane_${t0.id}')));
+      final drag1 = await tester.startGesture(
+        Offset(lane0Box.left + 20, lane0Box.top + 45),
+        kind: PointerDeviceKind.mouse,
+      );
+      await drag1.moveTo(Offset(lane0Box.left + 260, lane0Box.top + 55));
+      await tester.pump();
+      expect(find.byKey(const Key('timeline_marquee_box')), findsOneWidget);
+      expect(state.multiSelectedTrackIds, {t0.id});
+      expect(state.multiSelectedClips.map((c) => c.id).toSet(), {'mq_c0'});
+      await drag1.up();
+      await tester.pumpAndSettle();
+
+      // 3) Drag diagonally from Track 0 down into Track 1 (x=20..260, y from t0 center to t1 center):
+      // should select t0 + t1 & c0 + c1, still NOT t2 or c2!
+      final lane1Box = tester.getRect(find.byKey(Key('timeline_lane_${t1.id}')));
+      final drag2 = await tester.startGesture(
+        Offset(lane0Box.left + 20, lane0Box.center.dy),
+        kind: PointerDeviceKind.mouse,
+      );
+      await drag2.moveTo(Offset(lane0Box.left + 260, lane1Box.center.dy));
+      await tester.pump();
+      expect(state.multiSelectedTrackIds, {t0.id, t1.id});
+      expect(state.multiSelectedClips.map((c) => c.id).toSet(), {'mq_c0', 'mq_c1'});
+      await drag2.up();
+      await tester.pumpAndSettle();
     });
   });
 }

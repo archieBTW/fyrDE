@@ -228,3 +228,35 @@ Uint8List mapAlignedPcm16ToStereo(
   }
   return outBytes;
 }
+
+/// Bounds queued live-monitoring stereo `f32le` PCM bytes to [maxQueuedBytes]
+/// without calling `resetBufferStream` on an active stream.
+///
+/// When [floatBytes] exceeds the remaining headroom, only the newest
+/// frame-aligned tail fitting the remaining budget is returned; when the stream
+/// buffer is already at or above [maxQueuedBytes], an empty view is returned so
+/// the mixer drains naturally without deadlocking or accumulating lag.
+Uint8List sliceLatestStereoFloatPcmFrames(
+  Uint8List floatBytes, {
+  required int currentlyBufferedBytes,
+  int maxQueuedBytes = 16384,
+  int frameBytes = 8,
+}) {
+  final int safeFrameBytes = frameBytes < 1 ? 8 : frameBytes;
+  final int usableLen = (floatBytes.length ~/ safeFrameBytes) * safeFrameBytes;
+  if (usableLen == 0) return Uint8List(0);
+
+  final int clampedBuffered =
+      currentlyBufferedBytes < 0 ? 0 : currentlyBufferedBytes;
+  final int roomBytes =
+      ((maxQueuedBytes - clampedBuffered) ~/ safeFrameBytes) * safeFrameBytes;
+  if (roomBytes <= 0) return Uint8List(0);
+
+  if (usableLen <= roomBytes) {
+    return usableLen == floatBytes.length
+        ? floatBytes
+        : Uint8List.sublistView(floatBytes, 0, usableLen);
+  }
+  final int start = usableLen - roomBytes;
+  return Uint8List.sublistView(floatBytes, start, usableLen);
+}
