@@ -50,6 +50,30 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   double get beatWidth => 100.0 * 60.0 / bpm;
   double get snapResolution => beatWidth / 4.0;
 
+  double get _timelineTotalUnits {
+    final double barUnits = beatWidth * max(1, timeSigTop);
+    double maxUnits = max(6400.0, barUnits * 32.0);
+    for (final clips in trackClips.values) {
+      for (final c in clips) {
+        if (c.start + c.length + 1600.0 > maxUnits) {
+          maxUnits = c.start + c.length + 1600.0;
+        }
+      }
+    }
+    for (final m in songMarkers) {
+      if (m.position + 1600.0 > maxUnits) {
+        maxUnits = m.position + 1600.0;
+      }
+    }
+    if (isLooping && loopEnd + 800.0 > maxUnits) {
+      maxUnits = loopEnd + 800.0;
+    }
+    if (playheadPosition + 1600.0 > maxUnits) {
+      maxUnits = playheadPosition + 1600.0;
+    }
+    return maxUnits;
+  }
+
   bool isLooping = false;
   double loopStart = 0.0;
   double loopEnd = 400.0;
@@ -91,7 +115,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   final Set<int> _qwertyActiveNotes = {};
   bool _tunerEnabled = false;
   PitchDetectionResult? _detectedPitch;
-  final List<double> _tunerBuffer = [];
+  final RealtimePitchTracker _tunerTracker = RealtimePitchTracker();
   bool _isBottomPanelMaximized = false;
   double _masterLufs = -60.0;
   double _stereoCorrelation = 1.0;
@@ -113,6 +137,9 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   String? _midiLearnTarget;
   List<MidiCcMapping> midiMappings = [];
   List<DawClip> _activeDragClips = [];
+  String? _dragSourceTrackId;
+  String? _dragTargetTrackId;
+  final GlobalKey _timelineLaneListKey = GlobalKey();
 
   bool _isSessionView = false;
   final Set<String> _activeSessionClipIds = {};
@@ -127,6 +154,9 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   String? _currentRecordPath;
   StreamSubscription<List<int>>? _micStreamSub;
   Process? _parecordProcess;
+  bool _usingAudioRecorderCapture = false;
+  int _micCaptureGeneration = 0;
+  Future<void> _micLifecycleChain = Future<void>.value();
   Uint8List _micRemainderBytes = Uint8List(0);
   WavWriter? _wavWriter;
   final Stopwatch _playStopwatch = Stopwatch();
@@ -149,6 +179,20 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
 
   List<InputDevice> _inputDevices = [];
   InputDevice? _selectedInputDevice;
+  Map<String, int> _inputDeviceChannels = {};
+  String _defaultInputChannelId = 'stereo:0';
+  int _activeCaptureChannels = 2;
+
+  List<PlaybackDevice> _outputDevices = [];
+  List<LinuxAudioSink> _linuxSinks = [];
+  String _selectedOutputDeviceKey = 'system_default';
+  String? _systemDefaultOutputLabel;
+  String? _lastAppliedOutputDeviceName;
+  String? _lastRoutedSinkName;
+  double _recordingLatencyMs = 35.0;
+  double? _recordingFirstChunkPos;
+  int _recordingFirstChunkFrames = 0;
+  Completer<void>? _micWarmupCompleter;
 
   Future<void> _writeAutoSave() async {
     try {
@@ -939,7 +983,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         if (t.isArmed &&
             (t.midiInputId == null || t.midiInputId == deviceId) &&
             (t.type == TrackType.midi || t.type == TrackType.sampler)) {
-          var clips = trackClips[t.id] ?? [];
+          final clips = trackClips.putIfAbsent(t.id, () => []);
           var activeClip = clips
               .where(
                 (c) =>
@@ -947,6 +991,42 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                     c.start + c.length >= playheadPosition,
               )
               .firstOrNull;
+          if (activeClip == null) {
+            final double barUnits = beatWidth * max(1, timeSigTop);
+            final precedingMidi = clips
+                .whereType<MidiClip>()
+                .where(
+                  (c) =>
+                      c.start <= playheadPosition &&
+                      (recordingStartPos == null ||
+                          c.start + c.length >= recordingStartPos!),
+                )
+                .lastOrNull;
+            if (precedingMidi != null) {
+              final double minNewLen =
+                  (playheadPosition - precedingMidi.start) + barUnits;
+              if (minNewLen > precedingMidi.length) {
+                precedingMidi.length = minNewLen;
+              }
+              activeClip = precedingMidi;
+            } else {
+              final double clipStart = recordingStartPos != null &&
+                      recordingStartPos! <= playheadPosition
+                  ? recordingStartPos!
+                  : (playheadPosition / barUnits).floor() * barUnits;
+              final newClip = MidiClip(
+                id: UniqueKey().toString(),
+                start: clipStart,
+                length: max(
+                  barUnits * 4,
+                  (playheadPosition - clipStart) + barUnits,
+                ),
+                color: t.color,
+              );
+              clips.add(newClip);
+              activeClip = newClip;
+            }
+          }
           if (activeClip is MidiClip) {
             double localStart =
                 playheadPosition - activeClip.start + activeClip.startOffset;
@@ -2255,6 +2335,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     windowManager.addListener(this);
     _audioRecorder = AudioRecorder();
     _initInputDevices();
+    _initOutputRouting(applyRoute: true);
     _loadUserSampleFolders();
     _checkAutoSave();
     _initAudioVisualizationAndBuses();
@@ -2314,13 +2395,202 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     });
   }
 
+  int _channelCountForDevice(InputDevice? device) => device == null
+      ? 2
+      : resolveInputDeviceChannelCount(device.id, _inputDeviceChannels);
+
+  List<AudioInputChannelOption> _inputChannelOptionsForSelectedDevice() =>
+      buildInputChannelOptions(_channelCountForDevice(_selectedInputDevice));
+
+  AudioInputChannelOption _channelOptionForTrack(Track? track) =>
+      resolveInputChannelOption(
+        track?.inputChannelId ?? _defaultInputChannelId,
+        _channelCountForDevice(_selectedInputDevice),
+      );
+
+  AudioInputChannelOption _primaryInputChannelOption() {
+    Track? active = tracks
+        .where((t) => t.type == TrackType.audio && t.isArmed)
+        .firstOrNull;
+    active ??= tracks
+        .where((t) => t.type == TrackType.audio && t.isMonitoring)
+        .firstOrNull;
+    if (active == null &&
+        selectedTrackIndex != null &&
+        selectedTrackIndex! < tracks.length &&
+        tracks[selectedTrackIndex!].type == TrackType.audio) {
+      active = tracks[selectedTrackIndex!];
+    }
+    return _channelOptionForTrack(active);
+  }
+
+  Future<void> _initOutputRouting({bool applyRoute = false}) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedKey = prefs.getString('sb_output_device') ?? 'system_default';
+      final savedLatency = prefs.getDouble('sb_rec_latency_ms') ?? 35.0;
+
+      List<PlaybackDevice> devices = [];
+      try {
+        if (SoLoud.instance.isInitialized) {
+          devices = SoLoud.instance.listPlaybackDevices();
+        }
+      } catch (_) {}
+
+      String? defSinkName;
+      List<LinuxAudioSink> sinks = [];
+      if (Platform.isLinux) {
+        defSinkName = await LinuxOutputRouter.getDefaultSinkName();
+        sinks = await LinuxOutputRouter.listSinks();
+      }
+
+      LinuxAudioSink? sysSink;
+      if (defSinkName != null) {
+        sysSink =
+            sinks.where((s) => s.name == defSinkName).firstOrNull ??
+            LinuxAudioSink(name: defSinkName, description: defSinkName);
+      }
+
+      final defaultPlayDev = matchPlaybackDeviceForSink(devices, sysSink);
+      final sysLabel = sysSink?.displayName ?? defaultPlayDev?.name;
+
+      PlaybackDevice? targetPlayDev = defaultPlayDev;
+      LinuxAudioSink? targetSink = sysSink;
+      if (savedKey.startsWith('dev:')) {
+        final wantName = savedKey.substring(4);
+        final explicitDev =
+            devices.where((d) => d.name == wantName).firstOrNull;
+        if (explicitDev != null) {
+          targetPlayDev = explicitDev;
+          targetSink = matchSinkForPlaybackDevice(sinks, explicitDev) ?? sysSink;
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _outputDevices = devices;
+          _linuxSinks = sinks;
+          _selectedOutputDeviceKey = savedKey;
+          _systemDefaultOutputLabel = sysLabel;
+          _recordingLatencyMs = savedLatency.clamp(0.0, 200.0);
+        });
+      }
+
+      if (applyRoute) {
+        await _applyResolvedOutputRoute(targetPlayDev, targetSink);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _applyResolvedOutputRoute(
+    PlaybackDevice? targetPlayDev,
+    LinuxAudioSink? targetSink,
+  ) async {
+    try {
+      if (SoLoud.instance.isInitialized && targetPlayDev != null) {
+        if (_lastAppliedOutputDeviceName != targetPlayDev.name) {
+          SoLoud.instance.changeDevice(newDevice: targetPlayDev);
+          _lastAppliedOutputDeviceName = targetPlayDev.name;
+        }
+      }
+    } catch (_) {}
+
+    if (Platform.isLinux && targetSink != null) {
+      _lastRoutedSinkName = targetSink.name;
+      await LinuxOutputRouter.routeProcessAudioToSink(
+        targetSink.name,
+        targetSinkIndex: targetSink.index,
+      );
+      Future.delayed(const Duration(milliseconds: 140), () {
+        if (!mounted) return;
+        LinuxOutputRouter.routeProcessAudioToSink(
+          targetSink.name,
+          targetSinkIndex: targetSink.index,
+        );
+      });
+    }
+  }
+
+  Future<void> _selectOutputDevice(String key) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('sb_output_device', key);
+    } catch (_) {}
+
+    PlaybackDevice? targetPlayDev;
+    LinuxAudioSink? targetSink;
+    if (key == 'system_default') {
+      final defName = Platform.isLinux
+          ? await LinuxOutputRouter.getDefaultSinkName()
+          : null;
+      if (Platform.isLinux) {
+        _linuxSinks = await LinuxOutputRouter.listSinks();
+      }
+      if (defName != null) {
+        targetSink =
+            _linuxSinks.where((s) => s.name == defName).firstOrNull ??
+            LinuxAudioSink(name: defName, description: defName);
+      }
+      targetPlayDev = matchPlaybackDeviceForSink(_outputDevices, targetSink);
+    } else if (key.startsWith('dev:')) {
+      final wantName = key.substring(4);
+      targetPlayDev =
+          _outputDevices.where((d) => d.name == wantName).firstOrNull;
+      targetSink = matchSinkForPlaybackDevice(_linuxSinks, targetPlayDev);
+    }
+
+    if (mounted) {
+      setState(() {
+        _selectedOutputDeviceKey = key;
+        if (key == 'system_default' && targetSink != null) {
+          _systemDefaultOutputLabel = targetSink.displayName;
+        }
+      });
+    }
+
+    _lastAppliedOutputDeviceName = null;
+    await _applyResolvedOutputRoute(targetPlayDev, targetSink);
+  }
+
   Future<void> _initInputDevices() async {
     try {
-      final devices = await _audioRecorder.listInputDevices();
+      final rawDevices = await _audioRecorder.listInputDevices();
+      final seenIds = <String>{};
+      final devices = <InputDevice>[];
+      for (final d in rawDevices) {
+        final cleanId = normalizeAudioInputDeviceId(d.id);
+        final effectiveId = cleanId.isNotEmpty ? cleanId : d.id;
+        if (seenIds.add(effectiveId)) {
+          devices.add(InputDevice(id: effectiveId, label: d.label));
+        }
+      }
+      Map<String, int> channelMap = {};
+      if (Platform.isLinux) {
+        try {
+          final res = await Process.run('pactl', ['list', 'sources']);
+          if (res.exitCode == 0) {
+            channelMap = parsePactlSourceChannels(
+              res.stdout.toString().split('\n'),
+            );
+          }
+        } catch (_) {}
+      }
+      if (!mounted) return;
       setState(() {
         _inputDevices = devices;
+        if (channelMap.isNotEmpty) {
+          _inputDeviceChannels = channelMap;
+        }
         if (_inputDevices.isNotEmpty) {
-          _selectedInputDevice = _inputDevices.first;
+          final prevId = _selectedInputDevice != null
+              ? normalizeAudioInputDeviceId(_selectedInputDevice!.id)
+              : null;
+          _selectedInputDevice = _inputDevices
+                  .where((d) => d.id == prevId)
+                  .firstOrNull ??
+              _inputDevices.first;
+        } else {
+          _selectedInputDevice = null;
         }
       });
     } catch (_) {}
@@ -2779,8 +3049,10 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     } catch (_) {}
     playTimer?.cancel();
     _playStopwatch.stop();
-    _micStreamSub?.cancel();
     _parecordProcess?.kill();
+    _parecordProcess = null;
+    _micStreamSub?.cancel();
+    _micStreamSub = null;
     _audioRecorder.dispose();
     _focusNode.dispose();
     _bpmFocus.dispose();
@@ -2788,6 +3060,30 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     _timelineScrollController.dispose();
     _midiSubscription?.cancel();
     super.dispose();
+  }
+
+  Future<void> _syncLinuxSystemDefaultRoute() async {
+    if (!Platform.isLinux || _selectedOutputDeviceKey != 'system_default') {
+      return;
+    }
+    try {
+      final defSink = await LinuxOutputRouter.getDefaultSinkName();
+      if (!mounted || defSink == null) return;
+      if (defSink != _lastRoutedSinkName) {
+        await _initOutputRouting(applyRoute: true);
+      } else {
+        final sink = _linuxSinks.where((s) => s.name == defSink).firstOrNull;
+        await LinuxOutputRouter.routeProcessAudioToSink(
+          defSink,
+          targetSinkIndex: sink?.index,
+        );
+      }
+    } catch (_) {}
+  }
+
+  @override
+  void onWindowFocus() {
+    unawaited(_syncLinuxSystemDefaultRoute());
   }
 
   @override
@@ -3542,8 +3838,114 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     clip.delaySendHandle = null;
   }
 
+  Future<void> _setRecordingLatencyMs(double ms) async {
+    final clamped = ms.clamp(0.0, 200.0);
+    setState(() => _recordingLatencyMs = clamped);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble('sb_rec_latency_ms', clamped);
+    } catch (_) {}
+  }
+
+  void _stopAllActivePlaybackVoices() {
+    for (final track in tracks) {
+      for (final clip in trackClips[track.id] ?? []) {
+        if (clip is AudioClip) {
+          _stopAudioClipHandles(clip);
+        }
+      }
+      final releaseMs = getInstrumentPreset(track.instrumentIndex).releaseMs;
+      for (final h in track.activeMidiHandles) {
+        releaseInstrumentNote(h, releaseMs: releaseMs);
+      }
+      track.activeMidiHandles.clear();
+      if (_isSoloudReady) {
+        for (final pad in track.samplerPads.values) {
+          if (pad.currentHandle != null &&
+              SoLoud.instance.getIsValidVoiceHandle(pad.currentHandle!)) {
+            SoLoud.instance.stop(pad.currentHandle!);
+          }
+        }
+      }
+    }
+    for (final list in _activeMidiNotes.values) {
+      for (final entry in list) {
+        releaseInstrumentNote(entry.handle, releaseMs: entry.releaseMs);
+      }
+    }
+    _activeMidiNotes.clear();
+    if (_referenceHandle != null) {
+      try {
+        SoLoud.instance.stop(_referenceHandle!);
+      } catch (_) {}
+      _referenceHandle = null;
+    }
+  }
+
+  void _triggerVoicesAtPosition(double pos) {
+    if (_isAuditioningReference && _referenceSource != null && _isSoloudReady) {
+      try {
+        _referenceHandle = SoLoud.instance.play(
+          _referenceSource!,
+          volume: (_referenceGain * masterVolume).clamp(0.0, 1.5),
+          paused: true,
+        );
+        final seekMs = ((pos / 100.0) * 1000.0).round();
+        if (seekMs > 0) {
+          SoLoud.instance.seek(_referenceHandle!, Duration(milliseconds: seekMs));
+        }
+        SoLoud.instance.setPause(_referenceHandle!, false);
+      } catch (_) {}
+    }
+
+    final bool anySolo = tracks.any((t) => t.isSolo);
+    for (final track in tracks) {
+      if (track.type == TrackType.group) continue;
+      if (_isSoloudReady) {
+        track.bus = ensureActiveBus(track.bus);
+      }
+      _updateTrackFilters(track, atPlayhead: pos);
+      if (!_isTrackAudible(track, anySolo)) continue;
+
+      for (final clip in trackClips[track.id] ?? []) {
+        if (clip is AudioClip && clip.source != null) {
+          if (pos >= clip.start && pos < clip.start + clip.length) {
+            _playAudioClipWithSends(track, clip, pos);
+          }
+        }
+      }
+    }
+  }
+
+  void _seekPlayhead(
+    double targetPos, {
+    bool retriggerAudio = true,
+    bool snap = false,
+  }) {
+    double pos = targetPos.clamp(0.0, _timelineTotalUnits);
+    if (snap && snapToGrid) {
+      pos = (pos / snapResolution).round() * snapResolution;
+    }
+    setState(() {
+      if (isPlaying) {
+        _stopAllActivePlaybackVoices();
+      }
+      playheadPosition = pos;
+      if (isPlaying) {
+        _playStopwatch
+          ..reset()
+          ..start();
+        _lastStopwatchMicros = 0;
+        if (retriggerAudio) {
+          _triggerVoicesAtPosition(pos);
+        }
+      }
+    });
+  }
+
   Future<void> _togglePlay() async {
     if (!isPlaying) {
+      unawaited(_syncLinuxSystemDefaultRoute());
       for (var track in tracks) {
         if (track.type == TrackType.midi) {
           final preset = getInstrumentPreset(track.instrumentIndex);
@@ -3557,36 +3959,22 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     setState(() {
       isPlaying = !isPlaying;
       if (isPlaying) {
-        if (_isAuditioningReference &&
-            _referenceSource != null &&
-            _isSoloudReady) {
-          try {
-            _referenceHandle = SoLoud.instance.play(
-              _referenceSource!,
-              volume: (_referenceGain * masterVolume).clamp(0.0, 1.5),
-              paused: true,
-            );
-            final seekMs = ((playheadPosition / 100.0) * 1000.0).round();
-            if (seekMs > 0) {
-              SoLoud.instance.seek(_referenceHandle!, Duration(milliseconds: seekMs));
-            }
-            SoLoud.instance.setPause(_referenceHandle!, false);
-          } catch (_) {}
-        }
-        bool anySolo = tracks.any((t) => t.isSolo);
-        for (var track in tracks) {
-          if (track.type == TrackType.group) continue;
-          track.bus = ensureActiveBus(track.bus);
-          _updateTrackFilters(track, atPlayhead: playheadPosition);
-          if (!_isTrackAudible(track, anySolo)) continue;
+        _triggerVoicesAtPosition(playheadPosition);
 
-          for (var clip in trackClips[track.id] ?? []) {
-            if (clip is AudioClip && clip.source != null) {
-              if (playheadPosition >= clip.start &&
-                  playheadPosition < clip.start + clip.length) {
-                _playAudioClipWithSends(track, clip, playheadPosition);
-              }
-            }
+        // Fire Beat 1 metronome click immediately when starting on a beat boundary
+        if (isMetronomeEnabled && _isSoloudReady && _countInBeatsLeft == 0) {
+          final double bw = max(1.0, beatWidth);
+          final double rem = playheadPosition % bw;
+          if (rem < 1.0 || (bw - rem) < 1.0) {
+            final curMeter = TempoMarker.effectiveMeterAt(
+              playheadPosition,
+              tempoMarkers,
+              timeSigTop,
+              timeSigBottom,
+            );
+            final int beatIdx = (playheadPosition / bw).round();
+            final bool isDownbeat = beatIdx % max(1, curMeter.numerator) == 0;
+            _playMetronomeClick(isDownbeat);
           }
         }
 
@@ -3597,8 +3985,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
 
         playTimer = Timer.periodic(const Duration(milliseconds: 10), (timer) {
           final int nowMicros = _playStopwatch.elapsedMicroseconds;
-          final double dtSec =
-              (nowMicros - _lastStopwatchMicros).clamp(0, 100000) / 1000000.0;
+          final double dtSec = (nowMicros - _lastStopwatchMicros) / 1000000.0;
           _lastStopwatchMicros = nowMicros;
           if (dtSec <= 0) return;
 
@@ -3627,7 +4014,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
               timeSigTop,
               timeSigBottom,
             );
-            if (isMetronomeEnabled && SoLoud.instance.isInitialized) {
+            if (isMetronomeEnabled && _isSoloudReady) {
               int oldBeat = (oldPos / beatWidth).floor();
               int newBeat = (playheadPosition / beatWidth).floor();
               if (newBeat > oldBeat) {
@@ -3769,7 +4156,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                   }
                 }
 
-                if (clip is MidiClip && SoLoud.instance.isInitialized) {
+                if (clip is MidiClip && _isSoloudReady) {
                   double localOld = oldPos - clip.start + clip.startOffset;
                   double localNew =
                       playheadPosition - clip.start + clip.startOffset;
@@ -3880,37 +4267,25 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
               }
             }
             if (isLooping && playheadPosition >= loopEnd) {
+              _stopAllActivePlaybackVoices();
               playheadPosition = loopStart;
-              for (var track in tracks) {
-                for (var clip in trackClips[track.id] ?? []) {
-                  if (clip is AudioClip) {
-                    _stopAudioClipHandles(clip);
-                  }
-                }
-              }
-            } else if (!isLooping) {
-              double maxPos = 0.0;
-              for (var t in tracks) {
-                for (var c in trackClips[t.id] ?? []) {
-                  if (c.start + c.length > maxPos) maxPos = c.start + c.length;
-                }
-              }
-              if (maxPos < 2000.0) maxPos = 2000.0;
-
-              if (playheadPosition > maxPos) {
-                playheadPosition = 0.0;
-                _togglePlay();
-              }
+              _triggerVoicesAtPosition(loopStart);
             }
 
             if (autoScrollPlayhead && _horizontalScrollController.hasClients) {
-              double playheadX = playheadPosition * _zoomX;
-              double offset = _horizontalScrollController.offset;
-              double width = MediaQuery.of(context).size.width - 250;
+              final double playheadX = playheadPosition * _zoomX;
+              final double offset = _horizontalScrollController.offset;
+              final double width = MediaQuery.of(context).size.width - 250;
+              final double maxExtent =
+                  _horizontalScrollController.position.maxScrollExtent;
               if (playheadX > offset + width - 100) {
-                _horizontalScrollController.jumpTo(playheadX - width + 100);
+                _horizontalScrollController.jumpTo(
+                  (playheadX - width + 100).clamp(0.0, maxExtent),
+                );
               } else if (playheadX < offset) {
-                _horizontalScrollController.jumpTo(playheadX);
+                _horizontalScrollController.jumpTo(
+                  playheadX.clamp(0.0, maxExtent),
+                );
               }
             }
           });
@@ -3918,38 +4293,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       } else {
         playTimer?.cancel();
         _playStopwatch.stop();
-        for (var track in tracks) {
-          for (var clip in trackClips[track.id] ?? []) {
-            if (clip is AudioClip) {
-              _stopAudioClipHandles(clip);
-            }
-          }
-          final releaseMs = getInstrumentPreset(
-            track.instrumentIndex,
-          ).releaseMs;
-          for (var h in track.activeMidiHandles) {
-            releaseInstrumentNote(h, releaseMs: releaseMs);
-          }
-          track.activeMidiHandles.clear();
-          for (var pad in track.samplerPads.values) {
-            if (pad.currentHandle != null &&
-                SoLoud.instance.getIsValidVoiceHandle(pad.currentHandle!)) {
-              SoLoud.instance.stop(pad.currentHandle!);
-            }
-          }
-        }
-        for (var list in _activeMidiNotes.values) {
-          for (var entry in list) {
-            releaseInstrumentNote(entry.handle, releaseMs: entry.releaseMs);
-          }
-        }
-        _activeMidiNotes.clear();
-        if (_referenceHandle != null) {
-          try {
-            SoLoud.instance.stop(_referenceHandle!);
-          } catch (_) {}
-          _referenceHandle = null;
-        }
+        _stopAllActivePlaybackVoices();
       }
     });
   }
@@ -4020,36 +4364,12 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     }
   }
 
-  void _onMicPcmChunk(List<int> rawChunk) {
-    if (rawChunk.isEmpty) return;
-
-    Uint8List combined;
-    if (_micRemainderBytes.isEmpty) {
-      combined = rawChunk is Uint8List
-          ? rawChunk
-          : Uint8List.fromList(rawChunk);
-    } else {
-      combined = Uint8List(_micRemainderBytes.length + rawChunk.length);
-      combined.setRange(0, _micRemainderBytes.length, _micRemainderBytes);
-      combined.setRange(_micRemainderBytes.length, combined.length, rawChunk);
-    }
-
-    // Align to 4-byte stereo 16-bit frames
-    final int alignedLen = combined.length & ~3;
-    if (alignedLen == 0) {
-      _micRemainderBytes = combined;
-      return;
-    }
-    final Uint8List rawAlignedBytes = combined.length == alignedLen
-        ? combined
-        : Uint8List.sublistView(combined, 0, alignedLen);
-    _micRemainderBytes = combined.length > alignedLen
-        ? Uint8List.fromList(combined.sublist(alignedLen))
-        : Uint8List(0);
-
-    // Convert s16le PCM to float samples for gate, tuner & monitoring
-    final int numSamples = alignedLen >> 1;
-    final ByteData bdIn = ByteData.sublistView(rawAlignedBytes);
+  ({Uint8List pcmBytes, Float32List floatSamples}) _processStereoPcmWithGate(
+    Uint8List stereoBytes,
+    double gateThreshold,
+  ) {
+    final int numSamples = stereoBytes.length >> 1;
+    final ByteData bdIn = ByteData.sublistView(stereoBytes);
     final Float32List floatSamples = Float32List(numSamples);
     double peak = 0.0;
     for (int i = 0; i < numSamples; i++) {
@@ -4059,7 +4379,57 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       if (a > peak) peak = a;
     }
 
-    // Apply Input Noise Gate when active audio track has gate > 0
+    Uint8List outBytes = stereoBytes;
+    if (gateThreshold > 0.001 && peak < gateThreshold) {
+      final attenuated = Uint8List(stereoBytes.length);
+      final bdOut = ByteData.sublistView(attenuated);
+      for (int i = 0; i < numSamples; i++) {
+        floatSamples[i] *= 0.02;
+        bdOut.setInt16(
+          i << 1,
+          (floatSamples[i] * 32767.0).round().clamp(-32768, 32767),
+          Endian.little,
+        );
+      }
+      outBytes = attenuated;
+    }
+    return (pcmBytes: outBytes, floatSamples: floatSamples);
+  }
+
+  void _onMicPcmChunk(List<int> rawChunk) {
+    if (_micWarmupCompleter != null && !_micWarmupCompleter!.isCompleted) {
+      _micWarmupCompleter!.complete();
+    }
+    if (rawChunk.isEmpty) return;
+
+    final int capCh = _activeCaptureChannels.clamp(1, 32);
+    final aligned = alignPcm16Frames(
+      rawChunk,
+      _micRemainderBytes,
+      captureChannels: capCh,
+    );
+    _micRemainderBytes = aligned.nextRemainder;
+    if (aligned.alignedFrames.isEmpty) return;
+
+    final Map<String, ({Uint8List pcmBytes, Float32List floatSamples})>
+        mappedCache = {};
+
+    ({Uint8List pcmBytes, Float32List floatSamples}) getProcessed(
+      AudioInputChannelOption opt,
+      double gateThreshold,
+    ) {
+      final key = '${opt.id}|${gateThreshold.toStringAsFixed(4)}';
+      return mappedCache.putIfAbsent(key, () {
+        final stereo = mapAlignedPcm16ToStereo(
+          aligned.alignedFrames,
+          captureChannels: capCh,
+          selection: opt,
+        );
+        return _processStereoPcmWithGate(stereo, gateThreshold);
+      });
+    }
+
+    final primaryOpt = _primaryInputChannelOption();
     double activeGate = 0.0;
     for (final t in tracks) {
       if (t.type == TrackType.audio && (t.isArmed || t.isMonitoring)) {
@@ -4075,37 +4445,38 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       activeGate = tracks[selectedTrackIndex!].noiseGateThreshold;
     }
 
-    Uint8List outBytes = rawAlignedBytes;
-    if (activeGate > 0.001 && peak < activeGate) {
-      final attenuated = Uint8List(alignedLen);
-      final bdOut = ByteData.sublistView(attenuated);
-      for (int i = 0; i < numSamples; i++) {
-        floatSamples[i] *= 0.02;
-        bdOut.setInt16(
-          i << 1,
-          (floatSamples[i] * 32767.0).round().clamp(-32768, 32767),
-          Endian.little,
-        );
-      }
-      outBytes = attenuated;
-    }
-
-    // Feed real-time pitch detector when Guitar Tuner is open
+    // Feed real-time pitch detector with the UN-GATED selected input channel
+    // so cranking the Noise Gate never blinds the tuner.
     if (_tunerEnabled) {
-      for (int i = 0; i + 1 < numSamples; i += 2) {
-        _tunerBuffer.add((floatSamples[i] + floatSamples[i + 1]) * 0.5);
+      final tunerFloat = getProcessed(primaryOpt, 0.0).floatSamples;
+      final monoSamples = Float64List(tunerFloat.length >> 1);
+      for (int i = 0, j = 0; i + 1 < tunerFloat.length; i += 2, j++) {
+        monoSamples[j] = (tunerFloat[i] + tunerFloat[i + 1]) * 0.5;
       }
-      if (_tunerBuffer.length >= 2048) {
-        final slice = Float64List.fromList(
-          _tunerBuffer.sublist(_tunerBuffer.length - 2048),
-        );
-        _detectedPitch = detectPitchHz(slice, 44100);
-        _tunerBuffer.removeRange(0, _tunerBuffer.length - 1024);
+      if (_tunerTracker.addSamples(monoSamples)) {
+        final nextPitch = _tunerTracker.current;
+        if (mounted) {
+          setState(() => _detectedPitch = nextPitch);
+        } else {
+          _detectedPitch = nextPitch;
+        }
       }
     }
 
     if (isRecording && _wavWriter != null) {
-      _wavWriter!.write(outBytes);
+      final armedTrack = tracks
+          .where((t) => t.type == TrackType.audio && t.isArmed)
+          .firstOrNull;
+      final recOpt = armedTrack != null
+          ? _channelOptionForTrack(armedTrack)
+          : primaryOpt;
+      final recGate = armedTrack?.noiseGateThreshold ?? activeGate;
+      final recBytes = getProcessed(recOpt, recGate).pcmBytes;
+      if (_recordingFirstChunkPos == null && recBytes.isNotEmpty) {
+        _recordingFirstChunkPos = playheadPosition;
+        _recordingFirstChunkFrames = recBytes.length >> 2;
+      }
+      _wavWriter!.write(recBytes);
     }
 
     if (!SoLoud.instance.isInitialized) return;
@@ -4113,8 +4484,6 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       (t) => t.type == TrackType.audio && t.isMonitoring,
     );
     if (!anyMonitoring) return;
-
-    final Uint8List floatBytes = floatSamples.buffer.asUint8List();
 
     final bool anySolo = tracks.any((t) => t.isSolo);
     for (final t in tracks) {
@@ -4125,6 +4494,12 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       final src = t.monitorSource;
       if (src == null) continue;
       try {
+        final trackProcessed = getProcessed(
+          _channelOptionForTrack(t),
+          t.noiseGateThreshold,
+        );
+        final Uint8List floatBytes =
+            trackProcessed.floatSamples.buffer.asUint8List();
         // Bound buffered monitoring audio to < 18ms (6350 bytes of stereo f32le at 44.1kHz)
         // so live monitoring stays ultra-low-latency and never accumulates lag
         final int bufferedBytes = SoLoud.instance.getBufferSize(src);
@@ -4150,53 +4525,137 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     }
   }
 
-  Future<void> _stopMicCapture() async {
-    await _micStreamSub?.cancel();
-    _micStreamSub = null;
-    if (_parecordProcess != null) {
-      _parecordProcess!.kill();
-      _parecordProcess = null;
+  Future<void> _runSerializedMicOp(Future<void> Function() action) {
+    final next = _micLifecycleChain.then((_) => action(), onError: (_) => action());
+    _micLifecycleChain = next.catchError((_) {});
+    return next;
+  }
+
+  Future<void> _stopMicCaptureInternal() async {
+    _micCaptureGeneration++;
+    // Terminate parecord before cancelling stdout so a stalled child process
+    // (e.g. disconnected/busy PipeWire node) cannot block stream cancellation.
+    final proc = _parecordProcess;
+    _parecordProcess = null;
+    if (proc != null) {
+      try {
+        proc.kill(ProcessSignal.sigterm);
+      } catch (_) {}
     }
-    try {
-      await _audioRecorder.stop();
-    } catch (_) {}
+
+    final sub = _micStreamSub;
+    _micStreamSub = null;
+    if (sub != null) {
+      try {
+        await sub.cancel().timeout(
+          const Duration(milliseconds: 250),
+          onTimeout: () {},
+        );
+      } catch (_) {}
+    }
+
+    final wasRecorder = _usingAudioRecorderCapture;
+    _usingAudioRecorderCapture = false;
+    if (wasRecorder) {
+      try {
+        await _audioRecorder.stop().timeout(
+          const Duration(milliseconds: 250),
+          onTimeout: () => null,
+        );
+      } catch (_) {}
+    }
     _micRemainderBytes = Uint8List(0);
   }
 
-  Future<void> _restartMicCapture() async {
-    await _stopMicCapture();
-    await _updateMicState();
+  void _selectTrackInputChannel(Track? track, String channelId) {
+    _saveState();
+    setState(() {
+      _defaultInputChannelId = channelId;
+      if (track != null) {
+        track.inputChannelId = channelId;
+      }
+      _tunerTracker.reset();
+      _detectedPitch = null;
+    });
   }
 
-  Future<void> _updateMicState() async {
+  Future<void> _restartMicCapture() => _runSerializedMicOp(() async {
+    await _stopMicCaptureInternal();
+    if (_tunerEnabled) {
+      _tunerTracker.reset();
+      if (mounted) setState(() => _detectedPitch = null);
+    }
+    await _updateMicStateInternal();
+  });
+
+  Future<void> _updateMicState({bool forceMic = false}) =>
+      _runSerializedMicOp(() => _updateMicStateInternal(forceMic: forceMic));
+
+  Future<void> _updateMicStateInternal({bool forceMic = false}) async {
     final bool wantsRecord =
         isRecording &&
         tracks.any((t) => t.type == TrackType.audio && t.isArmed);
     final bool wantsMonitor = tracks.any(
       (t) => t.type == TrackType.audio && t.isMonitoring,
     );
-    final bool needsMic = wantsRecord || wantsMonitor || _tunerEnabled;
+    final bool needsMic = forceMic || wantsRecord || wantsMonitor || _tunerEnabled;
 
     _syncTrackMonitoringHandles();
 
+    final int desiredChannels = _channelCountForDevice(_selectedInputDevice).clamp(1, 32);
+
+    if (needsMic &&
+        _micStreamSub != null &&
+        _activeCaptureChannels != desiredChannels) {
+      await _stopMicCaptureInternal();
+    }
+
     if (needsMic && _micStreamSub == null) {
       _micRemainderBytes = Uint8List(0);
+      final String cleanDeviceId = _selectedInputDevice != null
+          ? normalizeAudioInputDeviceId(_selectedInputDevice!.id)
+          : '';
+      final int gen = ++_micCaptureGeneration;
       bool startedLowLatencyLinux = false;
       if (Platform.isLinux) {
         try {
+          _activeCaptureChannels = desiredChannels;
           final args = <String>[
             '--raw',
             '--format=s16le',
             '--rate=44100',
-            '--channels=2',
+            '--channels=$_activeCaptureChannels',
             '--latency-msec=5',
             '--process-time-msec=2',
-            if (_selectedInputDevice != null &&
-                _selectedInputDevice!.id.isNotEmpty)
-              '--device=${_selectedInputDevice!.id}',
+            if (cleanDeviceId.isNotEmpty) '--device=$cleanDeviceId',
           ];
-          _parecordProcess = await Process.start('parecord', args);
-          _micStreamSub = _parecordProcess!.stdout.listen(_onMicPcmChunk);
+          final proc = await Process.start('parecord', args);
+          if (_micCaptureGeneration != gen || !mounted) {
+            try {
+              proc.kill(ProcessSignal.sigterm);
+            } catch (_) {}
+            return;
+          }
+          // Continuously drain stderr so PulseAudio/PipeWire diagnostics never
+          // fill the pipe buffer and stall parecord.
+          proc.stderr.drain<void>().then((_) {}, onError: (_) {});
+          _parecordProcess = proc;
+          _usingAudioRecorderCapture = false;
+          _micStreamSub = proc.stdout.listen(
+            _onMicPcmChunk,
+            onDone: () {
+              if (_micCaptureGeneration == gen) {
+                _micStreamSub = null;
+                _parecordProcess = null;
+              }
+            },
+            onError: (_) {
+              if (_micCaptureGeneration == gen) {
+                _micStreamSub = null;
+                _parecordProcess = null;
+              }
+            },
+          );
           startedLowLatencyLinux = true;
         } catch (e) {
           debugPrint('Low-latency parecord fallback to AudioRecorder: $e');
@@ -4206,19 +4665,52 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
 
       if (!startedLowLatencyLinux) {
         bool hasPerm = await _audioRecorder.hasPermission();
-        if (!hasPerm) return;
+        if (!hasPerm || _micCaptureGeneration != gen || !mounted) return;
+        _activeCaptureChannels = desiredChannels.clamp(1, 2);
+        final InputDevice? cleanDevice = _selectedInputDevice == null
+            ? null
+            : InputDevice(
+                id: cleanDeviceId.isNotEmpty
+                    ? cleanDeviceId
+                    : _selectedInputDevice!.id,
+                label: _selectedInputDevice!.label,
+              );
         final stream = await _audioRecorder.startStream(
           RecordConfig(
             encoder: AudioEncoder.pcm16bits,
-            device: _selectedInputDevice,
+            device: cleanDevice,
             sampleRate: 44100,
-            numChannels: 2,
+            numChannels: _activeCaptureChannels,
           ),
         );
-        _micStreamSub = stream.listen(_onMicPcmChunk);
+        if (_micCaptureGeneration != gen || !mounted) {
+          try {
+            await _audioRecorder.stop().timeout(
+              const Duration(milliseconds: 250),
+              onTimeout: () => null,
+            );
+          } catch (_) {}
+          return;
+        }
+        _usingAudioRecorderCapture = true;
+        _micStreamSub = stream.listen(
+          _onMicPcmChunk,
+          onDone: () {
+            if (_micCaptureGeneration == gen) {
+              _micStreamSub = null;
+              _usingAudioRecorderCapture = false;
+            }
+          },
+          onError: (_) {
+            if (_micCaptureGeneration == gen) {
+              _micStreamSub = null;
+              _usingAudioRecorderCapture = false;
+            }
+          },
+        );
       }
     } else if (!needsMic && _micStreamSub != null) {
-      await _stopMicCapture();
+      await _stopMicCaptureInternal();
     }
   }
 
@@ -4247,32 +4739,52 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
             .where((t) => t.type == TrackType.audio && t.isArmed)
             .toList();
         if (armedTracks.isNotEmpty) {
-          double length = finalPlayhead - recordingStartPos!;
-          if (length < 10) length = 10;
+          final double recAnchor = recordingStartPos!;
+          double rawSec = max(0.1, (finalPlayhead - recAnchor) / 100.0);
 
-          if (SoLoud.instance.isInitialized) {
+          if (_isSoloudReady) {
             try {
               final tempSource = await SoLoud.instance.loadFile(
                 _currentRecordPath!,
               );
               double sec =
                   SoLoud.instance.getLength(tempSource).inMilliseconds / 1000.0;
-              double actualLength = sec * (bpm / 60.0) * beatWidth;
-              if (actualLength > 0) length = actualLength;
+              if (sec > 0) rawSec = sec;
               SoLoud.instance.disposeSource(tempSource);
-            } catch (e) {}
+            } catch (_) {}
           }
+
+          final double curBpm = TempoMarker.effectiveBpmAt(
+            recAnchor,
+            tempoMarkers,
+            bpm.toDouble(),
+          );
+          final double unitsPerSec = 100.0 * (curBpm / max(20, bpm));
+          final syncPlacement = computeRecordingSyncPlacement(
+            recordingStartPos: recAnchor,
+            firstChunkArrivedPlayhead: _recordingFirstChunkPos,
+            firstChunkFrames: _recordingFirstChunkFrames,
+            rawWavDurationSeconds: rawSec,
+            unitsPerSecond: unitsPerSec,
+            latencyCompensationMs: _recordingLatencyMs,
+          );
+          final double rawOrigLen = max(
+            syncPlacement.startOffset + syncPlacement.clipLength,
+            rawSec * unitsPerSec,
+          );
 
           List<AudioClip> newClips = [];
           for (final armedTrack in armedTracks) {
             final clip = AudioClip(
-              start: recordingStartPos!,
-              length: length,
+              start: syncPlacement.clipStart,
+              length: syncPlacement.clipLength,
+              originalLength: rawOrigLen,
+              startOffset: syncPlacement.startOffset,
               color: armedTrack.color,
               filePath: _currentRecordPath!,
               id: UniqueKey().toString(),
             );
-            if (SoLoud.instance.isInitialized) {
+            if (_isSoloudReady) {
               clip.source = await SoLoud.instance.loadFile(_currentRecordPath!);
             }
             newClips.add(clip);
@@ -4312,6 +4824,8 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         }
       }
       recordingStartPos = null;
+      _recordingFirstChunkPos = null;
+      _recordingFirstChunkFrames = 0;
       _currentRecordPath = null;
     } else {
       bool hasPermission =
@@ -4329,7 +4843,19 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
             final dir = await getProjectMediaDirectory();
             _currentRecordPath =
                 '${dir.path}/rec_${DateTime.now().millisecondsSinceEpoch}.wav';
-            _wavWriter = WavWriter(_currentRecordPath!);
+            // Warm up mic capture BEFORE starting playback/metronome so parecord/ADC
+            // doesn't start late behind Beat 1.
+            if (_micStreamSub == null) {
+              _micWarmupCompleter = Completer<void>();
+            }
+            await _updateMicState(forceMic: true);
+            if (_micWarmupCompleter != null && countInBars == 0 && !isPlaying) {
+              await Future.any([
+                _micWarmupCompleter!.future,
+                Future.delayed(const Duration(milliseconds: 120)),
+              ]);
+            }
+            _micWarmupCompleter = null;
           }
 
           if (punchInLoop && isLooping) {
@@ -4338,15 +4864,17 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
 
           Future<void> beginRecordNow() async {
             _saveState();
+            _recordingFirstChunkPos = null;
+            _recordingFirstChunkFrames = 0;
+            if (hasArmedAudio && _currentRecordPath != null) {
+              _wavWriter = WavWriter(_currentRecordPath!);
+            }
             setState(() {
               isRecording = true;
               _countInBeatsLeft = 0;
               recordingStartPos = playheadPosition;
               if (!isPlaying) _togglePlay();
             });
-            if (hasArmedAudio) {
-              await _updateMicState();
-            }
           }
 
           if (countInBars > 0 && !isPlaying) {
@@ -5413,13 +5941,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                                 try {
                                   SoLoud.instance.filters.biquadResonantFilter.deactivate();
                                 } catch (_) {}
-                                for (var track in tracks) {
-                                  for (var clip in trackClips[track.id] ?? []) {
-                                    if (clip is AudioClip && clip.currentHandle != null) {
-                                      SoLoud.instance.stop(clip.currentHandle!);
-                                    }
-                                  }
-                                }
+                                _stopAllActivePlaybackVoices();
                               });
                             },
                           ),
@@ -6267,7 +6789,76 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                                 ],
                               )
                             else if (track.type == TrackType.audio)
-                              Icon(Icons.mic, size: 16, color: track.color)
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.mic, size: 16, color: track.color),
+                                  const SizedBox(width: 4),
+                                  PopupMenuButton<String>(
+                                    tooltip: 'Select Audio Input Channel',
+                                    initialValue: _channelOptionForTrack(track).id,
+                                    onSelected: (chId) =>
+                                        _selectTrackInputChannel(track, chId),
+                                    itemBuilder: (_) => _inputChannelOptionsForSelectedDevice()
+                                        .map(
+                                          (opt) => PopupMenuItem<String>(
+                                            value: opt.id,
+                                            child: Row(
+                                              children: [
+                                                Icon(
+                                                  opt.id == _channelOptionForTrack(track).id
+                                                      ? Icons.radio_button_checked
+                                                      : Icons.radio_button_unchecked,
+                                                  size: 13,
+                                                  color: opt.id == _channelOptionForTrack(track).id
+                                                      ? Colors.cyanAccent
+                                                      : textMuted,
+                                                ),
+                                                const SizedBox(width: 6),
+                                                Flexible(
+                                                  child: Text(
+                                                    opt.label,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: const TextStyle(
+                                                      fontSize: 12,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        )
+                                        .toList(),
+                                    child: Container(
+                                      key: Key('track_channel_pill_${track.id}'),
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 5,
+                                        vertical: 1,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: bgDark,
+                                        borderRadius: BorderRadius.circular(3),
+                                        border: Border.all(
+                                          color: track.inputChannelId != 'stereo:0'
+                                              ? Colors.cyanAccent
+                                              : borderMain,
+                                        ),
+                                      ),
+                                      child: Text(
+                                        _channelOptionForTrack(track).shortLabel,
+                                        style: TextStyle(
+                                          fontSize: 9,
+                                          fontWeight: FontWeight.bold,
+                                          color: track.inputChannelId != 'stereo:0'
+                                              ? Colors.cyanAccent
+                                              : textMuted,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              )
                             else
                               Row(
                                 children: [
@@ -6604,6 +7195,74 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     );
   }
 
+  bool _canMoveClipToTrack(DawClip clip, Track targetTrack) {
+    if (targetTrack.type == TrackType.group) return false;
+    if (clip is AudioClip) return targetTrack.type == TrackType.audio;
+    return targetTrack.type == TrackType.midi ||
+        targetTrack.type == TrackType.sampler;
+  }
+
+  Track? _trackAtGlobalY(double globalY) {
+    final box =
+        _timelineLaneListKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return null;
+    final double localY = box.globalToLocal(Offset(0, globalY)).dy;
+    if (localY < 0 || localY > box.size.height) return null;
+    final double contentY = localY +
+        (_timelineScrollController.hasClients
+            ? _timelineScrollController.offset
+            : 0.0);
+    double yCursor = 0.0;
+    for (final t in tracks) {
+      if (!_isTrackVisibleInArrange(t)) continue;
+      final double rowH = t.showAutomation ? 140.0 : 100.0;
+      if (contentY >= yCursor && contentY < yCursor + rowH) {
+        return t;
+      }
+      yCursor += rowH;
+    }
+    return null;
+  }
+
+  String? _ownerTrackIdForClip(DawClip clip) {
+    for (final t in tracks) {
+      if (trackClips[t.id]?.contains(clip) == true) {
+        return t.id;
+      }
+    }
+    return null;
+  }
+
+  void _moveClipsToTrack(List<DawClip> targets, Track destinationTrack) {
+    for (final c in targets) {
+      if (!_canMoveClipToTrack(c, destinationTrack)) continue;
+      final oldOwnerId = _ownerTrackIdForClip(c);
+      if (oldOwnerId == null || oldOwnerId == destinationTrack.id) continue;
+      final oldTrack = tracks.where((t) => t.id == oldOwnerId).firstOrNull;
+      trackClips[oldOwnerId]?.remove(c);
+      trackClips.putIfAbsent(destinationTrack.id, () => []).add(c);
+      if (oldTrack != null && c.color.toARGB32() == oldTrack.colorValue) {
+        c.color = destinationTrack.color;
+      }
+      if (c is AudioClip) {
+        _stopAudioClipHandles(c);
+        if (isPlaying &&
+            c.source != null &&
+            playheadPosition >= c.start &&
+            playheadPosition < c.start + c.length) {
+          final anySolo = tracks.any((t) => t.isSolo);
+          if (_isTrackAudible(destinationTrack, anySolo)) {
+            _playAudioClipWithSends(destinationTrack, c, playheadPosition);
+          }
+        }
+      }
+    }
+    final destIdx = tracks.indexOf(destinationTrack);
+    if (destIdx != -1) {
+      selectedTrackIndex = destIdx;
+    }
+  }
+
   DawClip _cloneClipForDragCopy(String trackId, DawClip sourceClip) {
     final dup = DawClip.fromJson(sourceClip.toJson());
     dup.id = UniqueKey().toString();
@@ -6635,13 +7294,18 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   Widget _buildClip(String trackId, DawClip clip) {
     final isSelected =
         selectedClip == clip || multiSelectedClips.contains(clip);
+    final bool isMovingOffTrack = _activeDragClips.contains(clip) &&
+        _dragTargetTrackId != null &&
+        _dragTargetTrackId != trackId;
     return Positioned(
       key: ValueKey('clip_${clip.id}'),
       left: clip.start * _zoomX,
       top: 10,
       bottom: 10,
       width: clip.length * _zoomX,
-      child: GestureDetector(
+      child: Opacity(
+        opacity: isMovingOffTrack ? 0.35 : 1.0,
+        child: GestureDetector(
         supportedDevices: {
           PointerDeviceKind.mouse,
           PointerDeviceKind.touch,
@@ -6676,22 +7340,18 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         }),
         onSecondaryTapUp: (details) =>
             _showClipMenu(details.globalPosition, trackId, clip),
-        onHorizontalDragStart: (d) {
+        onPanStart: (d) {
           _saveState();
           final sourceTargets = multiSelectedClips.contains(clip)
               ? [...multiSelectedClips]
               : [clip];
+          _dragSourceTrackId = trackId;
+          _dragTargetTrackId = trackId;
           if (HardwareKeyboard.instance.isAltPressed) {
             final clones = <DawClip>[];
             DawClip? clonedPrimary;
             for (final orig in sourceTargets) {
-              String? ownerId;
-              for (final t in tracks) {
-                if (trackClips[t.id]?.contains(orig) == true) {
-                  ownerId = t.id;
-                  break;
-                }
-              }
+              final ownerId = _ownerTrackIdForClip(orig);
               final clone = _cloneClipForDragCopy(ownerId ?? trackId, orig);
               clones.add(clone);
               if (identical(orig, clip)) clonedPrimary = clone;
@@ -6712,7 +7372,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
             _activeDragClips = sourceTargets;
           }
         },
-        onHorizontalDragUpdate: (d) => setState(() {
+        onPanUpdate: (d) => setState(() {
           final targets = _activeDragClips.isNotEmpty
               ? _activeDragClips
               : (multiSelectedClips.contains(clip)
@@ -6722,8 +7382,12 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
             c.start += (d.delta.dx / _zoomX);
             if (c.start < 0) c.start = 0;
           }
+          final hovered = _trackAtGlobalY(d.globalPosition.dy);
+          if (hovered != null && _canMoveClipToTrack(clip, hovered)) {
+            _dragTargetTrackId = hovered.id;
+          }
         }),
-        onHorizontalDragEnd: (d) => setState(() {
+        onPanEnd: (d) => setState(() {
           final targets = _activeDragClips.isNotEmpty
               ? _activeDragClips
               : (multiSelectedClips.contains(clip)
@@ -6734,9 +7398,22 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
               c.start = (c.start / snapResolution).round() * snapResolution;
             }
           }
+          if (_dragTargetTrackId != null && _dragTargetTrackId != trackId) {
+            final destTrack =
+                tracks.where((t) => t.id == _dragTargetTrackId).firstOrNull;
+            if (destTrack != null) {
+              _moveClipsToTrack(targets, destTrack);
+            }
+          }
           _activeDragClips = [];
+          _dragSourceTrackId = null;
+          _dragTargetTrackId = null;
         }),
-        onHorizontalDragCancel: () => _activeDragClips = [],
+        onPanCancel: () => setState(() {
+          _activeDragClips = [];
+          _dragSourceTrackId = null;
+          _dragTargetTrackId = null;
+        }),
         child: Container(
           decoration: BoxDecoration(
             color: clip.color.withOpacity(isSelected ? 0.8 : 0.5),
@@ -7124,14 +7801,17 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                     },
                     onHorizontalDragStart: (d) => _saveState(),
                     onHorizontalDragUpdate: (d) => setState(() {
-                      clip.length += (d.delta.dx / _zoomX);
-                      if (clip.length < 10) clip.length = 10;
-                      final bool allowExtendLoop =
-                          clip is AudioClip && clip.isLooped;
-                      if (!allowExtendLoop &&
-                          clip.length >
-                              clip.originalLength - clip.startOffset) {
-                        clip.length = clip.originalLength - clip.startOffset;
+                      clip.length = max(10.0, clip.length + d.delta.dx / _zoomX);
+                      if (clip is MidiClip) {
+                        clip.originalLength = max(
+                          clip.originalLength,
+                          clip.startOffset + clip.length,
+                        );
+                      } else if (clip is AudioClip && !clip.isLooped) {
+                        clip.length = min(
+                          clip.length,
+                          clip.originalLength - clip.startOffset,
+                        );
                       }
                     }),
                     onHorizontalDragEnd: (d) => setState(() {
@@ -7141,12 +7821,16 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                           (clip.length / snapResolution).round() *
                               snapResolution,
                         );
-                        final bool allowExtendLoop =
-                            clip is AudioClip && clip.isLooped;
-                        if (!allowExtendLoop &&
-                            clip.length >
-                                clip.originalLength - clip.startOffset) {
-                          clip.length = clip.originalLength - clip.startOffset;
+                        if (clip is MidiClip) {
+                          clip.originalLength = max(
+                            clip.originalLength,
+                            clip.startOffset + clip.length,
+                          );
+                        } else if (clip is AudioClip && !clip.isLooped) {
+                          clip.length = min(
+                            clip.length,
+                            clip.originalLength - clip.startOffset,
+                          );
                         }
                       }
                     }),
@@ -7170,6 +7854,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
               ),
             ],
           ),
+        ),
         ),
       ),
     );
@@ -7242,7 +7927,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   }
 
   Widget _buildTimelineMinimap() {
-    const double totalTimelineUnits = 2000.0;
+    final double totalTimelineUnits = _timelineTotalUnits;
     return Container(
       height: 22,
       decoration: BoxDecoration(
@@ -7257,7 +7942,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
             onTapDown: (d) {
               final targetPos =
                   (d.localPosition.dx / mapW) * totalTimelineUnits;
-              setState(() => playheadPosition = targetPos.clamp(0.0, 2000.0));
+              _seekPlayhead(targetPos);
               if (_horizontalScrollController.hasClients) {
                 final viewW = mapW;
                 _horizontalScrollController.jumpTo(
@@ -7271,8 +7956,9 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
             onHorizontalDragUpdate: (d) {
               final targetPos =
                   (d.localPosition.dx / mapW) * totalTimelineUnits;
-              setState(() => playheadPosition = targetPos.clamp(0.0, 2000.0));
+              _seekPlayhead(targetPos, retriggerAudio: false);
             },
+            onHorizontalDragEnd: (_) => _seekPlayhead(playheadPosition),
             child: Stack(
               children: [
                 for (int ti = 0; ti < tracks.length; ti++)
@@ -7304,6 +7990,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   }
 
   Widget _buildTimeline() {
+    final double timelineUnits = _timelineTotalUnits;
     return Expanded(
       child: Column(
         children: [
@@ -7315,7 +8002,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                 controller: _horizontalScrollController,
                 scrollDirection: Axis.horizontal,
                 child: SizedBox(
-                  width: max(MediaQuery.of(context).size.width, 2000.0 * _zoomX),
+                  width: max(MediaQuery.of(context).size.width, timelineUnits * _zoomX),
                   child: Column(
                     children: [
                       Container(
@@ -7326,19 +8013,13 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                           clipBehavior: Clip.none,
                           children: [
                             GestureDetector(
-                              onTapDown: (d) => setState(() {
-                                playheadPosition = (d.localPosition.dx / _zoomX)
-                                    .clamp(0.0, 2000.0);
-                                if (snapToGrid) {
-                                  playheadPosition =
-                                      (playheadPosition / snapResolution)
-                                          .round() *
-                                      snapResolution;
-                                }
-                              }),
+                              onTapDown: (d) => _seekPlayhead(
+                                d.localPosition.dx / _zoomX,
+                                snap: true,
+                              ),
                               onDoubleTapDown: (d) {
                                 double pos = (d.localPosition.dx / _zoomX)
-                                    .clamp(0.0, 2000.0);
+                                    .clamp(0.0, timelineUnits);
                                 if (snapToGrid) {
                                   pos = (pos / snapResolution).round() *
                                       snapResolution;
@@ -7347,7 +8028,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                               },
                               onSecondaryTapUp: (d) {
                                 double pos = (d.localPosition.dx / _zoomX)
-                                    .clamp(0.0, 2000.0);
+                                    .clamp(0.0, timelineUnits);
                                 if (snapToGrid) {
                                   pos = (pos / snapResolution).round() *
                                       snapResolution;
@@ -7398,26 +8079,19 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                                         .where((x) => x.id == id)
                                         .firstOrNull;
                                     if (m != null) {
-                                      setState(
-                                        () => playheadPosition = m.position,
-                                      );
+                                      _seekPlayhead(m.position);
                                     }
                                   }
                                 });
                               },
-                              onPanUpdate: (d) => setState(
-                                () => playheadPosition =
-                                    (playheadPosition + (d.delta.dx / _zoomX))
-                                        .clamp(0.0, 2000.0),
+                              onPanUpdate: (d) => _seekPlayhead(
+                                playheadPosition + (d.delta.dx / _zoomX),
+                                retriggerAudio: false,
                               ),
-                              onPanEnd: (d) => setState(() {
-                                if (snapToGrid) {
-                                  playheadPosition =
-                                      (playheadPosition / snapResolution)
-                                          .round() *
-                                      snapResolution;
-                                }
-                              }),
+                              onPanEnd: (d) => _seekPlayhead(
+                                playheadPosition,
+                                snap: true,
+                              ),
                               child: CustomPaint(
                                 painter: RulerPainter(
                                   zoomX: _zoomX,
@@ -7440,6 +8114,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                           snapResolution: snapResolution,
                           accentColor: lavenderAccent,
                           handleColor: textMain,
+                          maxTimelineUnits: timelineUnits,
                           onDragStart: _saveState,
                           onToggleLoop: () =>
                               setState(() => isLooping = !isLooping),
@@ -7479,6 +8154,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                   },
                 ),
                 Expanded(
+                  key: _timelineLaneListKey,
                   child: Stack(
                     children: [
                       ListView.builder(
@@ -7500,7 +8176,10 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                                 _addBrowserItemToTrack(
                                   details.data,
                                   targetTrack: track,
-                                  startPos: (localX / _zoomX).clamp(0.0, 2000.0),
+                                  startPos: (localX / _zoomX).clamp(
+                                    0.0,
+                                    timelineUnits,
+                                  ),
                                 );
                               },
                               builder: (ctx, cand, rej) => GestureDetector(
@@ -7510,7 +8189,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                               selectedTrackIndex = index;
                             }),
                             onSecondaryTapUp: (d) {
-                              playheadPosition = d.localPosition.dx / _zoomX;
+                              _seekPlayhead(d.localPosition.dx / _zoomX);
                               _showTimelineMenu(d.globalPosition);
                             },
                             onLongPressStart: (d) => setState(() {
@@ -7578,12 +8257,19 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                             child: Container(
                               height: track.showAutomation ? 140 : 100,
                               decoration: BoxDecoration(
-                                color: track.type == TrackType.group
-                                    ? panelDark.withValues(alpha: 0.45)
-                                    : null,
+                                color: (_dragTargetTrackId == track.id &&
+                                        _dragTargetTrackId != _dragSourceTrackId)
+                                    ? Colors.cyanAccent.withValues(alpha: 0.14)
+                                    : (track.type == TrackType.group
+                                          ? panelDark.withValues(alpha: 0.45)
+                                          : null),
                                 border: Border(
                                   bottom: BorderSide(
-                                    color: panelLight,
+                                    color: (_dragTargetTrackId == track.id &&
+                                            _dragTargetTrackId !=
+                                                _dragSourceTrackId)
+                                        ? Colors.cyanAccent
+                                        : panelLight,
                                     width: 2,
                                   ),
                                 ),
@@ -7593,6 +8279,47 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                                   ...(trackClips[track.id] ?? []).map(
                                     (clip) => _buildClip(track.id, clip),
                                   ),
+                                  if (_dragTargetTrackId == track.id &&
+                                      _dragTargetTrackId != _dragSourceTrackId)
+                                    for (final ghostClip in _activeDragClips)
+                                      if (_canMoveClipToTrack(ghostClip, track))
+                                        Positioned(
+                                          left: ghostClip.start * _zoomX,
+                                          top: 10,
+                                          bottom: 10,
+                                          width: ghostClip.length * _zoomX,
+                                          child: IgnorePointer(
+                                            child: Container(
+                                              decoration: BoxDecoration(
+                                                color: track.color.withValues(
+                                                  alpha: 0.45,
+                                                ),
+                                                borderRadius:
+                                                    BorderRadius.circular(4),
+                                                border: Border.all(
+                                                  color: Colors.cyanAccent,
+                                                  width: 1.5,
+                                                ),
+                                              ),
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 6,
+                                                    vertical: 2,
+                                                  ),
+                                              child: Text(
+                                                ghostClip.name.isNotEmpty
+                                                    ? ghostClip.name
+                                                    : 'Clip',
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 9,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
                                   if (isSelecting &&
                                       selectionStartDx != null &&
                                       selectionEndDx != null)
@@ -7674,11 +8401,14 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                         bottom: 0,
                         width: 22,
                         child: GestureDetector(
-                          onPanUpdate: (d) => setState(() {
-                            playheadPosition =
-                                (playheadPosition + (d.delta.dx / _zoomX))
-                                    .clamp(0.0, 2000.0);
-                          }),
+                          onPanUpdate: (d) => _seekPlayhead(
+                            playheadPosition + (d.delta.dx / _zoomX),
+                            retriggerAudio: false,
+                          ),
+                          onPanEnd: (_) => _seekPlayhead(
+                            playheadPosition,
+                            snap: true,
+                          ),
                           child: Container(
                             color: Colors.transparent,
                             alignment: Alignment.center,
@@ -8191,7 +8921,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                       _midiZoomMultiplier = max(0.2, _midiZoomMultiplier - 0.2),
                 ),
                 playheadPosition: playheadPosition,
-                onPlayheadChanged: (v) => setState(() => playheadPosition = v),
+                onPlayheadChanged: (v) => _seekPlayhead(v),
                 midiDevices: _midiDevices,
                 onCopy: _copy,
                 onPaste: _paste,
@@ -8387,6 +9117,14 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           allTracks: tracks,
           inputDevices: _inputDevices,
           selectedInputDevice: _selectedInputDevice,
+          inputChannelOptions: _inputChannelOptionsForSelectedDevice(),
+          selectedInputChannelId: _isMasterFxSelected
+              ? _defaultInputChannelId
+              : _channelOptionForTrack(fxTrack).id,
+          outputDevices: _outputDevices,
+          selectedOutputDeviceKey: _selectedOutputDeviceKey,
+          systemDefaultOutputLabel: _systemDefaultOutputLabel,
+          recordingLatencyMs: _recordingLatencyMs,
           trackLevel: _isMasterFxSelected
               ? _masterLevel.$1
               : (_trackLevels[fxTrack.id]?.$1 ?? 0.0),
@@ -8399,17 +9137,40 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           onSaveState: _saveState,
           onInputDeviceChanged: (newValue) {
             if (newValue != null) {
-              setState(() => _selectedInputDevice = newValue);
+              setState(() {
+                _selectedInputDevice = newValue;
+                final chCount = _channelCountForDevice(newValue);
+                _defaultInputChannelId = resolveInputChannelOption(
+                  _defaultInputChannelId,
+                  chCount,
+                ).id;
+              });
               _restartMicCapture();
             }
+          },
+          onInputChannelChanged: (chId) {
+            if (chId != null) {
+              _selectTrackInputChannel(
+                _isMasterFxSelected ? null : fxTrack,
+                chId,
+              );
+            }
+          },
+          onOutputDeviceChanged: (outKey) {
+            if (outKey != null) {
+              _selectOutputDevice(outKey);
+            }
+          },
+          onRecordingLatencyChanged: _setRecordingLatencyMs,
+          onRefreshInputDevices: () {
+            _initInputDevices();
+            _initOutputRouting(applyRoute: true);
           },
           onToggleTuner: () async {
             setState(() {
               _tunerEnabled = !_tunerEnabled;
-              if (!_tunerEnabled) {
-                _detectedPitch = null;
-                _tunerBuffer.clear();
-              }
+              _detectedPitch = null;
+              _tunerTracker.reset();
             });
             await _updateMicState();
           },
@@ -8505,7 +9266,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           snapToGrid: snapToGrid,
           snapResolution: snapResolution,
           playheadPosition: playheadPosition,
-          onPlayheadChanged: (pos) => setState(() => playheadPosition = pos),
+          onPlayheadChanged: (pos) => _seekPlayhead(pos),
           onChangeStart: _saveState,
           onClipChanged: () {
             _ensureAudioClipProcessed(activeAudioClip);
@@ -8639,16 +9400,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
             return KeyEventResult.handled;
           } else if (event.logicalKey == LogicalKeyboardKey.enter ||
               event.logicalKey == LogicalKeyboardKey.numpadEnter) {
-            setState(() {
-              playheadPosition = isLooping ? loopStart : 0.0;
-              for (var track in tracks) {
-                for (var clip in trackClips[track.id] ?? []) {
-                  if (clip is AudioClip && clip.currentHandle != null) {
-                    SoLoud.instance.stop(clip.currentHandle!);
-                  }
-                }
-              }
-            });
+            _seekPlayhead(isLooping ? loopStart : 0.0);
             return KeyEventResult.handled;
           } else if (event.logicalKey == LogicalKeyboardKey.delete ||
               event.logicalKey == LogicalKeyboardKey.backspace) {

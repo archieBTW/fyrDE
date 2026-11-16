@@ -89,17 +89,33 @@ class TunerGatePanel extends StatelessWidget {
                         fontSize: 16,
                       ),
                     ),
-                    Text(
-                      detectedPitch != null
-                          ? '${detectedPitch!.frequencyHz.toStringAsFixed(1)} Hz'
-                          : 'Listening...',
-                      style: TextStyle(color: textMuted, fontSize: 10),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          detectedPitch != null
+                              ? '${detectedPitch!.frequencyHz.toStringAsFixed(1)} Hz'
+                              : 'Listening...',
+                          style: TextStyle(color: textMuted, fontSize: 10),
+                        ),
+                        if (detectedPitch != null)
+                          Text(
+                            inTune
+                                ? 'IN TUNE'
+                                : '${cents >= 0 ? '+' : ''}${cents.round()}¢',
+                            style: TextStyle(
+                              color: statusColor,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 9,
+                            ),
+                          ),
+                      ],
                     ),
                   ],
                 ),
                 const SizedBox(height: 4),
                 SizedBox(
-                  height: 8,
+                  height: 10,
                   width: double.infinity,
                   child: CustomPaint(
                     painter: _TunerNeedlePainter(

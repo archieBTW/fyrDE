@@ -1,5 +1,6 @@
 import 'package:dotted_border/dotted_border.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_soloud/flutter_soloud.dart';
 import 'package:record/record.dart';
 import 'package:fyrdaw/main.dart';
 import 'package:fyrdaw/models/daw_effect.dart';
@@ -9,6 +10,7 @@ import 'package:fyrdaw/ui/dial.dart';
 import 'package:fyrdaw/ui/meters.dart';
 import 'package:fyrdaw/ui/parametric_eq_widget.dart';
 import 'package:fyrdaw/ui/tuner_gate_panel.dart';
+import 'package:fyrdaw/utils/audio_input_channel.dart';
 import 'package:fyrdaw/utils/pitch_detector.dart';
 
 /// Modular Stompbox Effects Rack view with Audio Input Source / Tuner & Noise Gate,
@@ -19,6 +21,12 @@ class EffectsRackView extends StatelessWidget {
   final List<Track> allTracks;
   final List<InputDevice> inputDevices;
   final InputDevice? selectedInputDevice;
+  final List<AudioInputChannelOption> inputChannelOptions;
+  final String selectedInputChannelId;
+  final List<PlaybackDevice> outputDevices;
+  final String selectedOutputDeviceKey;
+  final String? systemDefaultOutputLabel;
+  final double recordingLatencyMs;
   final double trackLevel;
   final double sidechainGr;
   final List<double> fftSpectrum;
@@ -28,6 +36,10 @@ class EffectsRackView extends StatelessWidget {
   final VoidCallback? onToggleMasterRack;
   final VoidCallback onSaveState;
   final ValueChanged<InputDevice?> onInputDeviceChanged;
+  final ValueChanged<String?>? onInputChannelChanged;
+  final ValueChanged<String?>? onOutputDeviceChanged;
+  final ValueChanged<double>? onRecordingLatencyChanged;
+  final VoidCallback? onRefreshInputDevices;
   final VoidCallback onToggleTuner;
   final ValueChanged<double> onNoiseGateChanged;
   final void Function(int oldIndex, int newIndex) onReorderEffect;
@@ -45,6 +57,12 @@ class EffectsRackView extends StatelessWidget {
     required this.allTracks,
     required this.inputDevices,
     required this.selectedInputDevice,
+    this.inputChannelOptions = const [],
+    this.selectedInputChannelId = 'stereo:0',
+    this.outputDevices = const [],
+    this.selectedOutputDeviceKey = 'system_default',
+    this.systemDefaultOutputLabel,
+    this.recordingLatencyMs = 35.0,
     required this.trackLevel,
     required this.sidechainGr,
     this.fftSpectrum = const [],
@@ -54,6 +72,10 @@ class EffectsRackView extends StatelessWidget {
     this.onToggleMasterRack,
     required this.onSaveState,
     required this.onInputDeviceChanged,
+    this.onInputChannelChanged,
+    this.onOutputDeviceChanged,
+    this.onRecordingLatencyChanged,
+    this.onRefreshInputDevices,
     required this.onToggleTuner,
     required this.onNoiseGateChanged,
     required this.onReorderEffect,
@@ -240,13 +262,34 @@ class EffectsRackView extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'Input Source',
-                    style: TextStyle(
-                      color: textMuted,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 11,
-                    ),
+                  Row(
+                    children: [
+                      Text(
+                        'Input Source',
+                        style: TextStyle(
+                          color: textMuted,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 11,
+                        ),
+                      ),
+                      const Spacer(),
+                      if (onRefreshInputDevices != null)
+                        Tooltip(
+                          message: 'Refresh audio inputs',
+                          child: InkWell(
+                            onTap: onRefreshInputDevices,
+                            borderRadius: BorderRadius.circular(3),
+                            child: Padding(
+                              padding: const EdgeInsets.all(2),
+                              child: Icon(
+                                Icons.refresh,
+                                size: 13,
+                                color: textMuted,
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                   const SizedBox(height: 4),
                   if (inputDevices.isEmpty)
@@ -254,8 +297,9 @@ class EffectsRackView extends StatelessWidget {
                       'No inputs found',
                       style: TextStyle(color: textFaint, fontSize: 10),
                     )
-                  else
+                  else ...[
                     DropdownButton<InputDevice>(
+                      key: const Key('input_device_dropdown'),
                       value: selectedInputDevice,
                       isExpanded: true,
                       isDense: true,
@@ -276,6 +320,147 @@ class EffectsRackView extends StatelessWidget {
                         );
                       }).toList(),
                     ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Input Channel',
+                      style: TextStyle(
+                        color: textMuted,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 11,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Builder(
+                      builder: (context) {
+                        final options = inputChannelOptions.isNotEmpty
+                            ? inputChannelOptions
+                            : buildInputChannelOptions(2);
+                        final activeId = options.any(
+                          (o) => o.id == selectedInputChannelId,
+                        )
+                            ? selectedInputChannelId
+                            : options.first.id;
+                        return DropdownButton<String>(
+                          key: const Key('input_channel_dropdown'),
+                          value: activeId,
+                          isExpanded: true,
+                          isDense: true,
+                          dropdownColor: bgDark,
+                          icon: Icon(
+                            Icons.settings_input_component,
+                            color: textMuted,
+                            size: 14,
+                          ),
+                          underline: Container(height: 1, color: lavenderAccent),
+                          style: TextStyle(color: textMain, fontSize: 11),
+                          onChanged: onInputChannelChanged,
+                          items: options.map((opt) {
+                            return DropdownMenuItem<String>(
+                              value: opt.id,
+                              child: Text(
+                                opt.label,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            );
+                          }).toList(),
+                        );
+                      },
+                    ),
+                  ],
+                  if (outputDevices.isNotEmpty || onOutputDeviceChanged != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Output Device',
+                      style: TextStyle(
+                        color: textMuted,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 11,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Builder(
+                      builder: (context) {
+                        final seenKeys = <String>{'system_default'};
+                        final items = <DropdownMenuItem<String>>[
+                          DropdownMenuItem<String>(
+                            value: 'system_default',
+                            child: Text(
+                              systemDefaultOutputLabel != null &&
+                                      systemDefaultOutputLabel!.isNotEmpty
+                                  ? 'System ($systemDefaultOutputLabel)'
+                                  : 'System Default',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ];
+                        for (final dev in outputDevices) {
+                          final key = 'dev:${dev.name}';
+                          if (seenKeys.add(key)) {
+                            items.add(
+                              DropdownMenuItem<String>(
+                                value: key,
+                                child: Text(
+                                  dev.name,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            );
+                          }
+                        }
+                        final activeKey = seenKeys.contains(selectedOutputDeviceKey)
+                            ? selectedOutputDeviceKey
+                            : 'system_default';
+                        return DropdownButton<String>(
+                          key: const Key('output_device_dropdown'),
+                          value: activeKey,
+                          isExpanded: true,
+                          isDense: true,
+                          dropdownColor: bgDark,
+                          icon: Icon(Icons.volume_up, color: textMuted, size: 14),
+                          underline: Container(height: 1, color: lavenderAccent),
+                          style: TextStyle(color: textMain, fontSize: 11),
+                          onChanged: onOutputDeviceChanged,
+                          items: items,
+                        );
+                      },
+                    ),
+                  ],
+                  if (onRecordingLatencyChanged != null) ...[
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Rec Latency',
+                          style: TextStyle(color: textMuted, fontSize: 10),
+                        ),
+                        Text(
+                          '${recordingLatencyMs.round()} ms',
+                          style: TextStyle(color: textFaint, fontSize: 10),
+                        ),
+                      ],
+                    ),
+                    SizedBox(
+                      height: 20,
+                      child: SliderTheme(
+                        data: SliderThemeData(
+                          thumbShape: const RoundSliderThumbShape(
+                            enabledThumbRadius: 5,
+                          ),
+                          overlayShape: SliderComponentShape.noOverlay,
+                        ),
+                        child: Slider(
+                          key: const Key('rec_latency_slider'),
+                          value: recordingLatencyMs.clamp(0.0, 200.0),
+                          min: 0.0,
+                          max: 200.0,
+                          divisions: 40,
+                          activeColor: lavenderAccent,
+                          onChanged: onRecordingLatencyChanged,
+                        ),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 10),
                   TunerGatePanel(
                     detectedPitch: detectedPitch,

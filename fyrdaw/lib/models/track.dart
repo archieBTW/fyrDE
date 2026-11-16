@@ -224,6 +224,7 @@ class Track {
   int colorValue;
   int instrumentIndex = 0;
   String? midiInputId;
+  String inputChannelId = 'stereo:0';
   String? groupTrackId;
   bool isGroupCollapsed = false;
   SynthSettings synthSettings = SynthSettings();
@@ -314,6 +315,7 @@ class Track {
     'colorValue': colorValue,
     'instrumentIndex': instrumentIndex,
     'midiInputId': midiInputId,
+    'inputChannelId': inputChannelId,
     'groupTrackId': groupTrackId,
     'isGroupCollapsed': isGroupCollapsed,
     'synthSettings': synthSettings.toJson(),
@@ -349,6 +351,7 @@ class Track {
         (json['noiseGateThreshold'] as num?)?.toDouble() ?? 0.0;
     t.instrumentIndex = json['instrumentIndex'] ?? 0;
     t.midiInputId = json['midiInputId'];
+    t.inputChannelId = json['inputChannelId'] as String? ?? 'stereo:0';
     t.groupTrackId = json['groupTrackId'];
     t.isGroupCollapsed = json['isGroupCollapsed'] ?? false;
     if (json['synthSettings'] != null) {

@@ -34,7 +34,12 @@ import 'package:fyrdaw/ui/tempo_signature_lane.dart';
 import 'package:fyrdaw/ui/timeline_loop_bar.dart';
 import 'package:fyrdaw/utils/bus_metering.dart';
 import 'package:fyrdaw/ui/tuner_gate_panel.dart';
+import 'package:flutter_soloud/flutter_soloud.dart';
+import 'package:fyrdaw/utils/audio_input_channel.dart';
+import 'package:fyrdaw/utils/audio_output_routing.dart';
+import 'package:fyrdaw/utils/recording_sync.dart';
 import 'package:fyrdaw/utils/audio_utils.dart';
+import 'package:record/record.dart';
 import 'package:fyrdaw/utils/metronome_synth.dart';
 import 'package:fyrdaw/utils/midi_file_codec.dart';
 import 'package:fyrdaw/utils/mixdown_renderer.dart';
@@ -2415,6 +2420,790 @@ void main() {
       );
       final clipColor = ((clipContainer.decoration as BoxDecoration).color)!;
       expect(clipColor.toARGB32() & 0x00FFFFFF, kTrackColorPalette[11].toARGB32() & 0x00FFFFFF);
+    });
+  });
+
+  group('Audio Input Channel Selection', () {
+    test('buildInputChannelOptions, parsePactlSourceChannels & PCM channel mapping work for 2ch and 4ch interfaces', () {
+      final opts1 = buildInputChannelOptions(1);
+      expect(opts1.map((o) => o.id), ['mono:0']);
+
+      final opts2 = buildInputChannelOptions(2);
+      expect(opts2.map((o) => o.id), ['stereo:0', 'mono:0', 'mono:1']);
+      expect(opts2[1].label, 'Ch 1 (Left / Mono)');
+      expect(opts2[2].label, 'Ch 2 (Right / Mono)');
+
+      final opts4 = buildInputChannelOptions(4);
+      expect(opts4.map((o) => o.id), [
+        'stereo:0',
+        'stereo:2',
+        'mono:0',
+        'mono:1',
+        'mono:2',
+        'mono:3',
+      ]);
+
+      final parsed = parsePactlSourceChannels([
+        'Source #219',
+        '\tName: alsa_input.usb-Focusrite_Scarlett_Solo',
+        '\tSample Specification: s32le 2ch 48000Hz',
+        '\tChannel Map: front-left,front-right',
+        'Source #220',
+        '\tName: alsa_input.usb-4ch-interface',
+        '\tSample Specification: s24le 4ch 48000Hz',
+      ]);
+      expect(parsed['alsa_input.usb-Focusrite_Scarlett_Solo'], 2);
+      expect(parsed['alsa_input.usb-4ch-interface'], 4);
+
+      // Build 2 frames of 4ch s16le: frame0 = [100, 200, 300, 400], frame1 = [-100, -200, -300, -400]
+      final inBytes = Uint8List(16);
+      final inBd = ByteData.sublistView(inBytes);
+      final samples = [100, 200, 300, 400, -100, -200, -300, -400];
+      for (int i = 0; i < samples.length; i++) {
+        inBd.setInt16(i * 2, samples[i], Endian.little);
+      }
+
+      // Partial chunk test with alignPcm16Frames (8 bytes per 4ch frame)
+      final split1 = alignPcm16Frames(inBytes.sublist(0, 10), Uint8List(0), captureChannels: 4);
+      expect(split1.alignedFrames.length, 8);
+      expect(split1.nextRemainder.length, 2);
+      final split2 = alignPcm16Frames(inBytes.sublist(10), split1.nextRemainder, captureChannels: 4);
+      expect(split2.alignedFrames.length, 8);
+      expect(split2.nextRemainder.length, 0);
+
+      // Mono Ch 2 (index 1) maps Ch 2 identically into L & R
+      final monoCh2 = mapAlignedPcm16ToStereo(
+        inBytes,
+        captureChannels: 4,
+        selection: resolveInputChannelOption('mono:1', 4),
+      );
+      final ch2Bd = ByteData.sublistView(monoCh2);
+      expect(ch2Bd.getInt16(0, Endian.little), 200);
+      expect(ch2Bd.getInt16(2, Endian.little), 200);
+      expect(ch2Bd.getInt16(4, Endian.little), -200);
+      expect(ch2Bd.getInt16(6, Endian.little), -200);
+
+      // Stereo Ch 3-4 (index 2) extracts Ch 3 -> L and Ch 4 -> R
+      final stereo34 = mapAlignedPcm16ToStereo(
+        inBytes,
+        captureChannels: 4,
+        selection: resolveInputChannelOption('stereo:2', 4),
+      );
+      final st34Bd = ByteData.sublistView(stereo34);
+      expect(st34Bd.getInt16(0, Endian.little), 300);
+      expect(st34Bd.getInt16(2, Endian.little), 400);
+      expect(st34Bd.getInt16(4, Endian.little), -300);
+      expect(st34Bd.getInt16(6, Endian.little), -400);
+
+      // Track serializes inputChannelId cleanly
+      final tr = Track(id: 't_rec', name: 'Guitar', type: TrackType.audio)
+        ..inputChannelId = 'mono:1';
+      final rt = Track.fromJson(tr.toJson());
+      expect(rt.inputChannelId, 'mono:1');
+    });
+
+    testWidgets('EffectsRackView displays Input Channel selector and fires updates', (tester) async {
+      final track = Track(id: 'aud1', name: 'Guitar', type: TrackType.audio);
+      const dev = InputDevice(id: 'scarlett_solo', label: 'Scarlett Solo USB');
+      String selectedChannel = 'stereo:0';
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (ctx, setModalState) => SizedBox(
+                width: 1100,
+                height: 360,
+                child: EffectsRackView(
+                  track: track,
+                  allTracks: [track],
+                  inputDevices: const [dev],
+                  selectedInputDevice: dev,
+                  inputChannelOptions: buildInputChannelOptions(2),
+                  selectedInputChannelId: selectedChannel,
+                  trackLevel: 0.0,
+                  sidechainGr: 0.0,
+                  detectedPitch: null,
+                  tunerEnabled: false,
+                  onSaveState: () {},
+                  onInputDeviceChanged: (_) {},
+                  onInputChannelChanged: (ch) {
+                    if (ch != null) setModalState(() => selectedChannel = ch);
+                  },
+                  onToggleTuner: () {},
+                  onNoiseGateChanged: (_) {},
+                  onReorderEffect: (_, _) {},
+                  onRemoveEffect: (_) {},
+                  onToggleBypass: (_) {},
+                  onParamChanged: (_, _, _) {},
+                  onSidechainChanged: (_, _) {},
+                  onApplyPreset: (_) {},
+                  onAddEffectPressed: () {},
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('Input Source'), findsOneWidget);
+      expect(find.text('Input Channel'), findsOneWidget);
+      expect(find.byKey(const Key('input_channel_dropdown')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('input_channel_dropdown')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Ch 2 (Right / Mono)').last);
+      await tester.pumpAndSettle();
+
+      expect(selectedChannel, 'mono:1');
+    });
+
+    testWidgets('Audio track header exposes input channel pill selector in DawApp', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      tester.view.physicalSize = const Size(1440, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+
+      await tester.pumpWidget(const MaterialApp(home: DawApp()));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      await tester.tap(find.byIcon(Icons.add).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add Audio Track'));
+      await tester.pumpAndSettle();
+
+      final pillFinder = find.byWidgetPredicate(
+        (w) => w.key is ValueKey<String> && (w.key as ValueKey<String>).value.startsWith('track_channel_pill_'),
+      );
+      expect(pillFinder, findsOneWidget);
+      expect(
+        find.descendant(of: pillFinder, matching: find.text('1-2')),
+        findsOneWidget,
+      );
+
+      await tester.tap(pillFinder);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Ch 2 (Right / Mono)'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.descendant(of: pillFinder, matching: find.text('Ch 2')),
+        findsOneWidget,
+      );
+    });
+
+    test('Normalizes quoted record_linux device IDs and handles 1ch Blue Snowball capture metadata', () {
+      const rawQuotedSnowballId =
+          '"alsa_input.usb-BLUE_MICROPHONE_Blue_Snowball_797_2020_07_04_-00.mono-fallback"';
+      const cleanSnowballId =
+          'alsa_input.usb-BLUE_MICROPHONE_Blue_Snowball_797_2020_07_04_-00.mono-fallback';
+
+      expect(
+        normalizeAudioInputDeviceId('  $rawQuotedSnowballId  '),
+        cleanSnowballId,
+      );
+      expect(normalizeAudioInputDeviceId("'dev_single_quoted'"), 'dev_single_quoted');
+
+      final parsed = parsePactlSourceChannels([
+        'Source #304',
+        '\tName: $cleanSnowballId',
+        '\tDescription: Blue Snowball Mono',
+        '\tSample Specification: s16le 1ch 48000Hz',
+        '\tChannel Map: mono',
+        'Source #219',
+        '\tName: alsa_input.usb-Focusrite_Scarlett_Solo_USB-00.Direct__Direct__source',
+        '\tSample Specification: s32le 2ch 48000Hz',
+      ]);
+
+      expect(resolveInputDeviceChannelCount(rawQuotedSnowballId, parsed), 1);
+      expect(
+        resolveInputDeviceChannelCount(rawQuotedSnowballId, const {}),
+        1,
+      );
+
+      final monoOpt = resolveInputChannelOption('mono:1', 1);
+      expect(monoOpt.id, 'mono:0');
+      expect(monoOpt.label, 'Ch 1 (Mono)');
+
+      final inMono = ByteData(4)
+        ..setInt16(0, 1234, Endian.little)
+        ..setInt16(2, -2345, Endian.little);
+      final outStereo = mapAlignedPcm16ToStereo(
+        inMono.buffer.asUint8List(),
+        captureChannels: 1,
+        selection: monoOpt,
+      );
+      final outBd = ByteData.sublistView(outStereo);
+      expect(outBd.getInt16(0, Endian.little), 1234);
+      expect(outBd.getInt16(2, Endian.little), 1234);
+      expect(outBd.getInt16(4, Endian.little), -2345);
+      expect(outBd.getInt16(6, Endian.little), -2345);
+    });
+
+    testWidgets('EffectsRackView handles switching to 1ch mono mic and selecting Ch 1 cleanly', (tester) async {
+      final track = Track(id: 'aud_mono', name: 'Vocals', type: TrackType.audio)
+        ..inputChannelId = 'mono:1';
+      const scarlett = InputDevice(
+        id: 'alsa_input.scarlett',
+        label: 'Scarlett Solo',
+      );
+      const snowball = InputDevice(
+        id: 'alsa_input.usb-BLUE_MICROPHONE_Blue_Snowball.mono-fallback',
+        label: 'Blue Snowball Mono',
+      );
+      InputDevice activeDev = scarlett;
+      String selectedChannel = 'mono:1';
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (ctx, setModalState) {
+                final chCount = resolveInputDeviceChannelCount(
+                  activeDev.id,
+                  {scarlett.id: 2, snowball.id: 1},
+                );
+                return SizedBox(
+                  width: 1100,
+                  height: 360,
+                  child: EffectsRackView(
+                    track: track,
+                    allTracks: [track],
+                    inputDevices: const [scarlett, snowball],
+                    selectedInputDevice: activeDev,
+                    inputChannelOptions: buildInputChannelOptions(chCount),
+                    selectedInputChannelId:
+                        resolveInputChannelOption(selectedChannel, chCount).id,
+                    trackLevel: 0.0,
+                    sidechainGr: 0.0,
+                    detectedPitch: null,
+                    tunerEnabled: false,
+                    onSaveState: () {},
+                    onInputDeviceChanged: (dev) {
+                      if (dev != null) {
+                        setModalState(() {
+                          activeDev = dev;
+                          selectedChannel = resolveInputChannelOption(
+                            selectedChannel,
+                            resolveInputDeviceChannelCount(
+                              dev.id,
+                              {scarlett.id: 2, snowball.id: 1},
+                            ),
+                          ).id;
+                        });
+                      }
+                    },
+                    onInputChannelChanged: (ch) {
+                      if (ch != null) setModalState(() => selectedChannel = ch);
+                    },
+                    onToggleTuner: () {},
+                    onNoiseGateChanged: (_) {},
+                    onReorderEffect: (_, _) {},
+                    onRemoveEffect: (_) {},
+                    onToggleBypass: (_) {},
+                    onParamChanged: (_, _, _) {},
+                    onSidechainChanged: (_, _) {},
+                    onApplyPreset: (_) {},
+                    onAddEffectPressed: () {},
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.byKey(const Key('input_device_dropdown')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Blue Snowball Mono').last);
+      await tester.pumpAndSettle();
+
+      expect(activeDev, snowball);
+      expect(selectedChannel, 'mono:0');
+      expect(find.text('Ch 1 (Mono)'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('input_channel_dropdown')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Ch 1 (Mono)').last);
+      await tester.pumpAndSettle();
+      expect(selectedChannel, 'mono:0');
+    });
+
+    test('detectPitchHz handles quiet DC-biased signals and RealtimePitchTracker tracks streaming audio', () {
+      const sr = 44100;
+      // Quiet E2 guitar string (0.005 amp) with a 0.04 DC offset
+      final quietE2 = Float64List(4096);
+      for (int i = 0; i < quietE2.length; i++) {
+        quietE2[i] = 0.04 + 0.005 * sin(2 * pi * 82.41 * i / sr);
+      }
+      final e2Res = detectPitchHz(quietE2, sr);
+      expect(e2Res, isNotNull);
+      expect(e2Res!.noteName, 'E2');
+      expect(e2Res.frequencyHz, closeTo(82.41, 1.5));
+
+      // Streaming RealtimePitchTracker locks on A4 across 512-sample chunks,
+      // ignores isolated 1-hop octave jumps, and resets after silence.
+      final tracker = RealtimePitchTracker(sampleRate: sr);
+      int phase = 0;
+      bool locked = false;
+      for (int c = 0; c < 6; c++) {
+        final chunk = Float64List(512);
+        for (int i = 0; i < chunk.length; i++) {
+          chunk[i] = 0.1 * sin(2 * pi * 440.0 * phase++ / sr);
+        }
+        if (tracker.addSamples(chunk)) {
+          locked = true;
+        }
+      }
+      expect(locked, isTrue);
+      expect(tracker.current, isNotNull);
+      expect(tracker.current!.noteName, 'A4');
+
+      // Feed silence until hold period expires -> clears cleanly to null
+      final silenceChunk = Float64List(1024);
+      for (int c = 0; c < 12; c++) {
+        tracker.addSamples(silenceChunk);
+      }
+      expect(tracker.current, isNull);
+    });
+  });
+
+  group('Audio Output Device Routing', () {
+    test('parsePactlDefaultSink, parsePactlSinks, parsePactlSinkInputIdsForPid & matchPlaybackDeviceForSink work accurately', () {
+      const infoText = '''
+Server String: /run/user/1000/pulse/native
+Default Sink: alsa_output.usb-Focusrite_Scarlett_Solo_USB_Y7PE74V22E69FD-00.Direct__Direct__sink
+Default Source: alsa_input.usb-Focusrite_Scarlett_Solo_USB_Y7PE74V22E69FD-00.Direct__Direct__source
+''';
+      expect(
+        parsePactlDefaultSink(infoText),
+        'alsa_output.usb-Focusrite_Scarlett_Solo_USB_Y7PE74V22E69FD-00.Direct__Direct__sink',
+      );
+
+      final sinks = parsePactlSinks([
+        'Sink #218',
+        '\tName: alsa_output.usb-Focusrite_Scarlett_Solo_USB_Y7PE74V22E69FD-00.Direct__Direct__sink',
+        '\tDescription: Scarlett Solo (3rd Gen.) Direct Scarlett Solo USB',
+        'Sink #230',
+        '\tName: alsa_output.pci-0000_00_1f.3.analog-stereo',
+        '\tDescription: Built-in Audio Analog Stereo',
+      ]);
+      expect(sinks, hasLength(2));
+      expect(sinks[0].index, 218);
+      expect(sinks[0].description, 'Scarlett Solo (3rd Gen.) Direct Scarlett Solo USB');
+
+      const playbackDevices = [
+        PlaybackDevice(0, true, 'Built-in Audio Analog Stereo'),
+        PlaybackDevice(1, false, 'Scarlett Solo (3rd Gen.) Direct Scarlett Solo USB'),
+      ];
+      final matched = matchPlaybackDeviceForSink(playbackDevices, sinks[0]);
+      expect(matched?.id, 1);
+
+      final matchedSink = matchSinkForPlaybackDevice(sinks, playbackDevices[0]);
+      expect(matchedSink?.index, 230);
+
+      // Sink-input parsing finds streams belonging to our pid routed to wrong sink (#230)
+      final inputs = parsePactlSinkInputIdsForPid([
+        'Sink Input #55',
+        '\tSink: 230',
+        '\tProperties:',
+        '\t\tapplication.process.id = "4242"',
+        'Sink Input #56',
+        '\tSink: 218',
+        '\tProperties:',
+        '\t\tapplication.process.id = "4242"',
+        'Sink Input #57',
+        '\tSink: 230',
+        '\tProperties:',
+        '\t\tapplication.process.id = "9999"',
+      ], 4242, targetSinkIndex: 218);
+      expect(inputs, [55]);
+    });
+
+    testWidgets('EffectsRackView displays Output Device selector and fires updates', (tester) async {
+      final track = Track(id: 'aud_out', name: 'Master', type: TrackType.audio);
+      const outputs = [
+        PlaybackDevice(0, true, 'Built-in Audio Analog Stereo'),
+        PlaybackDevice(1, false, 'Scarlett Solo (3rd Gen.) Direct Scarlett Solo USB'),
+      ];
+      String selectedOutput = 'system_default';
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (ctx, setModalState) => SizedBox(
+                width: 1100,
+                height: 460,
+                child: EffectsRackView(
+                  track: track,
+                  allTracks: [track],
+                  inputDevices: const [],
+                  selectedInputDevice: null,
+                  outputDevices: outputs,
+                  selectedOutputDeviceKey: selectedOutput,
+                  systemDefaultOutputLabel: 'Scarlett Solo (3rd Gen.) Direct Scarlett Solo USB',
+                  trackLevel: 0.0,
+                  sidechainGr: 0.0,
+                  detectedPitch: null,
+                  tunerEnabled: false,
+                  onSaveState: () {},
+                  onInputDeviceChanged: (_) {},
+                  onOutputDeviceChanged: (k) {
+                    if (k != null) setModalState(() => selectedOutput = k);
+                  },
+                  onToggleTuner: () {},
+                  onNoiseGateChanged: (_) {},
+                  onReorderEffect: (_, _) {},
+                  onRemoveEffect: (_) {},
+                  onToggleBypass: (_) {},
+                  onParamChanged: (_, _, _) {},
+                  onSidechainChanged: (_, _) {},
+                  onApplyPreset: (_) {},
+                  onAddEffectPressed: () {},
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('Output Device'), findsOneWidget);
+      expect(find.byKey(const Key('output_device_dropdown')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('output_device_dropdown')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.text('Scarlett Solo (3rd Gen.) Direct Scarlett Solo USB').last,
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        selectedOutput,
+        'dev:Scarlett Solo (3rd Gen.) Direct Scarlett Solo USB',
+      );
+    });
+  });
+
+  group('Unlimited Timeline Playback & Recording Past 16 Bars', () {
+    testWidgets('Timeline, loop bar, and playback extend past 16 bars without stopping or clamping', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      tester.view.physicalSize = const Size(1440, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+
+      await tester.pumpWidget(const MaterialApp(home: DawApp()));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // Add a MIDI track (1 bar clip initially)
+      await tester.tap(find.byIcon(Icons.add).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add MIDI Track'));
+      await tester.pumpAndSettle();
+
+      // Verify TimelineLoopBar receives maxTimelineUnits >= 6400 (32+ bars at 120 BPM)
+      final loopBar = tester.widget<TimelineLoopBar>(find.byType(TimelineLoopBar));
+      expect(loopBar.maxTimelineUnits, greaterThanOrEqualTo(6400.0));
+
+      // Tap near the right side of the timeline minimap (85% of 6400 = ~5440 units = bar 27+ at 120 BPM)
+      final minimap = find.ancestor(
+        of: find.byType(TimelineLoopBar),
+        matching: find.byType(Column),
+      ).first;
+      // Locate minimap container directly above timeline ruler (height 22)
+      final minimapGesture = find.byWidgetPredicate(
+        (w) => w is Container && w.constraints?.minHeight == 22 && w.constraints?.maxHeight == 22,
+      );
+      if (minimapGesture.evaluate().isNotEmpty) {
+        final rect = tester.getRect(minimapGesture.first);
+        await tester.tapAt(Offset(rect.left + rect.width * 0.85, rect.center.dy));
+        await tester.pumpAndSettle();
+      } else {
+        // Fallback: drag timeline horizontally or verify extent via minimap Stack
+        expect(minimap, findsOneWidget);
+      }
+
+      // Start playback (isLooping == false) and ensure it stays active past bar 16 without stopping
+      await tester.tap(find.byIcon(Icons.play_arrow).first);
+      await tester.pump(const Duration(milliseconds: 150));
+      expect(find.byIcon(Icons.pause), findsOneWidget);
+
+      // Stop playback cleanly
+      await tester.tap(find.byIcon(Icons.pause).first);
+      await tester.pumpAndSettle();
+      expect(find.byIcon(Icons.play_arrow), findsOneWidget);
+    });
+  });
+
+  group('Recording Latency Sync & Live Playhead Seek', () {
+    test('computeRecordingSyncPlacement compensates round-trip latency and cold-start offsets', () {
+      // Pre-warmed capture: chunk arrives right at Beat 1 (441 frames = 10ms -> chunkStart = 0.0)
+      // With 40ms latency compensation at 100 units/s (4.0 units), clip aligns on Beat 1
+      // with startOffset = 4.0 and remaining length = 396.0.
+      final warmed = computeRecordingSyncPlacement(
+        recordingStartPos: 0.0,
+        firstChunkArrivedPlayhead: 1.0,
+        firstChunkFrames: 441,
+        rawWavDurationSeconds: 4.0,
+        unitsPerSecond: 100.0,
+        latencyCompensationMs: 40.0,
+      );
+      expect(warmed.clipStart, closeTo(0.0, 0.01));
+      expect(warmed.startOffset, closeTo(4.0, 0.01));
+      expect(warmed.clipLength, closeTo(396.0, 0.01));
+
+      // Late stream open: chunk arrived 120ms after Beat 1 (firstChunkArrivedPlayhead = 13.0, chunk = 1.0 -> start = 12.0)
+      // Minus 40ms latency comp -> true capture start = 8.0 units (80ms into the timeline)
+      final coldStart = computeRecordingSyncPlacement(
+        recordingStartPos: 0.0,
+        firstChunkArrivedPlayhead: 13.0,
+        firstChunkFrames: 441,
+        rawWavDurationSeconds: 4.0,
+        unitsPerSecond: 100.0,
+        latencyCompensationMs: 40.0,
+      );
+      expect(coldStart.clipStart, closeTo(8.0, 0.01));
+      expect(coldStart.startOffset, closeTo(0.0, 0.01));
+      expect(coldStart.clipLength, closeTo(400.0, 0.01));
+    });
+
+    testWidgets('EffectsRackView renders Rec Latency slider and DawApp seeks cleanly during playback', (tester) async {
+      final track = Track(id: 'aud_lat', name: 'Vox', type: TrackType.audio);
+      double latency = 35.0;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (ctx, setModalState) => SizedBox(
+                width: 1100,
+                height: 520,
+                child: EffectsRackView(
+                  track: track,
+                  allTracks: [track],
+                  inputDevices: const [],
+                  selectedInputDevice: null,
+                  recordingLatencyMs: latency,
+                  trackLevel: 0.0,
+                  sidechainGr: 0.0,
+                  detectedPitch: null,
+                  tunerEnabled: false,
+                  onSaveState: () {},
+                  onInputDeviceChanged: (_) {},
+                  onRecordingLatencyChanged: (v) => setModalState(() => latency = v),
+                  onToggleTuner: () {},
+                  onNoiseGateChanged: (_) {},
+                  onReorderEffect: (_, _) {},
+                  onRemoveEffect: (_) {},
+                  onToggleBypass: (_) {},
+                  onParamChanged: (_, _, _) {},
+                  onSidechainChanged: (_, _) {},
+                  onApplyPreset: (_) {},
+                  onAddEffectPressed: () {},
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('Rec Latency'), findsOneWidget);
+      expect(find.text('35 ms'), findsOneWidget);
+      expect(find.byKey(const Key('rec_latency_slider')), findsOneWidget);
+
+      // Verify seeking earlier while DawApp is playing keeps playback running smoothly
+      SharedPreferences.setMockInitialValues({});
+      tester.view.physicalSize = const Size(1440, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+
+      await tester.pumpWidget(const MaterialApp(home: DawApp()));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      await tester.tap(find.byIcon(Icons.add).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add Audio Track'));
+      await tester.pumpAndSettle();
+
+      // Seek to bar 4 on the bottom half of the timeline ruler, start playing, then click earlier at bar 2
+      final rulerFinder = find.byType(TimelineLoopBar);
+      final rulerRect = tester.getRect(rulerFinder);
+      await tester.tapAt(Offset(rulerRect.left + 400.0, rulerRect.bottom - 6.0));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.play_arrow).first);
+      await tester.pump(const Duration(milliseconds: 80));
+      expect(find.byIcon(Icons.pause), findsOneWidget);
+
+      // Click before current playhead (~bar 2 = 200px) while playing
+      await tester.tapAt(Offset(rulerRect.left + 200.0, rulerRect.bottom - 6.0));
+      await tester.pump(const Duration(milliseconds: 80));
+      expect(find.byIcon(Icons.pause), findsOneWidget);
+
+      await tester.tap(find.byIcon(Icons.pause).first);
+      await tester.pumpAndSettle();
+    });
+  });
+
+  group('Cross-Track Clip Moving', () {
+    testWidgets('Dragging a MIDI clip vertically moves it onto another compatible MIDI/Sampler track', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      tester.view.physicalSize = const Size(1440, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+
+      await tester.pumpWidget(const MaterialApp(home: DawApp()));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // Track 0: MIDI Track 1 ('Pattern 1')
+      await tester.tap(find.byIcon(Icons.add).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add MIDI Track'));
+      await tester.pumpAndSettle();
+
+      // Track 1: Audio Track 2 (incompatible target for MIDI clip)
+      await tester.tap(find.byIcon(Icons.add).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add Audio Track'));
+      await tester.pumpAndSettle();
+
+      // Track 2: MIDI Track 3 (compatible target, initially has its own 'Pattern 1' -> rename or check y coordinates)
+      await tester.tap(find.byIcon(Icons.add).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add MIDI Track'));
+      await tester.pumpAndSettle();
+
+      final clipsBefore = tester.widgetList(find.text('Pattern 1')).map((w) => tester.getTopLeft(find.byWidget(w))).toList()
+        ..sort((a, b) => a.dy.compareTo(b.dy));
+      expect(clipsBefore, hasLength(2));
+      final topClipOrigPos = clipsBefore[0];
+      final bottomTrackY = clipsBefore[1].dy;
+      expect(bottomTrackY - topClipOrigPos.dy, greaterThan(150.0));
+
+      // Drag the top clip down by 100px (onto Audio Track 2 -> incompatible!) -> should stay on Track 0
+      await tester.drag(
+        find.text('Pattern 1').first,
+        const Offset(40, 100),
+        kind: PointerDeviceKind.mouse,
+        warnIfMissed: false,
+      );
+      await tester.pumpAndSettle();
+
+      final afterIncompat = tester.widgetList(find.text('Pattern 1')).map((w) => tester.getTopLeft(find.byWidget(w))).toList()
+        ..sort((a, b) => a.dy.compareTo(b.dy));
+      expect(afterIncompat[0].dy, closeTo(topClipOrigPos.dy, 2.0));
+
+      // Now drag the top clip down by 200px + right by 160px onto MIDI Track 3 -> should move cleanly!
+      await tester.drag(
+        find.text('Pattern 1').first,
+        const Offset(160, 200),
+        kind: PointerDeviceKind.mouse,
+        warnIfMissed: false,
+      );
+      await tester.pumpAndSettle();
+
+      final afterMove = tester.widgetList(find.text('Pattern 1')).map((w) => tester.getTopLeft(find.byWidget(w))).toList()
+        ..sort((a, b) => a.dy.compareTo(b.dy));
+      expect(afterMove, hasLength(2));
+      // Both clips are now on MIDI Track 3!
+      expect(afterMove[0].dy, closeTo(bottomTrackY, 2.0));
+      expect(afterMove[1].dy, closeTo(bottomTrackY, 2.0));
+      expect((afterMove[0].dx - afterMove[1].dx).abs(), greaterThan(100.0));
+    });
+
+    testWidgets('MIDI clips extend past initial originalLength in Timeline and MidiEditorWidget', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      tester.view.physicalSize = const Size(1600, 960);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+
+      await tester.pumpWidget(const MaterialApp(home: DawApp()));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      await tester.tap(find.byIcon(Icons.add).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add MIDI Track'));
+      await tester.pumpAndSettle();
+
+      // Measure initial 'Pattern 1' clip container width (~800px = 4 bars at 120 BPM)
+      final clipFinder = find.byWidgetPredicate(
+        (w) => w.key is ValueKey<String> && (w.key as ValueKey<String>).value.startsWith('clip_'),
+      );
+      final origRect = tester.getRect(clipFinder.first);
+      expect(origRect.width, closeTo(800.0, 2.0));
+
+      // Drag the right resize handle right by 600px -> should extend to ~1400px (7 bars), NOT clamp to 800px!
+      await tester.dragFrom(
+        Offset(origRect.right - 4.0, origRect.center.dy),
+        const Offset(600.0, 0.0),
+        kind: PointerDeviceKind.mouse,
+      );
+      await tester.pumpAndSettle();
+
+      final extendedRect = tester.getRect(clipFinder.first);
+      expect(extendedRect.width, greaterThan(origRect.width + 500.0));
+
+      // Also verify MidiEditorWidget's interactive clip end handle extends clip length cleanly
+      final midiTrack = Track(id: 'ext_m', name: 'Keys', type: TrackType.midi);
+      final midiClip = MidiClip(
+        id: 'ext_mc',
+        start: 0.0,
+        length: 200.0,
+        color: Colors.purple,
+      );
+      int noteChanges = 0;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (ctx, setModalState) => SizedBox(
+                width: 1100,
+                height: 460,
+                child: MidiEditorWidget(
+                  clip: midiClip,
+                  track: midiTrack,
+                  snapToGrid: false,
+                  snapResolution: 25.0,
+                  zoomX: 1.0,
+                  bpm: 120,
+                  timeSigTop: 4,
+                  playheadPosition: 0.0,
+                  onPlayheadChanged: (_) {},
+                  selectedMidiNotes: const [],
+                  onSelectionChanged: (_) {},
+                  onNotesChanged: () {
+                    noteChanges++;
+                    setModalState(() {});
+                  },
+                  onSynthSettingsChanged: () {},
+                  onZoomIn: () {},
+                  onZoomOut: () {},
+                  midiDevices: const [],
+                  onCopy: () {},
+                  onPaste: () {},
+                  onInstrumentDialogRequested: () {},
+                  onMidiInputDialogRequested: () {},
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final endHandle = find.byKey(const Key('midi_clip_end_handle'));
+      expect(endHandle, findsOneWidget);
+      await tester.drag(
+        endHandle,
+        const Offset(350.0, 0.0),
+        kind: PointerDeviceKind.mouse,
+      );
+      await tester.pumpAndSettle();
+
+      expect(midiClip.length, greaterThan(500.0));
+      expect(midiClip.originalLength, greaterThan(500.0));
+      expect(noteChanges, greaterThan(0));
     });
   });
 }

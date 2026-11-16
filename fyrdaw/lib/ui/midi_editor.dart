@@ -251,7 +251,7 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
 
   void _addNoteAt(Offset localPosition) {
     double realX = localPosition.dx / widget.zoomX;
-    if (realX > widget.clip.length) return;
+    if (realX < 0) return;
 
     int row = (localPosition.dy / _pitchHeight).floor();
     int midiPitch = _getMidiPitchFromRow(row);
@@ -263,12 +263,24 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
     double start = widget.snapToGrid
         ? (realX / widget.snapResolution).floor() * widget.snapResolution
         : realX;
+    final double noteLen = 100.0 * 60.0 / widget.bpm;
     widget.onChangeStart?.call();
+    if (start + noteLen > widget.clip.length) {
+      final double barLen = noteLen * max(1, widget.timeSigTop);
+      final double needed =
+          ((start + noteLen) / barLen).ceil() * barLen;
+      widget.clip.length = max(widget.clip.length, needed);
+      if (widget.clip.startOffset + widget.clip.length >
+          widget.clip.originalLength) {
+        widget.clip.originalLength =
+            widget.clip.startOffset + widget.clip.length;
+      }
+    }
     widget.clip.notes.add(
       MidiNote(
         pitch: midiPitch,
         start: start,
-        length: 100.0 * 60.0 / widget.bpm,
+        length: noteLen,
         velocity: _velocity,
       ),
     );
@@ -558,7 +570,7 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
       );
     }
     double beatW = 100.0 * 60.0 / widget.bpm * widget.zoomX;
-    final double gridW = max(2000.0, widget.clip.length * widget.zoomX + 100);
+    final double gridW = max(2000.0, widget.clip.length * widget.zoomX + 800.0);
     return Column(
       children: [
         Container(
@@ -1243,31 +1255,6 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                               ),
                             ),
                           ),
-                          Positioned(
-                            left: widget.clip.length * widget.zoomX,
-                            top: 0,
-                            bottom: 0,
-                            width: 12,
-                            child: IgnorePointer(
-                              child: Stack(
-                                children: [
-                                  Container(width: 2, color: lavenderAccent),
-                                  Positioned(
-                                    left: 0,
-                                    top: 0,
-                                    child: Container(
-                                      width: 12,
-                                      height: 12,
-                                      decoration: BoxDecoration(
-                                        color: lavenderAccent,
-                                        shape: BoxShape.circle,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
                           Positioned.fill(
                             child: GestureDetector(
                               supportedDevices: {
@@ -1624,6 +1611,92 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                                 child: Container(color: Colors.red),
                               ),
                             ),
+                          Positioned(
+                            key: const Key('midi_clip_end_handle'),
+                            left: max(0.0, widget.clip.length * widget.zoomX - 6),
+                            top: 0,
+                            bottom: 0,
+                            width: 14,
+                            child: Tooltip(
+                              message: 'Drag to resize MIDI clip length',
+                              child: MouseRegion(
+                                cursor: SystemMouseCursors.resizeLeftRight,
+                                child: GestureDetector(
+                                  supportedDevices: const {
+                                    PointerDeviceKind.mouse,
+                                    PointerDeviceKind.touch,
+                                    PointerDeviceKind.stylus,
+                                  },
+                                  behavior: HitTestBehavior.opaque,
+                                  onHorizontalDragStart: (_) =>
+                                      widget.onChangeStart?.call(),
+                                  onHorizontalDragUpdate: (d) {
+                                    setState(() {
+                                      widget.clip.length = max(
+                                        20.0,
+                                        widget.clip.length +
+                                            d.delta.dx / widget.zoomX,
+                                      );
+                                      if (widget.clip.startOffset +
+                                              widget.clip.length >
+                                          widget.clip.originalLength) {
+                                        widget.clip.originalLength =
+                                            widget.clip.startOffset +
+                                            widget.clip.length;
+                                      }
+                                    });
+                                    widget.onNotesChanged();
+                                  },
+                                  onHorizontalDragEnd: (_) {
+                                    if (widget.snapToGrid) {
+                                      setState(() {
+                                        widget.clip.length = max(
+                                          20.0,
+                                          (widget.clip.length /
+                                                      widget.snapResolution)
+                                                  .round() *
+                                              widget.snapResolution,
+                                        );
+                                        if (widget.clip.startOffset +
+                                                widget.clip.length >
+                                            widget.clip.originalLength) {
+                                          widget.clip.originalLength =
+                                              widget.clip.startOffset +
+                                              widget.clip.length;
+                                        }
+                                      });
+                                    }
+                                    widget.onNotesChanged();
+                                  },
+                                  child: Stack(
+                                    children: [
+                                      Positioned(
+                                        left: 6,
+                                        top: 0,
+                                        bottom: 0,
+                                        child: Container(
+                                          width: 2,
+                                          color: lavenderAccent,
+                                        ),
+                                      ),
+                                      Positioned(
+                                        left: 1,
+                                        top: 0,
+                                        child: Container(
+                                          width: 12,
+                                          height: 12,
+                                          decoration: BoxDecoration(
+                                            color: lavenderAccent,
+                                            shape: BoxShape.circle,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
                         ],
                       ),
                     ),

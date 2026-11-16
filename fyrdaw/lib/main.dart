@@ -39,6 +39,9 @@ import 'package:fyrdaw/ui/session_launcher.dart';
 import 'package:fyrdaw/ui/tempo_signature_lane.dart';
 import 'package:fyrdaw/ui/timeline_loop_bar.dart';
 import 'package:fyrdaw/ui/audio_clip_editor.dart';
+import 'package:fyrdaw/utils/audio_input_channel.dart';
+import 'package:fyrdaw/utils/audio_output_routing.dart';
+import 'package:fyrdaw/utils/recording_sync.dart';
 import 'package:fyrdaw/utils/audio_utils.dart';
 import 'package:fyrdaw/utils/bus_metering.dart';
 import 'package:fyrdaw/utils/metronome_synth.dart';
@@ -180,14 +183,54 @@ void main() async {
   });
 
   try {
+    PlaybackDevice? initialDevice;
+    LinuxAudioSink? targetLinuxSink;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedOut = prefs.getString('sb_output_device') ?? 'system_default';
+      final devices = SoLoud.instance.listPlaybackDevices();
+      if (Platform.isLinux) {
+        final defName = await LinuxOutputRouter.getDefaultSinkName();
+        final sinks = await LinuxOutputRouter.listSinks();
+        if (savedOut.startsWith('dev:')) {
+          final wantName = savedOut.substring(4);
+          final devMatch =
+              devices.where((d) => d.name == wantName).firstOrNull;
+          if (devMatch != null) {
+            initialDevice = devMatch;
+            targetLinuxSink = matchSinkForPlaybackDevice(sinks, devMatch);
+          }
+        }
+        if (targetLinuxSink == null && defName != null) {
+          targetLinuxSink =
+              sinks.where((s) => s.name == defName).firstOrNull ??
+              LinuxAudioSink(name: defName, description: defName);
+        }
+        initialDevice ??= matchPlaybackDeviceForSink(devices, targetLinuxSink);
+      } else if (savedOut.startsWith('dev:')) {
+        final wantName = savedOut.substring(4);
+        initialDevice =
+            devices.where((d) => d.name == wantName).firstOrNull;
+      }
+    } catch (_) {}
+
     try {
       await SoLoud.instance.init(
         sampleRate: 44100,
         bufferSize: 256,
         channels: Channels.stereo,
+        device: initialDevice,
       );
     } catch (_) {
-      await SoLoud.instance.init();
+      await SoLoud.instance.init(device: initialDevice);
+    }
+    if (Platform.isLinux && targetLinuxSink != null) {
+      unawaited(
+        LinuxOutputRouter.routeProcessAudioToSink(
+          targetLinuxSink.name,
+          targetSinkIndex: targetLinuxSink.index,
+        ),
+      );
     }
     SoLoud.instance.setGlobalVolume(1.0);
     try {
