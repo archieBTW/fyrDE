@@ -341,6 +341,7 @@ class _HomeState extends State<Home> with WindowListener {
 
   @override
   void onWindowResized() async {
+    if (await windowManager.isMaximized()) return;
     final size = await windowManager.getSize();
     SettingsManager().saveWindowSize(size.width, size.height);
   }
@@ -692,13 +693,19 @@ class CustomTitleBar extends StatelessWidget {
 
   const CustomTitleBar({super.key, required this.onAddTab});
 
+  Future<void> _toggleMaximize() async {
+    if (await windowManager.isMaximized()) {
+      await windowManager.unmaximize();
+    } else {
+      await windowManager.maximize();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onPanStart: (_) => windowManager.startDragging(),
-      onDoubleTap: () {
-        Process.run('swaymsg', ['[pid="$pid"] fullscreen toggle']);
-      },
+      onDoubleTap: _toggleMaximize,
       child: Container(
         height: 45,
         color: FyrTheme.isDark
@@ -725,9 +732,7 @@ class CustomTitleBar extends StatelessWidget {
                 const SizedBox(width: 8),
                 _WindowButton(
                   color: Colors.green.shade300,
-                  onPressed: () {
-                    Process.run('swaymsg', ['[pid="$pid"] fullscreen toggle']);
-                  },
+                  onPressed: _toggleMaximize,
                 ),
               ],
             ),

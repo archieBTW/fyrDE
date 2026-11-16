@@ -129,7 +129,13 @@ class _PhoneHomePageState extends State<PhoneHomePage> {
             const SizedBox(width: 8),
             _buildTrafficLight(Colors.orangeAccent, () => windowManager.minimize()),
             const SizedBox(width: 8),
-            _buildTrafficLight(Colors.greenAccent, () => windowManager.maximize()),
+            _buildTrafficLight(Colors.greenAccent, () async {
+              if (await windowManager.isMaximized()) {
+                await windowManager.unmaximize();
+              } else {
+                await windowManager.maximize();
+              }
+            }),
             const SizedBox(width: 20),
             Icon(Icons.phone_android, color: FyrTheme.accentColor, size: 20),
             const SizedBox(width: 12),

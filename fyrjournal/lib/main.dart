@@ -141,7 +141,13 @@ class _JournalHomePageState extends State<JournalHomePage> {
                   const SizedBox(width: 8),
                   _TrafficLight(color: Colors.amber.shade400, onTap: () => windowManager.minimize()),
                   const SizedBox(width: 8),
-                  _TrafficLight(color: Colors.green.shade400, onTap: () => windowManager.maximize()),
+                  _TrafficLight(color: Colors.green.shade400, onTap: () async {
+                    if (await windowManager.isMaximized()) {
+                      await windowManager.unmaximize();
+                    } else {
+                      await windowManager.maximize();
+                    }
+                  }),
                   const Expanded(child: SizedBox()),
                 ],
               ),

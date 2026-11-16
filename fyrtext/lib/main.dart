@@ -433,6 +433,14 @@ class _FyrTextHomeState extends State<FyrTextHome> {
     });
   }
 
+  Future<void> _toggleMaximize() async {
+    if (await windowManager.isMaximized()) {
+      await windowManager.unmaximize();
+    } else {
+      await windowManager.maximize();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final fileName = _currentFilePath != null ? p.basename(_currentFilePath!) : 'Untitled';
@@ -446,7 +454,7 @@ class _FyrTextHomeState extends State<FyrTextHome> {
             GestureDetector(
               behavior: HitTestBehavior.translucent,
               onPanStart: (_) => windowManager.startDragging(),
-              onDoubleTap: () => windowManager.maximize(),
+              onDoubleTap: _toggleMaximize,
               child: Container(
                 height: 55,
                 padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -464,7 +472,7 @@ class _FyrTextHomeState extends State<FyrTextHome> {
                     ),
                     const SizedBox(width: 8),
                     InkWell(
-                      onTap: () => Process.run('swaymsg', ['[pid="$pid"] fullscreen toggle']),
+                      onTap: _toggleMaximize,
                       child: Icon(Icons.circle, color: Colors.green.shade300, size: 16),
                     ),
                     const SizedBox(width: 24),

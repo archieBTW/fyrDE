@@ -22,7 +22,13 @@ class TrafficLights extends StatelessWidget {
         const SizedBox(width: 8),
         _buildButton(
           color: const Color(0xFF27C93F),
-          onTap: () => windowManager.maximize(),
+          onTap: () async {
+            if (await windowManager.isMaximized()) {
+              await windowManager.unmaximize();
+            } else {
+              await windowManager.maximize();
+            }
+          },
           icon: Icons.add,
         ),
       ],

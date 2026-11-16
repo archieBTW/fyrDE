@@ -317,7 +317,13 @@ class _FyrAVMainState extends State<FyrAVMain> {
             const SizedBox(width: 8),
             _buildTrafficLight(const Color(0xFFFEBC2E), () => windowManager.minimize()),
             const SizedBox(width: 8),
-            _buildTrafficLight(const Color(0xFF28C840), () => windowManager.maximize()),
+            _buildTrafficLight(const Color(0xFF28C840), () async {
+              if (await windowManager.isMaximized()) {
+                await windowManager.unmaximize();
+              } else {
+                await windowManager.maximize();
+              }
+            }),
             const SizedBox(width: 20),
             Icon(Icons.security, color: FyrTheme.accentColor, size: 24),
             const SizedBox(width: 12),

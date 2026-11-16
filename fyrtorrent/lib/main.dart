@@ -279,7 +279,13 @@ class MainScreen extends StatelessWidget {
                       const SizedBox(width: 8),
                       _buildTrafficLight(
                         Colors.greenAccent,
-                        () => windowManager.maximize(),
+                        () async {
+                          if (await windowManager.isMaximized()) {
+                            await windowManager.unmaximize();
+                          } else {
+                            await windowManager.maximize();
+                          }
+                        },
                       ),
 
                       const Spacer(),

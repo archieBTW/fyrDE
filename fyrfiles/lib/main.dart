@@ -794,6 +794,14 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
     }
   }
 
+  Future<void> _toggleMaximize() async {
+    if (await windowManager.isMaximized()) {
+      await windowManager.unmaximize();
+    } else {
+      await windowManager.maximize();
+    }
+  }
+
   @override
   void dispose() {
     windowManager.removeListener(this);
@@ -2054,9 +2062,7 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
                   onPanStart: (details) {
                     windowManager.startDragging();
                   },
-                  onDoubleTap: () {
-                    Process.run('swaymsg', ['[pid="$pid"] fullscreen toggle']);
-                  },
+                  onDoubleTap: _toggleMaximize,
                   child: Container(
                     height: 55 + getToolbarPadding(),
                     padding: EdgeInsets.only(top: getToolbarPadding(), left: 16, right: 16),
@@ -2076,9 +2082,7 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
                         ),
                         const SizedBox(width: 8),
                         InkWell(
-                          onTap: () {
-                            Process.run('swaymsg', ['[pid="$pid"] fullscreen toggle']);
-                          },
+                          onTap: _toggleMaximize,
                           child: Icon(Icons.circle, color: Colors.green.shade300, size: 16),
                         ),
                         const SizedBox(width: 24),
