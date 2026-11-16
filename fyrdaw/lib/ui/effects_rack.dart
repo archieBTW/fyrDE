@@ -72,6 +72,7 @@ class EffectsRackView extends StatelessWidget {
         return Colors.blue[800]!;
       case 'Compressor':
         return Colors.green[800]!;
+      case 'Overdrive':
       case 'TubeScreamer':
         return Colors.red[800]!;
       case 'GuitarAmp':

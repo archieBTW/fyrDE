@@ -30,7 +30,7 @@ A desktop Digital Audio Workstation built in **Flutter** and **C++/SoLoud DSP** 
 - **3 Realistic Drum Kits + Custom Kit Persistence**: Built-in **Acoustic Studio Kit**, **808 Trap Kit**, and **Vintage Boom-Bap Kit** loaded with stereo WAV samples, choke groups, 16-level modes, and custom kit save/load/delete.
 - **Close-Up Audio Clip Editor**: Double-click any Audio clip on the timeline to open a dedicated zoomed waveform view for non-destructive trimming, cursor splitting, fade curves, gain/pitch/stretch dials, normalization, and transient slicing.
 - **Real-Time MIDI FX**: Double-click any MIDI or Sampler clip to open the Piano Roll with built-in **Arpeggiator** (`Up`, `Down`, `Up/Down`, `Random`, rate, 1–3 octaves, gate), **Humanize**, **Audio-Transient Groove Extract**, **Step Sequencer**, and **Synth ADSR & Filter** shaping.
-- **11 Stompbox Effects + Master Rack**: `EQ`, `Compressor` (with cross-track **Sidechain Ducking**), `TubeScreamer`, `GuitarAmp`, `Reverb`, `Echo`, `Flanger`, `Chorus`, `Lofi`, `Robotize`, and `BassBoost`.
+- **11 Stompbox Effects + Master Rack**: `EQ`, `Compressor` (with cross-track **Sidechain Ducking**), `Overdrive`, `GuitarAmp`, `Reverb`, `Echo`, `Flanger`, `Chorus`, `Lofi`, `Robotize`, and `BassBoost`.
 - **Pro Mixing & Live Per-Track dBFS Metering**: Color-matched channel strips with `-48..0 dBFS` L/R VU meters and live peak dBFS readouts, Group Bus level summing, **Pre/Post-Fader** Aux Sends, Aux Return **Solo**, dedicated **Master FX** chain, integrated **LUFS meter** (`-14` / `-11` / `-9`), Stereo Correlation meter, Brickwall Limiter, and **Loudness-Matched Reference A/B**.
 - **Live Performance & Hardware**: Next-bar quantized **Session Clip Launcher** (`Scene` & per-clip launching), built-in **QWERTY Musical Typing Keyboard**, ALSA/USB hardware MIDI routing, and 1-click **MIDI Learn (`0xB0` CC)**.
 
@@ -42,7 +42,7 @@ Start fast from **Settings (`⚙`) -> `New from Template...`**:
 
 - **Empty Project** (`120 BPM`) — 1 Audio + 1 MIDI track ready to record.
 - **Lo-Fi Chill Sketch** (`85 BPM`) — Rhodes chords, Sine Sub, vinyl Lofi FX, and Sampler kit.
-- **Guitar + Vocals Rig** (`112 BPM`) — Armed vocal track (`EQ` + `Compressor`) and Guitar pedalboard (`TubeScreamer` -> `GuitarAmp` -> `Reverb`).
+- **Guitar + Vocals Rig** (`112 BPM`) — Armed vocal track (`EQ` + `Compressor`) and Guitar pedalboard (`Overdrive` -> `GuitarAmp` -> `Reverb`).
 - **Synthwave 4-Track** (`118 BPM`) — Sawtooth Arp, Warm Pad, Square Lead, and Drum Machine.
 - **Cinematic Strings & Piano** (`92 BPM`) — Grand Piano, Solo Cello, String Ensemble, and Hall Reverb.
 
@@ -137,7 +137,7 @@ Select a Sampler Track and open the **`Sampler`** tab (or double-click its timel
 ![Effects Rack Pedalboard](screenshots/effects_rack.png)
 
 Open the **`Effects`** tab to process any Track, Group Bus, or the Master Bus:
-- **Drag-to-Reorder Pedalboard**: Click **`+ Add Effect`** to insert `EQ`, `Compressor`, `TubeScreamer`, `GuitarAmp`, `Reverb`, `Echo`, `Flanger`, `Chorus`, `Lofi`, `Robotize`, or `BassBoost`. Drag cards to reorder DSP signal flow, toggle bypass LEDs, or expand (`⤢`) any pedal for large curve & modulation visualizers.
+- **Drag-to-Reorder Pedalboard**: Click **`+ Add Effect`** to insert `EQ`, `Compressor`, `Overdrive`, `GuitarAmp`, `Reverb`, `Echo`, `Flanger`, `Chorus`, `Lofi`, `Robotize`, or `BassBoost`. Drag cards to reorder DSP signal flow, toggle bypass LEDs, or expand (`⤢`) any pedal for large curve & modulation visualizers.
 - **Chain Presets (`Presets`)**: Instantly load **`Crunch Guitar Rig`**, **`Vocal Polish Chain`**, **`Lo-Fi Tape Machine`**, **`Wide Ambient Space`**, or **`Clear All Effects`**.
 - **Sidechain Compression (`SC`)**: On any `Compressor` pedal, route another track (such as Kick/Sampler) as its Sidechain trigger to duck basslines, guitars, or pads cleanly in both live playback and offline mixdown.
 - **Chromatic Tuner & Noise Gate (Audio Tracks)**: Choose an input device, tune guitars/vocals with the live Hz/cents needle, and set the input Noise Gate threshold.

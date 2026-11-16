@@ -2827,11 +2827,15 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     final hasEq = activeFx.any(
       (f) =>
           f.name == 'EQ' ||
+          f.name == 'Overdrive' ||
           f.name == 'TubeScreamer' ||
           f.name == 'GuitarAmp',
     );
     final hasWaveShaper = activeFx.any(
-      (f) => f.name == 'TubeScreamer' || f.name == 'GuitarAmp',
+      (f) =>
+          f.name == 'Overdrive' ||
+          f.name == 'TubeScreamer' ||
+          f.name == 'GuitarAmp',
     );
     final cutoffAuto = atPlayhead != null
         ? track.getInterpolatedAutomation('Synth Cutoff', atPlayhead)
@@ -2850,10 +2854,16 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     final hasBiquad =
         hasSynthFilter ||
         activeFx.any(
-          (f) => f.name == 'TubeScreamer' || f.name == 'GuitarAmp',
+          (f) =>
+              f.name == 'Overdrive' ||
+              f.name == 'TubeScreamer' ||
+              f.name == 'GuitarAmp',
         );
     final hasLimiter = activeFx.any(
-      (f) => f.name == 'TubeScreamer' || f.name == 'GuitarAmp',
+      (f) =>
+          f.name == 'Overdrive' ||
+          f.name == 'TubeScreamer' ||
+          f.name == 'GuitarAmp',
     );
     final hasEcho = activeFx.any((f) => f.name == 'Echo');
     final hasFlanger = activeFx.any(
@@ -2885,26 +2895,26 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     setFilterActive(filters.robotizeFilter, hasRobotize);
     setFilterActive(filters.bassBoostFilter, hasBassBoost);
 
-    DawEffect? tsFx;
+    DawEffect? odFx;
     DawEffect? ampFx;
     DawEffect? eqFx;
     for (final fx in activeFx) {
-      if (fx.name == 'TubeScreamer') tsFx = fx;
+      if (fx.name == 'Overdrive' || fx.name == 'TubeScreamer') odFx = fx;
       if (fx.name == 'GuitarAmp') ampFx = fx;
       if (fx.name == 'EQ') eqFx = fx;
     }
 
-    // 1. Realistic TubeScreamer (TS808/TS9) & GuitarAmp (Tube Preamp + Power Amp Sag + 4x12 Cab)
-    if (tsFx != null || ampFx != null) {
+    // 1. Realistic Overdrive (TS-style asymmetric diode clipper) & GuitarAmp (Tube Preamp + Power Amp Sag + 4x12 Cab)
+    if (odFx != null || ampFx != null) {
       try {
-        final double tsDrive = tsFx != null
-            ? _getEffectiveEffectParam(track, tsFx, 'Drive', 0.5, atPlayhead)
+        final double odDrive = odFx != null
+            ? _getEffectiveEffectParam(track, odFx, 'Drive', 0.5, atPlayhead)
             : 0.0;
-        final double tsTone = tsFx != null
-            ? _getEffectiveEffectParam(track, tsFx, 'Tone', 0.5, atPlayhead)
+        final double odTone = odFx != null
+            ? _getEffectiveEffectParam(track, odFx, 'Tone', 0.5, atPlayhead)
             : 0.5;
-        final double tsLevel = tsFx != null
-            ? _getEffectiveEffectParam(track, tsFx, 'Level', 0.5, atPlayhead)
+        final double odLevel = odFx != null
+            ? _getEffectiveEffectParam(track, odFx, 'Level', 0.5, atPlayhead)
             : 0.5;
 
         final double ampDrive = ampFx != null
@@ -2922,10 +2932,10 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         double lpfCutoff;
         double lpfResonance;
 
-        if (tsFx != null && ampFx != null) {
-          // Stacked TubeScreamer into GuitarAmp
+        if (odFx != null && ampFx != null) {
+          // Stacked Overdrive into GuitarAmp
           final double combinedDrive =
-              (1.0 - (1.0 - tsDrive * 0.85) * (1.0 - ampDrive * 0.92)).clamp(
+              (1.0 - (1.0 - odDrive * 0.85) * (1.0 - ampDrive * 0.92)).clamp(
                 0.0,
                 1.0,
               );
@@ -2935,21 +2945,21 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                 0.992,
               );
           wsWet = (0.93 + 0.07 * combinedDrive).clamp(0.0, 1.0);
-          final double blendedTone = (0.55 * tsTone + 0.45 * ampTone).clamp(
+          final double blendedTone = (0.55 * odTone + 0.45 * ampTone).clamp(
             0.0,
             1.0,
           );
           lpfCutoff = (1400.0 + blendedTone * 2800.0).clamp(1100.0, 4400.0);
-          lpfResonance = (1.20 + 0.55 * tsDrive).clamp(0.7, 2.2);
-        } else if (tsFx != null) {
-          // Standalone TubeScreamer (TS808 / TS9)
-          wsAmount = (0.35 + 0.635 * (1.0 - pow(1.0 - tsDrive, 2.2))).clamp(
+          lpfResonance = (1.20 + 0.55 * odDrive).clamp(0.7, 2.2);
+        } else if (odFx != null) {
+          // Standalone Overdrive
+          wsAmount = (0.35 + 0.635 * (1.0 - pow(1.0 - odDrive, 2.2))).clamp(
             0.0,
             0.99,
           );
-          wsWet = (0.85 + 0.15 * tsDrive).clamp(0.0, 1.0);
-          lpfCutoff = (900.0 * pow(4.8, tsTone)).clamp(800.0, 4800.0);
-          lpfResonance = (0.90 + 0.55 * tsDrive + 0.30 * tsTone).clamp(
+          wsWet = (0.85 + 0.15 * odDrive).clamp(0.0, 1.0);
+          lpfCutoff = (900.0 * pow(4.8, odTone)).clamp(800.0, 4800.0);
+          lpfResonance = (0.90 + 0.55 * odDrive + 0.30 * odTone).clamp(
             0.5,
             2.2,
           );
@@ -2983,9 +2993,9 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         if (eqFx == null) {
           filters.parametricEqFilter.numBands().value = 5;
           filters.parametricEqFilter.wet().value = 1.0;
-          if (tsFx != null && ampFx != null) {
+          if (odFx != null && ampFx != null) {
             final double gain =
-                (0.45 + 1.15 * tsLevel) * (0.55 + 1.05 * ampLevel);
+                (0.45 + 1.15 * odLevel) * (0.55 + 1.05 * ampLevel);
             filters.parametricEqFilter.bandGain(0).value = (0.35 * gain).clamp(
               0.05,
               4.0,
@@ -2995,12 +3005,12 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
               4.0,
             ); // 144 Hz cab punch
             filters.parametricEqFilter.bandGain(2).value =
-                ((1.55 + 0.85 * tsDrive) * gain).clamp(
+                ((1.55 + 0.85 * odDrive) * gain).clamp(
                   0.05,
                   4.0,
-                ); // 693 Hz TS mid-hump
+                ); // 693 Hz OD mid-hump
             filters.parametricEqFilter.bandGain(3).value =
-                ((0.95 + 0.65 * (0.5 * tsTone + 0.5 * ampTone)) * gain).clamp(
+                ((0.95 + 0.65 * (0.5 * odTone + 0.5 * ampTone)) * gain).clamp(
                   0.05,
                   4.0,
                 ); // 3330 Hz bite
@@ -3008,8 +3018,8 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
               0.05,
               4.0,
             ); // 16 kHz cab roll-off
-          } else if (tsFx != null) {
-            final double gain = 0.35 + 1.45 * tsLevel;
+          } else if (odFx != null) {
+            final double gain = 0.35 + 1.45 * odLevel;
             filters.parametricEqFilter.bandGain(0).value = (0.35 * gain).clamp(
               0.05,
               4.0,
@@ -3019,17 +3029,17 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
               4.0,
             ); // 144 Hz low-mid
             filters.parametricEqFilter.bandGain(2).value =
-                ((1.35 + 0.85 * tsDrive) * gain).clamp(
+                ((1.35 + 0.85 * odDrive) * gain).clamp(
                   0.05,
                   4.0,
                 ); // 693 Hz signature mid hump
             filters.parametricEqFilter.bandGain(3).value =
-                ((0.75 + 0.75 * tsTone) * gain).clamp(
+                ((0.75 + 0.75 * odTone) * gain).clamp(
                   0.05,
                   4.0,
                 ); // 3330 Hz active tone
             filters.parametricEqFilter.bandGain(4).value =
-                ((0.22 + 0.30 * tsTone) * gain).clamp(
+                ((0.22 + 0.30 * odTone) * gain).clamp(
                   0.05,
                   4.0,
                 ); // 16 kHz fizz rolloff
@@ -3352,7 +3362,12 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     }
 
     if (hasSynthFilter &&
-        !activeFx.any((f) => f.name == 'TubeScreamer' || f.name == 'GuitarAmp')) {
+        !activeFx.any(
+          (f) =>
+              f.name == 'Overdrive' ||
+              f.name == 'TubeScreamer' ||
+              f.name == 'GuitarAmp',
+        )) {
       try {
         final hz = 120.0 * pow(140.0, effCutoff.clamp(0.0, 1.0)).toDouble();
         filters.biquadFilter.type().value = 0; // Lowpass
@@ -4921,10 +4936,8 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           ],
         ],
         PopupMenuDivider(),
-        PopupMenuItem(value: 'color_blue', child: Text('Color: Blue')),
-        PopupMenuItem(value: 'color_red', child: Text('Color: Red')),
-        PopupMenuItem(value: 'color_green', child: Text('Color: Green')),
-        PopupMenuItem(value: 'color_purple', child: Text('Color: Purple')),
+        PopupMenuItem(value: 'clip_color', child: Text('Change Clip Color...')),
+        PopupMenuItem(value: 'track_color', child: Text('Change Track Color...')),
       ],
     );
     if (result == 'rename') {
@@ -5018,14 +5031,11 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       _saveState();
       await clip.toggleReverse();
       setState(() {});
-    } else if (result == 'color_blue') {
-      _applyTrackColorById(trackId, Colors.blueAccent);
-    } else if (result == 'color_red') {
-      _applyTrackColorById(trackId, Colors.redAccent);
-    } else if (result == 'color_green') {
-      _applyTrackColorById(trackId, Colors.green);
-    } else if (result == 'color_purple') {
-      _applyTrackColorById(trackId, kTrackColorPalette[0]);
+    } else if (result == 'clip_color') {
+      _showClipColorPicker(clip);
+    } else if (result == 'track_color') {
+      final track = tracks.where((t) => t.id == trackId).firstOrNull;
+      if (track != null) _showTrackColorPicker(track);
     }
   }
 
@@ -5831,47 +5841,213 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     });
   }
 
-  void _applyTrackColorById(String trackId, Color color) {
-    final track = tracks.where((t) => t.id == trackId).firstOrNull;
-    if (track != null) {
-      _saveState();
-      _applyTrackColor(track, color);
-    }
+  void _applyClipColor(DawClip clip, Color color) {
+    _saveState();
+    setState(() {
+      final targets = multiSelectedClips.contains(clip)
+          ? multiSelectedClips
+          : [clip];
+      for (final c in targets) {
+        c.color = color;
+      }
+    });
+  }
+
+  void _showColorPickerDialog({
+    required String title,
+    required Color initialColor,
+    required ValueChanged<Color> onColorSelected,
+  }) {
+    HSLColor customHsl = HSLColor.fromColor(initialColor);
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) {
+          final customColor = customHsl.toColor();
+          return AlertDialog(
+            backgroundColor: panelDark,
+            title: Text(title, style: TextStyle(color: textMain)),
+            content: SizedBox(
+              width: 316,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: List.generate(kTrackColorPalette.length, (i) {
+                      final c = kTrackColorPalette[i];
+                      final label = i < kTrackColorNames.length
+                          ? kTrackColorNames[i]
+                          : 'Color ${i + 1}';
+                      final isCur = initialColor.toARGB32() == c.toARGB32();
+                      return Tooltip(
+                        message: label,
+                        child: GestureDetector(
+                          onTap: () {
+                            onColorSelected(c);
+                            Navigator.pop(ctx);
+                          },
+                          child: Container(
+                            width: 30,
+                            height: 30,
+                            decoration: BoxDecoration(
+                              color: c,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: isCur ? Colors.white : Colors.black38,
+                                width: isCur ? 3 : 1,
+                              ),
+                            ),
+                            child: isCur
+                                ? const Icon(
+                                    Icons.check,
+                                    size: 16,
+                                    color: Colors.white,
+                                  )
+                                : null,
+                          ),
+                        ),
+                      );
+                    }),
+                  ),
+                  const SizedBox(height: 14),
+                  Divider(color: textMuted.withValues(alpha: 0.25), height: 1),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Text(
+                        'Custom Color',
+                        style: TextStyle(
+                          color: textMuted,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const Spacer(),
+                      Container(
+                        width: 24,
+                        height: 24,
+                        decoration: BoxDecoration(
+                          color: customColor,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white70, width: 1.5),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      SizedBox(
+                        width: 32,
+                        child: Text(
+                          'Hue',
+                          style: TextStyle(color: textMuted, fontSize: 10),
+                        ),
+                      ),
+                      Expanded(
+                        child: Slider(
+                          value: customHsl.hue,
+                          min: 0.0,
+                          max: 360.0,
+                          activeColor: customColor,
+                          onChanged: (v) => setModalState(
+                            () => customHsl = customHsl.withHue(v),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      SizedBox(
+                        width: 32,
+                        child: Text(
+                          'Sat',
+                          style: TextStyle(color: textMuted, fontSize: 10),
+                        ),
+                      ),
+                      Expanded(
+                        child: Slider(
+                          value: customHsl.saturation.clamp(0.0, 1.0),
+                          min: 0.0,
+                          max: 1.0,
+                          activeColor: customColor,
+                          onChanged: (v) => setModalState(
+                            () => customHsl = customHsl.withSaturation(v),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      SizedBox(
+                        width: 32,
+                        child: Text(
+                          'Light',
+                          style: TextStyle(color: textMuted, fontSize: 10),
+                        ),
+                      ),
+                      Expanded(
+                        child: Slider(
+                          value: customHsl.lightness.clamp(0.2, 0.85),
+                          min: 0.2,
+                          max: 0.85,
+                          activeColor: customColor,
+                          onChanged: (v) => setModalState(
+                            () => customHsl = customHsl.withLightness(v),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: customColor,
+                  foregroundColor: Colors.black,
+                ),
+                onPressed: () {
+                  onColorSelected(customColor);
+                  Navigator.pop(ctx);
+                },
+                child: const Text('Apply Custom'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   void _showTrackColorPicker(Track track) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: panelDark,
-        title: Text('Track Color', style: TextStyle(color: textMain)),
-        content: Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: kTrackColorPalette.map((c) {
-            final isCur = track.colorValue == c.toARGB32();
-            return GestureDetector(
-              onTap: () {
-                _saveState();
-                _applyTrackColor(track, c);
-                Navigator.pop(ctx);
-              },
-              child: Container(
-                width: 30,
-                height: 30,
-                decoration: BoxDecoration(
-                  color: c,
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: isCur ? Colors.white : Colors.black26,
-                    width: isCur ? 3 : 1,
-                  ),
-                ),
-              ),
-            );
-          }).toList(),
-        ),
-      ),
+    _showColorPickerDialog(
+      title: 'Track Color',
+      initialColor: track.color,
+      onColorSelected: (c) {
+        _saveState();
+        _applyTrackColor(track, c);
+      },
+    );
+  }
+
+  void _showClipColorPicker(DawClip clip) {
+    _showColorPickerDialog(
+      title: 'Clip Color',
+      initialColor: clip.color,
+      onColorSelected: (c) => _applyClipColor(clip, c),
     );
   }
 
@@ -7538,8 +7714,8 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           'Gain': 0.5,
           'Mix': 1.0,
         });
-      } else if (val == 'TubeScreamer') {
-        effect = DawEffect('TubeScreamer', {
+      } else if (val == 'Overdrive' || val == 'TubeScreamer') {
+        effect = DawEffect('Overdrive', {
           'Drive': 0.5,
           'Tone': 0.5,
           'Level': 0.5,
@@ -7591,9 +7767,9 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         'desc': 'Reduces the dynamic range of the audio.',
       },
       {
-        'name': 'TubeScreamer',
+        'name': 'Overdrive',
         'color': Colors.red[800]!,
-        'desc': 'Classic overdrive distortion effect.',
+        'desc': 'Classic warm overdrive distortion effect.',
       },
       {
         'name': 'Reverb',
@@ -7912,7 +8088,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       } else if (presetName == 'Crunch Guitar') {
         track.effectsChain = [
           DawEffect('EQ', {'Low': 0.45, 'Mid': 0.65, 'High': 0.60}),
-          DawEffect('TubeScreamer', {
+          DawEffect('Overdrive', {
             'Drive': 0.62,
             'Tone': 0.55,
             'Level': 0.70,

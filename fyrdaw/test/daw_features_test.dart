@@ -606,7 +606,8 @@ void main() {
       await tester.pumpAndSettle();
 
       // Bypass first effect pedal cleanly
-      expect(find.text('TubeScreamer'), findsOneWidget);
+      expect(find.text('Overdrive'), findsOneWidget);
+      expect(find.text('TubeScreamer'), findsNothing);
       expect(find.text('GuitarAmp'), findsOneWidget);
 
       // Verify Master LUFS & Phase correlation readouts on Mixer tab
@@ -2336,6 +2337,84 @@ void main() {
       expect(clip.notes[0].pitch, 60);
       expect(clip.notes[1].start, greaterThan(90.0));
       expect(clip.notes[1].pitch, greaterThan(60));
+    });
+  });
+
+  group('Overdrive Rename & Track/Clip Color Palette', () {
+    test('DawEffect.fromJson migrates legacy TubeScreamer to Overdrive', () {
+      final migrated = DawEffect.fromJson({
+        'name': 'TubeScreamer',
+        'parameters': {'Drive': 0.65, 'Tone': 0.5, 'Level': 0.7},
+        'isBypassed': false,
+      });
+      expect(migrated.name, 'Overdrive');
+      expect(migrated.parameters['Drive'], 0.65);
+
+      expect(kTrackColorPalette.length, greaterThanOrEqualTo(24));
+      expect(kTrackColorNames.length, kTrackColorPalette.length);
+    });
+
+    testWidgets('Track and Clip color pickers offer expanded palette and custom color sliders', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      tester.view.physicalSize = const Size(1600, 960);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+
+      await tester.pumpWidget(const MaterialApp(home: DawApp()));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      await tester.tap(find.byIcon(Icons.add).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add MIDI Track'));
+      await tester.pumpAndSettle();
+
+      // Open Track Color picker via track header right-click -> Change Track Color
+      await tester.tapAt(
+        tester.getCenter(find.text('MIDI Track 1').first),
+        buttons: kSecondaryMouseButton,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Change Track Color'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Track Color'), findsOneWidget);
+      expect(find.text('Custom Color'), findsOneWidget);
+      expect(find.byTooltip('Crimson'), findsOneWidget);
+      expect(find.byTooltip('Cobalt Blue'), findsOneWidget);
+      expect(find.byTooltip('Cool Slate'), findsOneWidget);
+
+      // Pick Crimson (new preset #8)
+      await tester.tap(find.byTooltip('Crimson'));
+      await tester.pumpAndSettle();
+      expect(find.text('Track Color'), findsNothing);
+
+      // Right-click clip -> Change Clip Color... -> pick Gold
+      await tester.tapAt(
+        tester.getCenter(find.text('Pattern 1').first),
+        buttons: kSecondaryMouseButton,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Change Clip Color...'), findsOneWidget);
+      expect(find.text('Change Track Color...'), findsOneWidget);
+      await tester.tap(find.text('Change Clip Color...'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Clip Color'), findsOneWidget);
+      await tester.tap(find.byTooltip('Gold'));
+      await tester.pumpAndSettle();
+      expect(find.text('Clip Color'), findsNothing);
+
+      // Verify clip Container now reflects Gold while track header indicator retains Crimson
+      final clipContainer = tester.widget<Container>(
+        find.ancestor(
+          of: find.text('Pattern 1'),
+          matching: find.byWidgetPredicate(
+            (w) => w is Container && w.decoration is BoxDecoration && (w.decoration as BoxDecoration).borderRadius != null,
+          ),
+        ).first,
+      );
+      final clipColor = ((clipContainer.decoration as BoxDecoration).color)!;
+      expect(clipColor.toARGB32() & 0x00FFFFFF, kTrackColorPalette[11].toARGB32() & 0x00FFFFFF);
     });
   });
 }

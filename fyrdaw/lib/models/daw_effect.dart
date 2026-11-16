@@ -28,16 +28,20 @@ class DawEffect {
     if (pluginUri != null) 'pluginUri': pluginUri,
   };
 
-  factory DawEffect.fromJson(Map<String, dynamic> json) => DawEffect(
-    json['name'],
-    Map<String, double>.from(
-      (json['parameters'] as Map).map(
-        (k, v) => MapEntry(k.toString(), (v as num).toDouble()),
+  factory DawEffect.fromJson(Map<String, dynamic> json) {
+    final rawName = json['name'] as String;
+    final normalizedName = rawName == 'TubeScreamer' ? 'Overdrive' : rawName;
+    return DawEffect(
+      normalizedName,
+      Map<String, double>.from(
+        (json['parameters'] as Map).map(
+          (k, v) => MapEntry(k.toString(), (v as num).toDouble()),
+        ),
       ),
-    ),
-    isBypassed: json['isBypassed'] ?? false,
-    sidechainTrackId: json['sidechainTrackId'],
-    pluginFormat: json['pluginFormat'],
-    pluginUri: json['pluginUri'],
-  );
+      isBypassed: json['isBypassed'] ?? false,
+      sidechainTrackId: json['sidechainTrackId'],
+      pluginFormat: json['pluginFormat'],
+      pluginUri: json['pluginUri'],
+    );
+  }
 }

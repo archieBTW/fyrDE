@@ -44,7 +44,7 @@ Future<ProjectTemplateResult?> showTemplatesDialog(BuildContext context) {
     _TemplateInfo(
       id: 'guitar_rig',
       title: 'Guitar + Vocals Rig',
-      subtitle: 'Armed mic track + TubeScreamer -> GuitarAmp -> Reverb pedalboard.',
+      subtitle: 'Armed mic track + Overdrive -> GuitarAmp -> Reverb pedalboard.',
       icon: Icons.bolt,
       color: kTrackColorPalette[3],
       bpm: 112,
@@ -337,7 +337,7 @@ ProjectTemplateResult _buildTemplate(String id) {
       colorValue: kTrackColorPalette[3].toARGB32(),
     )
       ..effectsChain = [
-        DawEffect('TubeScreamer', {'Drive': 0.45, 'Tone': 0.55, 'Level': 0.55}),
+        DawEffect('Overdrive', {'Drive': 0.45, 'Tone': 0.55, 'Level': 0.55}),
         DawEffect('GuitarAmp', {'Drive': 0.65, 'Tone': 0.58, 'Level': 0.52}),
         DawEffect('Reverb', {'Size': 0.4, 'Decay': 0.35, 'Mix': 0.25}),
       ];

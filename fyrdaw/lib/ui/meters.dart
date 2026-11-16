@@ -419,7 +419,9 @@ class _PedalVizPainter extends CustomPainter {
       for (int i = 0; i <= 32; i++) {
         final t = (i / 32.0) * 2.0 - 1.0;
         final x = (i / 32.0) * size.width;
-        final shaped = (effect.name == 'TubeScreamer' || effect.name == 'GuitarAmp')
+        final shaped = (effect.name == 'Overdrive' ||
+                effect.name == 'TubeScreamer' ||
+                effect.name == 'GuitarAmp')
             ? (1.0 - exp(-t.abs() * (1.5 + drive * 6.0))) * (t >= 0 ? 1 : -1)
             : sin(t * pi * (1.0 + drive * 2.5));
         final y = midY - shaped * (size.height * 0.38);

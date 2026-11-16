@@ -644,7 +644,9 @@ class MixdownRenderer {
           left[i] = lpL * lowGain + hpL;
           right[i] = lpR * lowGain + hpR;
         }
-      } else if (fx.name == 'TubeScreamer' || fx.name == 'GuitarAmp') {
+      } else if (fx.name == 'Overdrive' ||
+          fx.name == 'TubeScreamer' ||
+          fx.name == 'GuitarAmp') {
         final drive = fx.parameters['Drive'] ?? 0.6;
         final level = fx.parameters['Level'] ?? 0.5;
         final preGain = 1.0 + drive * 8.0;

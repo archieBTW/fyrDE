@@ -9,14 +9,57 @@ import 'package:fyrdaw/models/sampler_pad.dart';
 import 'package:fyrdaw/utils/bus_metering.dart';
 
 const List<Color> kTrackColorPalette = [
-  Color(0xFFB57EDC), // Lavender
-  Color(0xFF38BDF8), // Sky Blue
-  Color(0xFF34D399), // Emerald
-  Color(0xFFFBBF24), // Amber
-  Color(0xFFF472B6), // Pink
-  Color(0xFFFB7185), // Rose
-  Color(0xFF818CF8), // Indigo
-  Color(0xFF2DD4BF), // Teal
+  Color(0xFFB57EDC), // 0: Lavender
+  Color(0xFF38BDF8), // 1: Sky Blue
+  Color(0xFF34D399), // 2: Emerald
+  Color(0xFFFBBF24), // 3: Amber
+  Color(0xFFF472B6), // 4: Pink
+  Color(0xFFFB7185), // 5: Rose
+  Color(0xFF818CF8), // 6: Indigo
+  Color(0xFF2DD4BF), // 7: Teal
+  Color(0xFFEF4444), // 8: Crimson
+  Color(0xFFF97316), // 9: Tangerine
+  Color(0xFFFB923C), // 10: Coral Orange
+  Color(0xFFEAB308), // 11: Gold
+  Color(0xFFA3E635), // 12: Lime
+  Color(0xFF22C55E), // 13: Forest Green
+  Color(0xFF10B981), // 14: Mint Jade
+  Color(0xFF06B6D4), // 15: Cyan
+  Color(0xFF0EA5E9), // 16: Azure
+  Color(0xFF3B82F6), // 17: Cobalt Blue
+  Color(0xFF6366F1), // 18: Electric Iris
+  Color(0xFF8B5CF6), // 19: Violet
+  Color(0xFFA855F7), // 20: Orchid
+  Color(0xFFD946EF), // 21: Magenta
+  Color(0xFFF43F5E), // 22: Ruby
+  Color(0xFF94A3B8), // 23: Cool Slate
+];
+
+const List<String> kTrackColorNames = [
+  'Lavender',
+  'Sky Blue',
+  'Emerald',
+  'Amber',
+  'Pink',
+  'Rose',
+  'Indigo',
+  'Teal',
+  'Crimson',
+  'Tangerine',
+  'Coral Orange',
+  'Gold',
+  'Lime',
+  'Forest Green',
+  'Mint Jade',
+  'Cyan',
+  'Azure',
+  'Cobalt Blue',
+  'Electric Iris',
+  'Violet',
+  'Orchid',
+  'Magenta',
+  'Ruby',
+  'Cool Slate',
 ];
 
 class SynthSettings {
