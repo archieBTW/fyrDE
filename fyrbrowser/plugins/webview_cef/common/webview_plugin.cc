@@ -909,6 +909,7 @@ namespace webview_cef {
 		CefSettings cefs;
 		cefs.windowless_rendering_enabled = true;
 		cefs.no_sandbox = true;
+		cefs.background_color = CefColorSetARGB(255, 255, 255, 255);
 
         // FyrBrowser: Set persistent cache path
         const char* homedir = getenv("HOME");

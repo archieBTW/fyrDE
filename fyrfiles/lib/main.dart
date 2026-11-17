@@ -372,6 +372,53 @@ class FyrFilesApp extends StatelessWidget {
   }
 }
 
+/// Computes the next selected item index when navigating with arrow keys.
+int? computeNextSelectionIndex({
+  required int itemCount,
+  required int? currentIndex,
+  required LogicalKeyboardKey key,
+  required bool isListView,
+  required int crossAxisCount,
+}) {
+  if (itemCount <= 0) return null;
+  if (currentIndex == null || currentIndex < 0 || currentIndex >= itemCount) {
+    return 0;
+  }
+
+  if (isListView) {
+    if (key == LogicalKeyboardKey.arrowDown) {
+      return min(currentIndex + 1, itemCount - 1);
+    }
+    if (key == LogicalKeyboardKey.arrowUp) {
+      return max(currentIndex - 1, 0);
+    }
+    return currentIndex;
+  }
+
+  final cols = max(1, crossAxisCount);
+  if (key == LogicalKeyboardKey.arrowRight) {
+    return min(currentIndex + 1, itemCount - 1);
+  }
+  if (key == LogicalKeyboardKey.arrowLeft) {
+    return max(currentIndex - 1, 0);
+  }
+  if (key == LogicalKeyboardKey.arrowUp) {
+    final target = currentIndex - cols;
+    return target >= 0 ? target : currentIndex;
+  }
+  if (key == LogicalKeyboardKey.arrowDown) {
+    final target = currentIndex + cols;
+    if (target < itemCount) return target;
+    final currentRow = currentIndex ~/ cols;
+    final lastRow = (itemCount - 1) ~/ cols;
+    if (currentRow < lastRow) {
+      return itemCount - 1;
+    }
+    return currentIndex;
+  }
+  return currentIndex;
+}
+
 class FyrFiles extends StatefulWidget {
   const FyrFiles({super.key});
 
@@ -380,7 +427,7 @@ class FyrFiles extends StatefulWidget {
 }
 
 class _FyrFilesState extends State<FyrFiles> with WindowListener {
-  late List<FileSystemEntity> files;
+  List<FileSystemEntity> files = [];
   late Directory currentDir = Directory.current;
   FileSystemEntity? copiedEntity;
   bool isFileContextMenuShown = false;
@@ -398,6 +445,7 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
   String sortBy = 'name'; // 'name', 'date', 'size'
   bool sortAscending = true;
   int? _lastSelectedIndex;
+  int? _activeSelectedIndex;
   final ScrollController _scrollController = ScrollController();
   String? previewImagePath;
   final FocusNode _mainFocusNode = FocusNode();
@@ -455,12 +503,103 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
     exit(0);
   }
 
+  double _availableFileViewWidth(BuildContext context) {
+    final width = MediaQuery.of(context).size.width;
+    final sidebarWidth = isSidebarCollapsed ? 64.0 : 200.0;
+    return max(1.0, width - sidebarWidth);
+  }
+
+  int _gridCrossAxisCount(double availableWidth) {
+    return (availableWidth / 120).floor().clamp(1, 100);
+  }
+
+  int? _currentSelectionIndex() {
+    if (files.isEmpty) return null;
+    if (_activeSelectedIndex != null &&
+        _activeSelectedIndex! >= 0 &&
+        _activeSelectedIndex! < files.length &&
+        selectedPaths.contains(files[_activeSelectedIndex!].path)) {
+      return _activeSelectedIndex!;
+    }
+    if (_lastSelectedIndex != null &&
+        _lastSelectedIndex! >= 0 &&
+        _lastSelectedIndex! < files.length &&
+        selectedPaths.contains(files[_lastSelectedIndex!].path)) {
+      return _lastSelectedIndex!;
+    }
+    final idx = files.indexWhere((f) => selectedPaths.contains(f.path));
+    return idx >= 0 ? idx : null;
+  }
+
+  void _ensureIndexVisible(int index) {
+    if (!_scrollController.hasClients || index < 0 || index >= files.length) return;
+    final position = _scrollController.position;
+    final viewportHeight = position.viewportDimension;
+    final currentOffset = position.pixels;
+    final maxScroll = position.maxScrollExtent;
+
+    final double itemTop;
+    final double itemBottom;
+    if (isListView) {
+      const double itemHeight = 50.0;
+      itemTop = index * itemHeight;
+      itemBottom = itemTop + itemHeight;
+    } else {
+      final availableWidth = _availableFileViewWidth(context);
+      final crossAxisCount = _gridCrossAxisCount(availableWidth);
+      final rowHeight = availableWidth / crossAxisCount;
+      final row = index ~/ crossAxisCount;
+      itemTop = row * rowHeight;
+      itemBottom = itemTop + rowHeight;
+    }
+
+    if (itemTop < currentOffset) {
+      _scrollController.jumpTo(itemTop.clamp(0.0, maxScroll));
+    } else if (itemBottom > currentOffset + viewportHeight) {
+      _scrollController.jumpTo((itemBottom - viewportHeight).clamp(0.0, maxScroll));
+    }
+  }
+
+  void _moveSelectionByArrow(LogicalKeyboardKey key) {
+    if (files.isEmpty) return;
+    final currentIndex = _currentSelectionIndex();
+    final crossAxisCount = _gridCrossAxisCount(_availableFileViewWidth(context));
+    final newIndex = computeNextSelectionIndex(
+      itemCount: files.length,
+      currentIndex: currentIndex,
+      key: key,
+      isListView: isListView,
+      crossAxisCount: crossAxisCount,
+    );
+    if (newIndex == null) return;
+
+    final isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
+    setState(() {
+      if (isShiftPressed) {
+        final anchor = _lastSelectedIndex ?? currentIndex ?? newIndex;
+        _lastSelectedIndex = anchor;
+        _activeSelectedIndex = newIndex;
+        final start = min(anchor, newIndex);
+        final end = max(anchor, newIndex);
+        selectedPaths = {for (int i = start; i <= end; i++) files[i].path};
+      } else {
+        selectedPaths = {files[newIndex].path};
+        _lastSelectedIndex = newIndex;
+        _activeSelectedIndex = newIndex;
+        final newEntity = files[newIndex];
+        if (isSavePicker && !FileSystemEntity.isDirectorySync(newEntity.path)) {
+          _saveFileNameController.text = p.basename(newEntity.path);
+        }
+      }
+    });
+    _ensureIndexVisible(newIndex);
+  }
+
   void _updateSelection() {
     if (dragStart == null || dragCurrent == null) return;
     
     Rect selectionRect = Rect.fromPoints(dragStart!, dragCurrent!);
-    double sidebarWidth = isSidebarCollapsed ? 64.0 : 200.0;
-    double availableWidth = MediaQuery.of(context).size.width - sidebarWidth;
+    double availableWidth = _availableFileViewWidth(context);
     
     Set<String> newSelection = {};
     
@@ -473,8 +612,8 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
         }
       }
     } else {
-      double itemWidth = availableWidth / (availableWidth / 120).floor();
-      int crossAxisCount = (availableWidth / 120).floor();
+      int crossAxisCount = _gridCrossAxisCount(availableWidth);
+      double itemWidth = availableWidth / crossAxisCount;
       
       for (int i = 0; i < files.length; i++) {
         int row = i ~/ crossAxisCount;
@@ -527,7 +666,7 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
     List<FileSystemEntity> previousFiles = [];
     bool isFirstRun = true;
 
-    while (true) {
+    while (mounted) {
       final currentFiles = selectedTag == null
           ? currentDir.listSync()
           : fileInfoList
@@ -855,6 +994,7 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
           files = currentDir.listSync();
           if (initialSelectedPath != null && files.any((f) => f.path == initialSelectedPath)) {
             _lastSelectedIndex = files.indexWhere((f) => f.path == initialSelectedPath);
+            _activeSelectedIndex = _lastSelectedIndex;
           }
         });
         if (s3config.enabled) {
@@ -961,7 +1101,9 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
       _sortFiles();
       selectedPaths.clear();
       _lastSelectedIndex = null;
+      _activeSelectedIndex = null;
     });
+    _mainFocusNode.requestFocus();
   }
 
   bool hasChildDirectories(Directory directory) {
@@ -1816,15 +1958,20 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
           () => TapGestureRecognizer(),
           (TapGestureRecognizer instance) {
             instance.onTap = () {
+              _mainFocusNode.requestFocus();
               bool isControlPressed = HardwareKeyboard.instance.isControlPressed;
               bool isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
               setState(() {
                 if (isControlPressed) {
                   if (selectedPaths.contains(file.path)) {
                     selectedPaths.remove(file.path);
+                    if (_activeSelectedIndex == index) {
+                      _activeSelectedIndex = null;
+                    }
                   } else {
                     selectedPaths.add(file.path);
                     _lastSelectedIndex = index;
+                    _activeSelectedIndex = index;
                   }
                 } else if (isShiftPressed && _lastSelectedIndex != null) {
                   int start = min(_lastSelectedIndex!, index);
@@ -1832,10 +1979,12 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
                   for (int i = start; i <= end; i++) {
                     selectedPaths.add(files[i].path);
                   }
+                  _activeSelectedIndex = index;
                 } else {
                   selectedPaths.clear();
                   selectedPaths.add(file.path);
                   _lastSelectedIndex = index;
+                  _activeSelectedIndex = index;
                   if (isSavePicker && !isDir) {
                     _saveFileNameController.text = p.basename(file.path);
                   }
@@ -1896,11 +2045,13 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
       data: dragPayload,
       dragAnchorStrategy: pointerDragAnchorStrategy,
       onDragStarted: () {
+        _mainFocusNode.requestFocus();
         if (!selectedPaths.contains(file.path)) {
           setState(() {
             selectedPaths.clear();
             selectedPaths.add(file.path);
             _lastSelectedIndex = index;
+            _activeSelectedIndex = index;
           });
         }
       },
@@ -1980,74 +2131,107 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
 
   @override
   Widget build(BuildContext context) {
-    double width = MediaQuery.of(context).size.width;
     Stream<List<FileSystemEntity>> fileStream = watchDirectory();
 
-    return RawKeyboardListener(
+    return Focus(
       focusNode: _mainFocusNode,
       autofocus: true,
-      onKey: (event) {
-        if (event is RawKeyDownEvent) {
-          // If a text field is focused, don't trigger global shortcuts
-          if (FocusManager.instance.primaryFocus?.context?.widget is EditableText) {
-            return;
-          }
-          if (event.logicalKey == LogicalKeyboardKey.controlLeft ||
-              event.logicalKey == LogicalKeyboardKey.controlRight) {
-          } else if (event.logicalKey == LogicalKeyboardKey.keyA && event.isControlPressed) {
-            setState(() {
-              selectedPaths = files.map((e) => e.path).toSet();
-            });
-          } else if (event.logicalKey == LogicalKeyboardKey.keyH &&
-              event.isControlPressed) {
-            setState(() {
-              showHiddenFiles = !showHiddenFiles;
-              if (selectedTag == null) {
-                openDirectory(currentDir);
-              }
-            });
-          } else if (event.logicalKey == LogicalKeyboardKey.space) {
-            if (previewImagePath != null) {
-              setState(() {
-                previewImagePath = null;
-              });
-            } else if (selectedPaths.length == 1) {
-              String path = selectedPaths.first;
-              String lower = path.toLowerCase();
-              if (lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
-                setState(() {
-                  previewImagePath = path;
-                });
-              }
+      onKeyEvent: (FocusNode node, KeyEvent event) {
+        if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+          return KeyEventResult.ignored;
+        }
+        // If a text field is focused, don't trigger global shortcuts
+        final primaryFocusContext = FocusManager.instance.primaryFocus?.context;
+        if (primaryFocusContext != null &&
+            (primaryFocusContext.widget is EditableText ||
+                primaryFocusContext.findAncestorWidgetOfExactType<EditableText>() != null)) {
+          return KeyEventResult.ignored;
+        }
+
+        final isControlPressed = HardwareKeyboard.instance.isControlPressed;
+        final isAltPressed = HardwareKeyboard.instance.isAltPressed;
+        final isMetaPressed = HardwareKeyboard.instance.isMetaPressed;
+        final key = event.logicalKey;
+
+        if (!isControlPressed &&
+            !isAltPressed &&
+            !isMetaPressed &&
+            (key == LogicalKeyboardKey.arrowUp ||
+                key == LogicalKeyboardKey.arrowDown ||
+                key == LogicalKeyboardKey.arrowLeft ||
+                key == LogicalKeyboardKey.arrowRight)) {
+          _moveSelectionByArrow(key);
+          return KeyEventResult.handled;
+        }
+
+        if (event is! KeyDownEvent) {
+          return KeyEventResult.ignored;
+        }
+
+        if (key == LogicalKeyboardKey.controlLeft ||
+            key == LogicalKeyboardKey.controlRight) {
+          return KeyEventResult.ignored;
+        } else if (key == LogicalKeyboardKey.keyA && isControlPressed) {
+          setState(() {
+            selectedPaths = files.map((e) => e.path).toSet();
+          });
+          return KeyEventResult.handled;
+        } else if (key == LogicalKeyboardKey.keyH && isControlPressed) {
+          setState(() {
+            showHiddenFiles = !showHiddenFiles;
+            if (selectedTag == null) {
+              openDirectory(currentDir);
             }
-          } else if (event.logicalKey == LogicalKeyboardKey.delete || event.logicalKey == LogicalKeyboardKey.backspace) {
-            if (selectedPaths.isNotEmpty) {
-              for (String path in selectedPaths.toList()) {
-                try {
-                  var result = Process.runSync('gio', ['trash', path]);
-                  if (result.exitCode != 0) {
-                    FileSystemEntity.typeSync(path) == FileSystemEntityType.directory 
-                        ? Directory(path).deleteSync(recursive: true)
-                        : File(path).deleteSync();
-                  }
-                } catch (e) {
+          });
+          return KeyEventResult.handled;
+        } else if (key == LogicalKeyboardKey.space) {
+          if (previewImagePath != null) {
+            setState(() {
+              previewImagePath = null;
+            });
+          } else if (selectedPaths.length == 1) {
+            String path = selectedPaths.first;
+            String lower = path.toLowerCase();
+            if (lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
+              setState(() {
+                previewImagePath = path;
+              });
+            }
+          }
+          return KeyEventResult.handled;
+        } else if (key == LogicalKeyboardKey.delete || key == LogicalKeyboardKey.backspace) {
+          if (selectedPaths.isNotEmpty) {
+            for (String path in selectedPaths.toList()) {
+              try {
+                var result = Process.runSync('gio', ['trash', path]);
+                if (result.exitCode != 0) {
                   FileSystemEntity.typeSync(path) == FileSystemEntityType.directory 
                       ? Directory(path).deleteSync(recursive: true)
                       : File(path).deleteSync();
                 }
+              } catch (e) {
+                FileSystemEntity.typeSync(path) == FileSystemEntityType.directory 
+                    ? Directory(path).deleteSync(recursive: true)
+                    : File(path).deleteSync();
               }
-              setState(() {
-                selectedPaths.clear();
-              });
             }
-          } else if (event.logicalKey == LogicalKeyboardKey.keyC && event.isControlPressed) {
-            if (selectedPaths.isNotEmpty) {
-              Clipboard.setData(ClipboardData(text: selectedPaths.join('\n')));
-            }
-          } else if (event.logicalKey == LogicalKeyboardKey.keyV && event.isControlPressed) {
-            pasteFile(currentDir);
+            setState(() {
+              selectedPaths.clear();
+              _lastSelectedIndex = null;
+              _activeSelectedIndex = null;
+            });
           }
+          return KeyEventResult.handled;
+        } else if (key == LogicalKeyboardKey.keyC && isControlPressed) {
+          if (selectedPaths.isNotEmpty) {
+            Clipboard.setData(ClipboardData(text: selectedPaths.join('\n')));
+          }
+          return KeyEventResult.handled;
+        } else if (key == LogicalKeyboardKey.keyV && isControlPressed) {
+          pasteFile(currentDir);
+          return KeyEventResult.handled;
         }
+        return KeyEventResult.ignored;
       },
       child: ResizableWindow(
         child: Scaffold(
@@ -2332,7 +2516,6 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
                           builder: (context, snapshot) {
                             if (snapshot.hasData) {
                               files = snapshot.data as List<FileSystemEntity>;
-    double sidebarWidth = isSidebarCollapsed ? 64.0 : 200.0;
     return DropTarget(
       onDragDone: (details) async {
         for (var file in details.files) {
@@ -2396,12 +2579,14 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
               (MousePanGestureRecognizer instance) {
                 instance
                   ..onStart = (details) {
+                    _mainFocusNode.requestFocus();
                     if (HardwareKeyboard.instance.isControlPressed || HardwareKeyboard.instance.isShiftPressed) return;
                     setState(() {
                       dragStart = details.localPosition;
                       dragCurrent = details.localPosition;
                       selectedPaths.clear();
                       _lastSelectedIndex = null;
+                      _activeSelectedIndex = null;
                     });
                   }
                   ..onUpdate = (details) {
@@ -2423,9 +2608,11 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
               (TapGestureRecognizer instance) {
                 instance
                   ..onTap = () {
+                    _mainFocusNode.requestFocus();
                     setState(() {
                       selectedPaths.clear();
                       _lastSelectedIndex = null;
+                      _activeSelectedIndex = null;
                     });
                   }
                   ..onSecondaryTapDown = (details) async {
@@ -2466,7 +2653,7 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
                           : GridView.builder(
                               controller: _scrollController,
                               gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                                  crossAxisCount: ((width - sidebarWidth) / 120).floor().clamp(1, 100)),
+                                  crossAxisCount: _gridCrossAxisCount(_availableFileViewWidth(context))),
                               itemCount: files.length,
                               itemBuilder: (context, index) => _buildFileItem(files[index], index, false),
                             ),

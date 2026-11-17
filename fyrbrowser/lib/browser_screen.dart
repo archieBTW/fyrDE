@@ -354,8 +354,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
           setState(() => tab.blockedCount = totalCount);
         },
         onBeforePopup: (targetUrl) {
-          if (!mounted || targetUrl.isEmpty) return;
-          _addNewTab(initialUrl: targetUrl);
+          // Handled natively via WebviewManager().onPopupCreated.
         },
         onExternalProtocol: (url) => _showExternalProtocolPrompt(url),
         onDownloadStart: (suggestedName, url) {
@@ -1672,9 +1671,12 @@ Categories=Network;WebBrowser;
           child: Stack(
             children: [
               if (tab.isReady)
-                WebView(
-                  tab.controller,
-                  key: ValueKey('webview_${tab.id}'),
+                ColoredBox(
+                  color: Colors.white,
+                  child: WebView(
+                    tab.controller,
+                    key: ValueKey('webview_${tab.id}'),
+                  ),
                 )
               else
                 Center(

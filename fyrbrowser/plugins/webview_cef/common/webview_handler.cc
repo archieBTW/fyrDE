@@ -230,7 +230,8 @@ bool WebviewHandler::OnBeforePopup(CefRefPtr<CefBrowser> browser,
         onBeforePopup(browser->GetIdentifier(), url);
     }
     
-    // Set as offscreen to allow FyrBrowser to render it
+    // Set as offscreen to allow FyrBrowser to render it with opaque default white canvas.
+    settings.background_color = CefColorSetARGB(255, 255, 255, 255);
     windowInfo.SetAsWindowless(0);
     
     return false; // Return false to allow CEF to create the popup
@@ -356,6 +357,7 @@ void WebviewHandler::createBrowser(std::string url, std::function<void(int)> cal
 #endif
     CefBrowserSettings browser_settings ;
     browser_settings.windowless_frame_rate = 60;
+    browser_settings.background_color = CefColorSetARGB(255, 255, 255, 255);
 
     CefWindowInfo window_info;
     window_info.SetAsWindowless(0);
