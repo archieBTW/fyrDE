@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=fyrDirector
+GenericName=Video Editor
+Comment=Non-linear video editor (Kdenlive / CapCut style) for FyrDE
+Exec=/usr/local/bin/fyrdirector %f
+Icon=fyrdirector
+Terminal=false
+Type=Application
+Categories=AudioVideo;Video;AudioVideoEditing;
+MimeType=video/mp4;video/x-matroska;video/webm;video/quicktime;application/x-fyrdirector;
+Keywords=video;editor;kdenlive;capcut;timeline;render;ffmpeg;

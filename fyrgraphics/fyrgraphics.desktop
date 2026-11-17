@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=fyrGraphics
+GenericName=Image Editor
+Comment=Raster & layered image editor for FyrDE
+Exec=/usr/local/bin/fyrgraphics %f
+Icon=fyrgraphics
+Terminal=false
+Type=Application
+Categories=Graphics;2DGraphics;RasterGraphics;Photography;
+MimeType=image/png;image/jpeg;image/webp;image/bmp;image/gif;image/tiff;application/x-fyrgraphics;
+Keywords=gimp;photoshop;photopea;image;editor;layers;graphics;

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=fyrEmu
+GenericName=Game Emulator
+Comment=Multi-platform retro game emulator (GBC, GBA, NES, SNES) for FyrDE
+Exec=/usr/local/bin/fyremu %f
+Icon=fyremu
+Terminal=false
+Type=Application
+Categories=Game;Emulator;
+MimeType=application/x-gameboy-rom;application/x-gameboy-color-rom;application/x-gba-rom;application/x-nes-rom;application/x-snes-rom;application/x-genesis-rom;
+Keywords=emulator;gameboy;gbc;gba;nes;snes;retro;roms;

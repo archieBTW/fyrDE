@@ -22,7 +22,7 @@ WIDTH=$(echo $RES | cut -d'x' -f1)
 HEIGHT=$(echo $RES | cut -d'x' -f2)
 echo "Detected resolution: ${WIDTH}x${HEIGHT}"
 
-flutter_apps=("fyrdock" "fyroverview" "fyrwindowoverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrstore" "fyrvirt" "fyrtext" "fyrdaw" "fyrphone" "fyrcalculator" "fyrcode" "fyrvideo" "fyrmusic" "fyrphotos" "fyrcamera" "fyrbrowser" "fyrjournal" "fyrcalender" "fyrclock" "fyrtorrent" "fyrapi")
+flutter_apps=("fyrdock" "fyroverview" "fyrwindowoverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrstore" "fyrvirt" "fyrtext" "fyrdaw" "fyrphone" "fyrcalculator" "fyrcode" "fyrvideo" "fyrmusic" "fyrphotos" "fyrcamera" "fyrbrowser" "fyrjournal" "fyrcalender" "fyrclock" "fyrtorrent" "fyrapi" "fyrgraphics" "fyremu" "fyrdirector")
 
 # --- Progress Tracking & Terminal Management ---
 CURRENT_STEP=0
@@ -87,7 +87,8 @@ next_step() {
 usage() {
     echo "Usage: $0 [options]"
     echo "Options:"
-    echo "  -a <app>    Rebuild and reinstall a specific Flutter app (e.g., fyrtaskbar)"
+    echo "  -a <app>    Rebuild and reinstall a specific Flutter app (e.g., fyrtaskbar, fyrgraphics)"
+    echo "  -g          Build and install fyrGraphics standalone"
     echo "  -c          Force clean Flutter build (run flutter clean before building)"
     echo "  -w          Build and install SwayFX compositor"
     echo "  -s          Reinstall Sway configuration and scripts (preserves conf.d/*.conf)"
@@ -863,6 +864,66 @@ Type=Application
 Categories=Development;Network;
 EOF
             ;;
+        "fyrgraphics")
+            sudo ln -sf /opt/fyrgraphics/fyrgraphics /usr/local/bin/fyrgraphics
+            if [ -f "./fyrgraphics/assets/icons/fyrgraphics.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrgraphics/assets/icons/fyrgraphics.png /usr/share/icons/hicolor/512x512/apps/fyrgraphics.png
+            fi
+            sudo tee /usr/share/applications/fyrgraphics.desktop > /dev/null <<'EOF'
+[Desktop Entry]
+Name=fyrGraphics
+GenericName=Image Editor
+Comment=Raster & layered image editor for FyrDE
+Exec=/usr/local/bin/fyrgraphics %f
+Icon=fyrgraphics
+Terminal=false
+Type=Application
+Categories=Graphics;2DGraphics;RasterGraphics;Photography;
+MimeType=image/png;image/jpeg;image/webp;image/bmp;image/gif;image/tiff;application/x-fyrgraphics;
+Keywords=gimp;photoshop;photopea;image;editor;layers;graphics;
+EOF
+            ;;
+        "fyremu")
+            sudo ln -sf /opt/fyremu/fyremu /usr/local/bin/fyremu
+            if [ -f "./fyremu/assets/icons/fyremu.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyremu/assets/icons/fyremu.png /usr/share/icons/hicolor/512x512/apps/fyremu.png
+            fi
+            sudo tee /usr/share/applications/fyremu.desktop > /dev/null <<'EOF'
+[Desktop Entry]
+Name=fyrEmu
+GenericName=Game Emulator
+Comment=Multi-platform retro game emulator (GBC, GBA, NES, SNES) for FyrDE
+Exec=/usr/local/bin/fyremu %f
+Icon=fyremu
+Terminal=false
+Type=Application
+Categories=Game;Emulator;
+MimeType=application/x-gameboy-rom;application/x-gameboy-color-rom;application/x-gba-rom;application/x-nes-rom;application/x-snes-rom;application/x-genesis-rom;
+Keywords=emulator;gameboy;gbc;gba;nes;snes;retro;roms;
+EOF
+            ;;
+        "fyrdirector")
+            sudo ln -sf /opt/fyrdirector/fyrdirector /usr/local/bin/fyrdirector
+            if [ -f "./fyrdirector/assets/icons/fyrdirector.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrdirector/assets/icons/fyrdirector.png /usr/share/icons/hicolor/512x512/apps/fyrdirector.png
+            fi
+            sudo tee /usr/share/applications/fyrdirector.desktop > /dev/null <<'EOF'
+[Desktop Entry]
+Name=fyrDirector
+GenericName=Video Editor
+Comment=Non-linear video editor (Kdenlive / CapCut style) for FyrDE
+Exec=/usr/local/bin/fyrdirector %f
+Icon=fyrdirector
+Terminal=false
+Type=Application
+Categories=AudioVideo;Video;AudioVideoEditing;
+MimeType=video/mp4;video/x-matroska;video/webm;video/quicktime;application/x-fyrdirector;
+Keywords=video;editor;kdenlive;capcut;timeline;render;ffmpeg;
+EOF
+            ;;
         "fyrdock"|"fyrtaskbar"|"fyroverview"|"fyrwindowoverview"|"fyrsearch"|"fyrhelp"|"fyremoji")
             sudo ln -sf "/opt/$app/$app" "/usr/local/bin/$app"
             ;;
@@ -1447,6 +1508,7 @@ INSTALL_THEMES=false
 INSTALL_ZSH=false
 INSTALL_FETCH=false
 HIDE_REDUNDANT=false
+INSTALL_GRAPHICS=false
 
 setup_zsh() {
     next_step "Configuring ZSH..."
@@ -1470,9 +1532,16 @@ setup_zsh() {
 
 APP_TO_REINSTALL=""
 
-while getopts "a:wcsltdhfFzH" opt; do
+while getopts "a:wcsltdhfFzHg" opt; do
     case $opt in
-        a) APP_TO_REINSTALL="$OPTARG"; MODULAR=true ;;
+        a) APP_TO_REINSTALL="$OPTARG"
+           if [ ! -d "./$APP_TO_REINSTALL" ]; then
+               LOWER_APP="$(echo "$APP_TO_REINSTALL" | tr '[:upper:]' '[:lower:]')"
+               if [ -d "./$LOWER_APP" ]; then
+                   APP_TO_REINSTALL="$LOWER_APP"
+               fi
+           fi
+           MODULAR=true ;;
         c) CLEAN_BUILD=true ;;
         w) INSTALL_SWAYFX=true; MODULAR=true ;;
         s) INSTALL_SWAY_CONFIG=true; MODULAR=true ;;
@@ -1481,6 +1550,7 @@ while getopts "a:wcsltdhfFzH" opt; do
         d) INSTALL_DEPS=true; MODULAR=true ;;
         z) INSTALL_ZSH=true; MODULAR=true ;;
         f) INSTALL_FETCH=true; MODULAR=true ;;
+        g) INSTALL_GRAPHICS=true; MODULAR=true ;;
         H) HIDE_REDUNDANT=true; MODULAR=true ;;
         F) MODULAR=false ;;
         h) usage; exit 0 ;;
@@ -1509,6 +1579,7 @@ else
     [ "$INSTALL_DEPS" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
     [ "$INSTALL_ZSH" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
     [ -n "$APP_TO_REINSTALL" ] && TOTAL_STEPS=$((TOTAL_STEPS + 2)) # flutter + app
+    [ "$INSTALL_GRAPHICS" = "true" ] && [ "$APP_TO_REINSTALL" != "fyrgraphics" ] && TOTAL_STEPS=$((TOTAL_STEPS + 2))
     [ "$INSTALL_SWAYFX" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
     [ "$INSTALL_SWAY_CONFIG" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
     [ "$INSTALL_SDDM" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
@@ -1523,6 +1594,10 @@ else
     if [ -n "$APP_TO_REINSTALL" ]; then
         install_flutter
         reinstall_app "$APP_TO_REINSTALL"
+    fi
+    if [ "$INSTALL_GRAPHICS" = "true" ] && [ "$APP_TO_REINSTALL" != "fyrgraphics" ]; then
+        if [ -z "$APP_TO_REINSTALL" ]; then install_flutter; fi
+        reinstall_app "fyrgraphics"
     fi
     if [ "$INSTALL_SWAYFX" = "true" ]; then build_swayfx; fi
     if [ "$INSTALL_SWAY_CONFIG" = "true" ]; then setup_sway_config; fi

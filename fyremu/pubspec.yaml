@@ -1,0 +1,36 @@
+name: fyremu
+description: "fyrEmu — Multi-platform retro game emulator (GBC, GBA, NES, SNES) for FyrDE."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+  fyr_core:
+    path: ../packages/fyr_core
+  cupertino_icons: ^1.0.8
+  window_manager: ^0.5.1
+  file_picker: ^11.0.2
+  google_fonts: ^8.1.0
+  provider: ^6.1.5+1
+  path: ^1.9.1
+  path_provider: ^2.1.5
+  shared_preferences: ^2.5.5
+  desktop_drop: ^0.5.0
+  http: ^1.6.0
+  archive: ^4.0.9
+  ffi: ^2.1.4
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  image: ^4.8.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/icons/
