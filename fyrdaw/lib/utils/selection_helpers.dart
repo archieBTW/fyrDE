@@ -178,3 +178,77 @@ TrackClickSelectionResult resolveTrackClickSelection({
     anchorIndex: clickedIndex,
   );
 }
+
+/// Result of moving an item in a list via drag-and-drop / reorder, preserving
+/// optional [selectedIndex] and [anchorIndex] references by item identity.
+class ReorderTrackResult {
+  final int fromIndex;
+  final int toIndex;
+  final int? selectedIndex;
+  final int? anchorIndex;
+
+  const ReorderTrackResult({
+    required this.fromIndex,
+    required this.toIndex,
+    required this.selectedIndex,
+    required this.anchorIndex,
+  });
+}
+
+/// Reorders [items] in place using Flutter [ReorderableListView] index
+/// conventions (when moving down, [newIndex] is reduced by 1 after removal)
+/// and remaps [selectedIndex] / [anchorIndex] to track their original items.
+ReorderTrackResult? reorderTrackList<T>(
+  List<T> items, {
+  required int oldIndex,
+  required int newIndex,
+  int? selectedIndex,
+  int? anchorIndex,
+}) {
+  if (oldIndex < 0 || oldIndex >= items.length) return null;
+  if (newIndex < 0 || newIndex > items.length) return null;
+
+  int targetIndex = newIndex;
+  if (targetIndex > oldIndex) {
+    targetIndex -= 1;
+  }
+  if (targetIndex < 0 || targetIndex >= items.length || targetIndex == oldIndex) {
+    return null;
+  }
+
+  final T? prevSelectedItem =
+      (selectedIndex != null && selectedIndex >= 0 && selectedIndex < items.length)
+          ? items[selectedIndex]
+          : null;
+  final T? prevAnchorItem =
+      (anchorIndex != null && anchorIndex >= 0 && anchorIndex < items.length)
+          ? items[anchorIndex]
+          : null;
+
+  final T moved = items.removeAt(oldIndex);
+  items.insert(targetIndex, moved);
+
+  return ReorderTrackResult(
+    fromIndex: oldIndex,
+    toIndex: targetIndex,
+    selectedIndex: prevSelectedItem != null ? items.indexOf(prevSelectedItem) : null,
+    anchorIndex: prevAnchorItem != null ? items.indexOf(prevAnchorItem) : null,
+  );
+}
+
+/// Returns the nearest visible track index moving in [direction] (`-1` up, `+1`
+/// down) from [currentIndex], or `null` when already at the edge.
+int? adjacentVisibleTrackIndex(
+  List<bool> trackVisible,
+  int currentIndex,
+  int direction,
+) {
+  if (direction == 0 || currentIndex < 0 || currentIndex >= trackVisible.length) {
+    return null;
+  }
+  final int step = direction > 0 ? 1 : -1;
+  for (int i = currentIndex + step; i >= 0 && i < trackVisible.length; i += step) {
+    if (trackVisible[i]) return i;
+  }
+  return null;
+}

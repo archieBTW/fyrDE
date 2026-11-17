@@ -770,63 +770,7 @@ class _SamplerEditorWidgetState extends State<SamplerEditorWidget> {
                 ),
                 SizedBox(height: 10),
                 Expanded(
-                  child: Container(
-                    width: double.infinity,
-                    decoration: BoxDecoration(
-                      color: bgDark,
-                      border: Border.all(color: textFaint),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Stack(
-                      children: [
-                        if (pad.waveformData != null && pad.waveformData!.isNotEmpty)
-                          CustomPaint(
-                            size: Size.infinite,
-                            painter: SamplerWaveformPainter(pad),
-                          ),
-                        if (pad.source != null)
-                          Positioned.fill(
-                            child: SliderTheme(
-                              data: SliderTheme.of(context).copyWith(
-                                activeTrackColor: lavenderAccent.withValues(
-                                  alpha: 0.3,
-                                ),
-                                inactiveTrackColor: textMuted,
-                                thumbColor: lavenderAccent,
-                                overlayColor: lavenderAccent.withValues(
-                                  alpha: 0.2,
-                                ),
-                                trackHeight: 80,
-                                thumbShape: RoundSliderThumbShape(
-                                  enabledThumbRadius: 6,
-                                ),
-                              ),
-                              child: RangeSlider(
-                                values: RangeValues(pad.trimStart, pad.trimEnd),
-                                min: 0.0,
-                                max: 1.0,
-                                onChanged: (RangeValues values) {
-                                  setState(() {
-                                    pad.trimStart = values.start;
-                                    pad.trimEnd = values.end;
-                                  });
-                                  widget.onStateChanged();
-                                },
-                              ),
-                            ),
-                          ),
-                        if (pad.source == null &&
-                            (pad.waveformData == null ||
-                                pad.waveformData!.isEmpty))
-                          Center(
-                            child: Text(
-                              'No Audio Data',
-                              style: TextStyle(color: textFaint),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
+                  child: _buildTrimWaveformArea(pad),
                 ),
                 SizedBox(height: 10),
                 Row(
@@ -890,6 +834,224 @@ class _SamplerEditorWidgetState extends State<SamplerEditorWidget> {
       ],
     );
   }
+
+  String _formatTrimPosition(double fraction, double? totalSec) {
+    if (totalSec != null && totalSec > 0.0) {
+      final double sec = (fraction * totalSec).clamp(0.0, totalSec);
+      if (sec < 1.0) return '${(sec * 1000).round()}ms';
+      return '${sec.toStringAsFixed(2)}s';
+    }
+    return '${(fraction * 100).toStringAsFixed(1)}%';
+  }
+
+  Widget _buildTrimWaveformArea(SamplerPad pad) {
+    final bool hasWaveform =
+        pad.waveformData != null && pad.waveformData!.isNotEmpty;
+    final bool canTrim = pad.source != null || hasWaveform;
+    double? totalDurationSec;
+    try {
+      if (pad.source != null && SoLoud.instance.isInitialized) {
+        totalDurationSec =
+            SoLoud.instance.getLength(pad.source!).inMilliseconds / 1000.0;
+      }
+    } catch (_) {}
+
+    final double safeStart = pad.trimStart.clamp(0.0, 0.99);
+    final double safeEnd = pad.trimEnd.clamp(safeStart + 0.005, 1.0);
+    final bool isTrimmed = safeStart > 0.002 || safeEnd < 0.998;
+
+    return Container(
+      key: const Key('sampler_waveform_trim_box'),
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: bgDark,
+        border: Border.all(color: borderMain),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final double w = constraints.maxWidth;
+          final double startX = (safeStart * w).clamp(0.0, w);
+          final double endX = (safeEnd * w).clamp(startX, w);
+          const double hitW = 18.0;
+
+          return Stack(
+            clipBehavior: Clip.none,
+            children: [
+              if (hasWaveform)
+                Positioned.fill(
+                  child: CustomPaint(
+                    painter: SamplerWaveformPainter(pad),
+                  ),
+                ),
+              if (!hasWaveform && pad.source == null)
+                Center(
+                  child: Text(
+                    'No Audio Data',
+                    style: TextStyle(color: textFaint),
+                  ),
+                ),
+              if (canTrim && w > 20) ...[
+                // Left trim handle (Start)
+                Positioned(
+                  key: const Key('sampler_trim_start_handle'),
+                  left: (startX - hitW * 0.5).clamp(0.0, max(0.0, w - hitW)),
+                  top: 0,
+                  bottom: 0,
+                  width: hitW,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.resizeLeftRight,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onHorizontalDragUpdate: (d) {
+                        setState(() {
+                          final double next =
+                              (pad.trimStart + d.delta.dx / w).clamp(
+                                0.0,
+                                pad.trimEnd - 0.005,
+                              );
+                          pad.trimStart = next;
+                        });
+                        widget.onStateChanged();
+                      },
+                      child: Stack(
+                        children: [
+                          Center(
+                            child: Container(
+                              width: 2,
+                              color: Colors.cyanAccent,
+                            ),
+                          ),
+                          Align(
+                            alignment: Alignment.topCenter,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 3,
+                                vertical: 1,
+                              ),
+                              color: Colors.cyanAccent,
+                              child: const Text(
+                                'IN',
+                                style: TextStyle(
+                                  color: Colors.black,
+                                  fontSize: 8,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                // Right trim handle (End)
+                Positioned(
+                  key: const Key('sampler_trim_end_handle'),
+                  left: (endX - hitW * 0.5).clamp(0.0, max(0.0, w - hitW)),
+                  top: 0,
+                  bottom: 0,
+                  width: hitW,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.resizeLeftRight,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onHorizontalDragUpdate: (d) {
+                        setState(() {
+                          final double next =
+                              (pad.trimEnd + d.delta.dx / w).clamp(
+                                pad.trimStart + 0.005,
+                                1.0,
+                              );
+                          pad.trimEnd = next;
+                        });
+                        widget.onStateChanged();
+                      },
+                      child: Stack(
+                        children: [
+                          Center(
+                            child: Container(
+                              width: 2,
+                              color: Colors.amberAccent,
+                            ),
+                          ),
+                          Align(
+                            alignment: Alignment.topCenter,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 3,
+                                vertical: 1,
+                              ),
+                              color: Colors.amberAccent,
+                              child: const Text(
+                                'OUT',
+                                style: TextStyle(
+                                  color: Colors.black,
+                                  fontSize: 8,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                // Live Trim In/Out/Length readout badge
+                Positioned(
+                  right: 6,
+                  bottom: 4,
+                  child: IgnorePointer(
+                    ignoring: !isTrimmed,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      color: Colors.black.withValues(alpha: 0.65),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            'IN ${_formatTrimPosition(safeStart, totalDurationSec)}  |  OUT ${_formatTrimPosition(safeEnd, totalDurationSec)}  |  LEN ${_formatTrimPosition(safeEnd - safeStart, totalDurationSec)}',
+                            style: TextStyle(
+                              color: textMuted,
+                              fontSize: 10,
+                              fontFamily: 'monospace',
+                            ),
+                          ),
+                          if (isTrimmed) ...[
+                            const SizedBox(width: 6),
+                            GestureDetector(
+                              onTap: () {
+                                setState(() {
+                                  pad.trimStart = 0.0;
+                                  pad.trimEnd = 1.0;
+                                });
+                                widget.onStateChanged();
+                              },
+                              child: const Text(
+                                'RESET',
+                                style: TextStyle(
+                                  color: Colors.cyanAccent,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          );
+        },
+      ),
+    );
+  }
 }
 
 class SamplerWaveformPainter extends CustomPainter {
@@ -902,73 +1064,154 @@ class SamplerWaveformPainter extends CustomPainter {
     if (size.width <= 0 || size.height <= 0) return;
     if (pad.waveformData == null || pad.waveformData!.isEmpty) return;
 
-    Paint paint = Paint()
-      ..color = Colors.blueAccent.withValues(alpha: 0.8)
-      ..strokeWidth = 2
-      ..strokeCap = StrokeCap.round;
+    final double midY = size.height * 0.5;
+    final double halfH = max(1.0, size.height * 0.46);
+    final double safeStart = pad.trimStart.clamp(0.0, 0.995);
+    final double safeEnd = pad.trimEnd.clamp(safeStart + 0.005, 1.0);
+    final double activeSpan = max(0.005, safeEnd - safeStart);
+    final double activeLeftPx = safeStart * size.width;
+    final double activeRightPx = safeEnd * size.width;
 
-    double midY = size.height / 2;
-    int dataLen = pad.waveformData!.length;
-    double step = size.width / dataLen;
+    // Guide lines (0 center & -6dB reference lines)
+    final axisPaint = Paint()
+      ..color = textFaint.withValues(alpha: 0.45)
+      ..strokeWidth = 1.0;
+    final refPaint = Paint()
+      ..color = textFaint.withValues(alpha: 0.16)
+      ..strokeWidth = 1.0;
+    canvas.drawLine(Offset(0, midY), Offset(size.width, midY), axisPaint);
+    canvas.drawLine(
+      Offset(0, size.height * 0.25),
+      Offset(size.width, size.height * 0.25),
+      refPaint,
+    );
+    canvas.drawLine(
+      Offset(0, size.height * 0.75),
+      Offset(size.width, size.height * 0.75),
+      refPaint,
+    );
 
+    // Subtle highlight inside the active kept region
+    canvas.drawRect(
+      Rect.fromLTRB(activeLeftPx, 0, activeRightPx, size.height),
+      Paint()..color = Colors.blueAccent.withValues(alpha: 0.09),
+    );
+
+    final peaks = pad.waveformData!;
+    final int dataLen = peaks.length;
+
+    double fadeGainAt(double playPos) {
+      double g = 1.0;
+      if (pad.fadeIn > 0.0) {
+        final double fadeInLimit = pad.fadeIn / 2.0;
+        if (fadeInLimit > 0 && playPos < fadeInLimit) {
+          g *= (playPos / fadeInLimit).clamp(0.0, 1.0);
+        }
+      }
+      if (pad.fadeOut > 0.0) {
+        final double fadeOutLimit = pad.fadeOut / 2.0;
+        if (fadeOutLimit > 0 && playPos > 1.0 - fadeOutLimit) {
+          g *= ((1.0 - playPos) / fadeOutLimit).clamp(0.0, 1.0);
+        }
+      }
+      return g;
+    }
+
+    // Continuous smooth mirrored waveform envelope (no gaps or rounded bars)
+    final activeTop = Path();
+    final activeBot = <Offset>[];
+    final dimPaint = Paint()
+      ..color = Colors.blueAccent.withValues(alpha: 0.30)
+      ..strokeWidth = max(1.0, size.width / dataLen)
+      ..strokeCap = StrokeCap.butt;
+
+    bool inActivePath = false;
     for (int i = 0; i < dataLen; i++) {
-      double x = i * step;
-      double amplitude = pad.waveformData![i] * (size.height / 2);
+      final double pos = dataLen == 1 ? 0.5 : i / (dataLen - 1);
+      final double x = pos * size.width;
+      final bool isKept = pos >= safeStart && pos <= safeEnd;
+      double amp = peaks[i].clamp(0.0, 1.0) * halfH;
 
-      double pos = i / dataLen;
-      double playPos = (pos - pad.trimStart) / (pad.trimEnd - pad.trimStart);
-
-      if (pos >= pad.trimStart && pos <= pad.trimEnd) {
-        if (pad.fadeIn > 0.0) {
-          double fadeInLimit = pad.fadeIn / 2.0;
-          if (playPos < fadeInLimit) {
-            amplitude *= (playPos / fadeInLimit);
-          }
+      if (isKept) {
+        final double playPos = ((pos - safeStart) / activeSpan).clamp(0.0, 1.0);
+        amp *= fadeGainAt(playPos);
+        final double h = max(1.0, amp);
+        if (!inActivePath) {
+          activeTop.moveTo(x, midY - h);
+          inActivePath = true;
+        } else {
+          activeTop.lineTo(x, midY - h);
         }
-        if (pad.fadeOut > 0.0) {
-          double fadeOutLimit = pad.fadeOut / 2.0;
-          if (playPos > 1.0 - fadeOutLimit) {
-            amplitude *= ((1.0 - playPos) / fadeOutLimit).clamp(0.0, 1.0);
-          }
-        }
+        activeBot.add(Offset(x, midY + h));
       } else {
-        amplitude *= 0.2;
-        paint.color = Colors.blueAccent.withValues(alpha: 0.3);
+        final double h = max(1.0, amp);
+        canvas.drawLine(Offset(x, midY - h), Offset(x, midY + h), dimPaint);
       }
+    }
 
-      if (pos >= pad.trimStart && pos <= pad.trimEnd) {
-        paint.color = Colors.blueAccent.withValues(alpha: 0.8);
+    if (activeBot.isNotEmpty) {
+      final fillPath = Path.from(activeTop);
+      for (int i = activeBot.length - 1; i >= 0; i--) {
+        fillPath.lineTo(activeBot[i].dx, activeBot[i].dy);
       }
+      fillPath.close();
+      canvas.drawPath(
+        fillPath,
+        Paint()
+          ..color = Colors.blueAccent.withValues(alpha: 0.48)
+          ..style = PaintingStyle.fill,
+      );
+      final outline = Paint()
+        ..color = Colors.lightBlueAccent.withValues(alpha: 0.92)
+        ..strokeWidth = 1.2
+        ..style = PaintingStyle.stroke;
+      canvas.drawPath(activeTop, outline);
+      final botPath = Path();
+      for (int i = 0; i < activeBot.length; i++) {
+        if (i == 0) {
+          botPath.moveTo(activeBot[i].dx, activeBot[i].dy);
+        } else {
+          botPath.lineTo(activeBot[i].dx, activeBot[i].dy);
+        }
+      }
+      canvas.drawPath(botPath, outline);
+    }
 
-      canvas.drawLine(
-        Offset(x, midY - amplitude),
-        Offset(x, midY + amplitude),
-        paint,
+    // Crisp darkened trim masks outside [activeLeftPx, activeRightPx]
+    final shadePaint = Paint()..color = Colors.black.withValues(alpha: 0.55);
+    if (activeLeftPx > 0) {
+      canvas.drawRect(Rect.fromLTWH(0, 0, activeLeftPx, size.height), shadePaint);
+    }
+    if (activeRightPx < size.width) {
+      canvas.drawRect(
+        Rect.fromLTWH(activeRightPx, 0, size.width - activeRightPx, size.height),
+        shadePaint,
       );
     }
 
-    if (pad.currentHandle != null &&
-        SoLoud.instance.getIsValidVoiceHandle(pad.currentHandle!)) {
-      try {
-        double pos =
+    try {
+      if (pad.currentHandle != null &&
+          pad.source != null &&
+          SoLoud.instance.isInitialized &&
+          SoLoud.instance.getIsValidVoiceHandle(pad.currentHandle!)) {
+        final double pos =
             SoLoud.instance.getPosition(pad.currentHandle!).inMilliseconds /
             1000.0;
-        double totalLen =
+        final double totalLen =
             SoLoud.instance.getLength(pad.source!).inMilliseconds / 1000.0;
         if (totalLen > 0) {
-          double fraction = pos / totalLen;
-          double playheadX = size.width * fraction;
-          Paint playheadPaint = Paint()
-            ..color = Colors.white
-            ..strokeWidth = 2;
+          final double fraction = (pos / totalLen).clamp(0.0, 1.0);
+          final double playheadX = size.width * fraction;
           canvas.drawLine(
             Offset(playheadX, 0),
             Offset(playheadX, size.height),
-            playheadPaint,
+            Paint()
+              ..color = Colors.white
+              ..strokeWidth = 1.8,
           );
         }
-      } catch (_) {}
-    }
+      }
+    } catch (_) {}
   }
 
   @override

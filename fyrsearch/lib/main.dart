@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui';
 import 'dart:async';
@@ -75,7 +76,14 @@ class DesktopApp {
 
 class LauncherScreen extends StatefulWidget {
   final bool initiallyVisible;
-  const LauncherScreen({super.key, this.initiallyVisible = false});
+  final List<String>? desktopDirs;
+  final String? pinnedAppsPath;
+  const LauncherScreen({
+    super.key,
+    this.initiallyVisible = false,
+    this.desktopDirs,
+    this.pinnedAppsPath,
+  });
 
   @override
   State<LauncherScreen> createState() => _LauncherScreenState();
@@ -100,7 +108,9 @@ class _LauncherScreenState extends State<LauncherScreen>
 
   Timer? _debounceTimer;
   final List<StreamSubscription> _dirWatchers = [];
-  final Map<String, DateTime> _lastDirModified = {};
+  String _lastDesktopSignature = '';
+  Set<String> _pinnedExecs = {};
+  StreamSubscription<FileSystemEvent>? _dockDirWatcher;
   late final OverlayWindowController _overlayController;
 
   @override
@@ -108,11 +118,13 @@ class _LauncherScreenState extends State<LauncherScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _itemsPerPage = _crossAxisCount * _rowsPerPage;
+    _loadPinnedApps();
     _loadApps();
     _setupWatchers();
     _overlayController = OverlayWindowController(
       appName: 'fyrsearch',
       onShow: () {
+        _loadPinnedApps();
         _checkAppsModified();
         if (mounted) {
           setState(() {
@@ -134,6 +146,7 @@ class _LauncherScreenState extends State<LauncherScreen>
     _overlayController.start(initiallyVisible: widget.initiallyVisible);
     _focusNode.addListener(() {
       if (_focusNode.hasFocus) {
+        _loadPinnedApps();
         _checkAppsModified();
       }
     });
@@ -144,6 +157,7 @@ class _LauncherScreenState extends State<LauncherScreen>
     WidgetsBinding.instance.removeObserver(this);
     _overlayController.stop();
     _debounceTimer?.cancel();
+    _dockDirWatcher?.cancel();
     for (var sub in _dirWatchers) {
       sub.cancel();
     }
@@ -169,6 +183,9 @@ class _LauncherScreenState extends State<LauncherScreen>
   }
 
   Set<String> _getSearchPaths() {
+    if (widget.desktopDirs != null) {
+      return widget.desktopDirs!.toSet();
+    }
     final Set<String> searchPaths = {};
     final home = Platform.environment['HOME'] ?? '';
     if (home.isNotEmpty) {
@@ -207,6 +224,32 @@ class _LauncherScreenState extends State<LauncherScreen>
         } catch (_) {}
       }
     }
+
+    _dockDirWatcher?.cancel();
+    try {
+      final pinnedFile = _pinnedAppsFile();
+      if (pinnedFile != null) {
+        final dockDir = pinnedFile.parent;
+        if (!dockDir.existsSync()) {
+          dockDir.createSync(recursive: true);
+        }
+        final targetName = pinnedFile.uri.pathSegments.last;
+        _dockDirWatcher = dockDir.watch().listen((event) {
+          if (event.path.endsWith(targetName)) {
+            _loadPinnedApps();
+          }
+        }, onError: (_) {});
+      }
+    } catch (_) {}
+  }
+
+  File? _pinnedAppsFile() {
+    if (widget.pinnedAppsPath != null) {
+      return File(widget.pinnedAppsPath!);
+    }
+    final home = Platform.environment['HOME'] ?? '';
+    if (home.isEmpty) return null;
+    return File('$home/.config/fyrdock/pinned_apps.json');
   }
 
   void _debounceLoadApps() {
@@ -216,24 +259,127 @@ class _LauncherScreenState extends State<LauncherScreen>
     });
   }
 
-  void _checkAppsModified() {
-    bool hasChanged = false;
+  String _computeDesktopSignature() {
+    final entries = <String>[];
     for (final path in _getSearchPaths()) {
       final dir = Directory(path);
-      if (dir.existsSync()) {
-        try {
-          final stat = dir.statSync();
-          final last = _lastDirModified[path];
-          if (last == null || stat.modified.isAfter(last)) {
-            _lastDirModified[path] = stat.modified;
-            hasChanged = true;
-          }
-        } catch (_) {}
+      if (!dir.existsSync()) continue;
+      try {
+        final files = dir.listSync().whereType<File>().where(
+          (f) => f.path.endsWith('.desktop'),
+        );
+        for (final f in files) {
+          try {
+            final st = f.statSync();
+            entries.add(
+              '${f.path}:${st.modified.millisecondsSinceEpoch}:${st.size}',
+            );
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
+    entries.sort();
+    return entries.join('|');
+  }
+
+  void _checkAppsModified() {
+    final sig = _computeDesktopSignature();
+    if (sig != _lastDesktopSignature) {
+      _lastDesktopSignature = sig;
+      if (mounted) {
+        _loadApps();
+        _setupWatchers();
       }
     }
-    if (hasChanged && mounted) {
-      _loadApps();
-      _setupWatchers();
+  }
+
+  Future<void> _loadPinnedApps() async {
+    final file = _pinnedAppsFile();
+    if (file == null) return;
+    if (!await file.exists()) {
+      if (mounted && _pinnedExecs.isNotEmpty) {
+        setState(() => _pinnedExecs = {});
+      }
+      return;
+    }
+    try {
+      final list = jsonDecode(await file.readAsString()) as List<dynamic>;
+      final next = <String>{};
+      for (final item in list) {
+        if (item is Map && item['exec'] is String) {
+          next.add(_normalizeExec(item['exec'] as String));
+        }
+      }
+      if (mounted) {
+        setState(() => _pinnedExecs = next);
+      }
+    } catch (_) {}
+  }
+
+  String _normalizeExec(String exec) {
+    final parts = exec.trim().split(RegExp(r'\s+'));
+    if (parts.isEmpty) return '';
+    return parts.first.split('/').last.toLowerCase();
+  }
+
+  bool _isPinnedToDock(DesktopApp app) {
+    if (app.exec.startsWith('xdg-open')) return false;
+    final norm = _normalizeExec(app.exec);
+    return _pinnedExecs.contains(norm);
+  }
+
+  Future<void> _togglePinToDock(DesktopApp app) async {
+    if (app.exec.startsWith('xdg-open')) return;
+    final file = _pinnedAppsFile();
+    if (file == null) return;
+    if (!await file.parent.exists()) await file.parent.create(recursive: true);
+
+    List<dynamic> pinned = [];
+    if (await file.exists()) {
+      try {
+        final decoded = jsonDecode(await file.readAsString());
+        if (decoded is List) pinned = List<dynamic>.from(decoded);
+      } catch (_) {}
+    }
+
+    final norm = _normalizeExec(app.exec);
+    final alreadyPinned = pinned.any(
+      (p) => p is Map && _normalizeExec('${p['exec'] ?? ''}') == norm,
+    );
+
+    if (alreadyPinned) {
+      pinned.removeWhere(
+        (p) => p is Map && _normalizeExec('${p['exec'] ?? ''}') == norm,
+      );
+    } else {
+      final resolvedIcon = _resolveIconPath(app.icon);
+      pinned.add({
+        'name': app.name,
+        'exec': app.exec,
+        'icon': resolvedIcon ?? app.icon ?? '',
+      });
+    }
+
+    final tmpFile = File('${file.path}.tmp');
+    await tmpFile.writeAsString(jsonEncode(pinned), flush: true);
+    await tmpFile.rename(file.path);
+    await _loadPinnedApps();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).clearSnackBars();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            alreadyPinned
+                ? 'Unpinned ${app.name} from Dock'
+                : 'Pinned ${app.name} to Dock',
+            style: TextStyle(color: FyrTheme.textColor),
+          ),
+          backgroundColor: FyrTheme.surfaceColor,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
     }
   }
 
@@ -389,6 +535,7 @@ class _LauncherScreenState extends State<LauncherScreen>
     });
 
     final defaultApps = uniqueApps.where((app) => !app.noDisplay).toList();
+    _lastDesktopSignature = _computeDesktopSignature();
 
     if (!mounted) return;
     setState(() {
@@ -522,27 +669,8 @@ class _LauncherScreenState extends State<LauncherScreen>
     });
   }
 
-  Widget _buildAppIcon(DesktopApp app, {double size = 96}) {
-    IconData defaultIconData = Icons.app_shortcut_outlined;
-    if (app.exec.startsWith('xdg-open')) {
-      final n = app.name.toLowerCase();
-      if (n.endsWith('.png') ||
-          n.endsWith('.jpg') ||
-          n.endsWith('.jpeg') ||
-          n.endsWith('.gif') ||
-          n.endsWith('.webp') ||
-          n.endsWith('.svg') ||
-          n.endsWith('.bmp')) {
-        defaultIconData = Icons.image;
-      } else {
-        defaultIconData = Icons.insert_drive_file;
-      }
-    }
-
-    final defaultIcon = Icon(defaultIconData, color: FyrTheme.textColor, size: size);
-
-    final iconName = app.icon;
-    if (iconName == null || iconName.isEmpty) return defaultIcon;
+  String? _resolveIconPath(String? iconName) {
+    if (iconName == null || iconName.isEmpty) return null;
 
     List<String> pathsToCheck = [];
 
@@ -602,23 +730,49 @@ class _LauncherScreenState extends State<LauncherScreen>
     }
 
     for (final path in pathsToCheck) {
-      final file = File(path);
-      if (file.existsSync()) {
-        if (path.endsWith('.svg')) {
-          return SvgPicture.file(
-            file,
-            width: size,
-            height: size,
-            placeholderBuilder: (BuildContext context) => defaultIcon,
-          );
-        } else {
-          return Image.file(
-            file,
-            width: size,
-            height: size,
-            errorBuilder: (context, error, stackTrace) => defaultIcon,
-          );
-        }
+      if (File(path).existsSync()) {
+        return path;
+      }
+    }
+    return null;
+  }
+
+  Widget _buildAppIcon(DesktopApp app, {double size = 96}) {
+    IconData defaultIconData = Icons.app_shortcut_outlined;
+    if (app.exec.startsWith('xdg-open')) {
+      final n = app.name.toLowerCase();
+      if (n.endsWith('.png') ||
+          n.endsWith('.jpg') ||
+          n.endsWith('.jpeg') ||
+          n.endsWith('.gif') ||
+          n.endsWith('.webp') ||
+          n.endsWith('.svg') ||
+          n.endsWith('.bmp')) {
+        defaultIconData = Icons.image;
+      } else {
+        defaultIconData = Icons.insert_drive_file;
+      }
+    }
+
+    final defaultIcon = Icon(defaultIconData, color: FyrTheme.textColor, size: size);
+
+    final resolved = _resolveIconPath(app.icon);
+    if (resolved != null) {
+      final file = File(resolved);
+      if (resolved.endsWith('.svg')) {
+        return SvgPicture.file(
+          file,
+          width: size,
+          height: size,
+          placeholderBuilder: (BuildContext context) => defaultIcon,
+        );
+      } else {
+        return Image.file(
+          file,
+          width: size,
+          height: size,
+          errorBuilder: (context, error, stackTrace) => defaultIcon,
+        );
       }
     }
 
@@ -637,6 +791,73 @@ class _LauncherScreenState extends State<LauncherScreen>
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeOutCubic,
       );
+    }
+  }
+
+  bool _canPinApp(DesktopApp app) => !app.exec.startsWith('xdg-open');
+
+  bool _toggleSelectedPin() {
+    if (_filteredApps.isEmpty) return false;
+    final index = _selectedIndex >= 0 && _selectedIndex < _filteredApps.length
+        ? _selectedIndex
+        : 0;
+    final app = _filteredApps[index];
+    if (!_canPinApp(app)) return false;
+    _togglePinToDock(app);
+    return true;
+  }
+
+  Future<void> _showAppContextMenu(
+    BuildContext context,
+    Offset globalPosition,
+    DesktopApp app,
+  ) async {
+    final pinned = _isPinnedToDock(app);
+    final selected = await showMenu<String>(
+      context: context,
+      color: const Color(0xFF1F242D),
+      position: RelativeRect.fromLTRB(
+        globalPosition.dx,
+        globalPosition.dy,
+        globalPosition.dx + 1,
+        globalPosition.dy + 1,
+      ),
+      items: [
+        if (_canPinApp(app))
+          PopupMenuItem<String>(
+            value: 'toggle_pin',
+            child: Row(
+              children: [
+                Icon(
+                  pinned ? Icons.push_pin_outlined : Icons.push_pin,
+                  size: 18,
+                  color: pinned ? FyrTheme.accentColor : Colors.white70,
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  pinned ? 'Unpin from Dock' : 'Pin to Dock',
+                  style: const TextStyle(color: Colors.white),
+                ),
+              ],
+            ),
+          ),
+        const PopupMenuItem<String>(
+          value: 'launch',
+          child: Row(
+            children: [
+              Icon(Icons.open_in_new, size: 18, color: Colors.white70),
+              SizedBox(width: 10),
+              Text('Launch', style: TextStyle(color: Colors.white)),
+            ],
+          ),
+        ),
+      ],
+    );
+
+    if (selected == 'toggle_pin') {
+      await _togglePinToDock(app);
+    } else if (selected == 'launch') {
+      await _launchApp(app.exec);
     }
   }
 
@@ -739,6 +960,12 @@ class _LauncherScreenState extends State<LauncherScreen>
           canRequestFocus: true,
           onKeyEvent: (node, event) {
             if (event is KeyDownEvent) {
+              if (HardwareKeyboard.instance.isControlPressed &&
+                  event.logicalKey == LogicalKeyboardKey.keyP) {
+                return _toggleSelectedPin()
+                    ? KeyEventResult.handled
+                    : KeyEventResult.ignored;
+              }
               if (event.logicalKey == LogicalKeyboardKey.escape) {
                 _hideLauncher();
                 return KeyEventResult.handled;
@@ -815,6 +1042,12 @@ class _LauncherScreenState extends State<LauncherScreen>
                               child: Focus(
                           onKeyEvent: (node, event) {
                             if (event is KeyDownEvent) {
+                              if (HardwareKeyboard.instance.isControlPressed &&
+                                  event.logicalKey == LogicalKeyboardKey.keyP) {
+                                return _toggleSelectedPin()
+                                    ? KeyEventResult.handled
+                                    : KeyEventResult.ignored;
+                              }
                               if (event.logicalKey ==
                                   LogicalKeyboardKey.escape) {
                                 _hideLauncher();
@@ -982,6 +1215,8 @@ class _LauncherScreenState extends State<LauncherScreen>
                                               final app = pageApps[index];
                                               final isSelected =
                                                   globalIndex == _selectedIndex;
+                                              final isPinned = _canPinApp(app) &&
+                                                  _isPinnedToDock(app);
                                               bool isHovered = false;
                                               return StatefulBuilder(
                                                 builder: (context, setLocalState) {
@@ -990,114 +1225,176 @@ class _LauncherScreenState extends State<LauncherScreen>
                                                         EdgeInsets.all(
                                                           16.0,
                                                         ),
-                                                    child: InkWell(
-                                                      onHover: (hovering) {
-                                                        setLocalState(() {
-                                                          isHovered = hovering;
-                                                        });
-                                                        if (hovering &&
-                                                            _selectedIndex !=
-                                                                globalIndex) {
-                                                          setState(() {
-                                                            _selectedIndex =
-                                                                globalIndex;
+                                                    child: GestureDetector(
+                                                      onSecondaryTapDown:
+                                                          (details) {
+                                                            setState(() {
+                                                              _selectedIndex =
+                                                                  globalIndex;
+                                                            });
+                                                            _showAppContextMenu(
+                                                              context,
+                                                              details
+                                                                  .globalPosition,
+                                                              app,
+                                                            );
+                                                          },
+                                                      child: InkWell(
+                                                        onHover: (hovering) {
+                                                          setLocalState(() {
+                                                            isHovered = hovering;
                                                           });
-                                                        }
-                                                      },
-                                                      onTap: () =>
-                                                          _launchApp(app.exec),
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                            24,
-                                                          ),
-                                                      hoverColor:
-                                                          Colors.transparent,
-                                                      focusColor:
-                                                          Colors.transparent,
-                                                      highlightColor:
-                                                          Colors.transparent,
-                                                      splashColor:
-                                                          Colors.transparent,
-                                                      child: Container(
-                                                        decoration: BoxDecoration(
-                                                          color: isSelected
-                                                              ? FyrTheme.textColor
-                                                                    .withOpacity(
-                                                                      0.1,
-                                                                    )
-                                                              : Colors
-                                                                    .transparent,
-                                                          borderRadius:
-                                                              BorderRadius.circular(
-                                                                24,
-                                                              ),
-                                                          border: Border.all(
+                                                          if (hovering &&
+                                                              _selectedIndex !=
+                                                                  globalIndex) {
+                                                            setState(() {
+                                                              _selectedIndex =
+                                                                  globalIndex;
+                                                            });
+                                                          }
+                                                        },
+                                                        onTap: () =>
+                                                            _launchApp(app.exec),
+                                                        borderRadius:
+                                                            BorderRadius.circular(
+                                                              24,
+                                                            ),
+                                                        hoverColor:
+                                                            Colors.transparent,
+                                                        focusColor:
+                                                            Colors.transparent,
+                                                        highlightColor:
+                                                            Colors.transparent,
+                                                        splashColor:
+                                                            Colors.transparent,
+                                                        child: Container(
+                                                          decoration: BoxDecoration(
                                                             color: isSelected
-                                                                ? FyrTheme.accentColor
+                                                                ? FyrTheme.textColor
                                                                       .withOpacity(
-                                                                        0.4,
+                                                                        0.1,
                                                                       )
                                                                 : Colors
                                                                       .transparent,
+                                                            borderRadius:
+                                                                BorderRadius.circular(
+                                                                  24,
+                                                                ),
+                                                            border: Border.all(
+                                                              color: isSelected
+                                                                  ? FyrTheme.accentColor
+                                                                        .withOpacity(
+                                                                          0.4,
+                                                                        )
+                                                                  : Colors
+                                                                        .transparent,
+                                                            ),
                                                           ),
-                                                        ),
-                                                        child: Column(
-                                                          mainAxisAlignment:
-                                                              MainAxisAlignment
-                                                                  .center,
-                                                          children: [
-                                                            AnimatedScale(
-                                                              scale: isSelected
-                                                                  ? 1.15
-                                                                  : 1.0,
-                                                              duration:
-                                                                  const Duration(
-                                                                    milliseconds:
-                                                                        200,
-                                                                  ),
-                                                              curve: Curves
-                                                                  .easeOutCubic,
-                                                              child:
-                                                                  _buildAppIcon(
-                                                                    app,
-                                                                    size: 96 * scale,
-                                                                  ),
-                                                            ),
-                                                            SizedBox(
-                                                              height: 16,
-                                                            ),
-                                                            Text(
-                                                              app.name,
-                                                              textAlign:
-                                                                  TextAlign
-                                                                      .center,
-                                                              maxLines: 2,
-                                                              overflow:
-                                                                  TextOverflow
-                                                                      .ellipsis,
-                                                              style: TextStyle(
-                                                                color: Colors
-                                                                    .white,
-                                                                fontSize: 16,
-                                                                fontWeight:
-                                                                    FontWeight
-                                                                        .w500,
-                                                                shadows: [
-                                                                  Shadow(
-                                                                    offset:
-                                                                        Offset(
-                                                                          0,
-                                                                          1,
+                                                          child: Stack(
+                                                            fit: StackFit.expand,
+                                                            children: [
+                                                              Column(
+                                                                mainAxisAlignment:
+                                                                    MainAxisAlignment
+                                                                        .center,
+                                                                children: [
+                                                                  AnimatedScale(
+                                                                    scale: isSelected
+                                                                        ? 1.15
+                                                                        : 1.0,
+                                                                    duration:
+                                                                        const Duration(
+                                                                          milliseconds:
+                                                                              200,
                                                                         ),
-                                                                    blurRadius:
-                                                                        4,
-                                                                    color: Colors
-                                                                        .black54,
+                                                                    curve: Curves
+                                                                        .easeOutCubic,
+                                                                    child:
+                                                                        _buildAppIcon(
+                                                                          app,
+                                                                          size:
+                                                                              96 *
+                                                                              scale,
+                                                                        ),
+                                                                  ),
+                                                                  SizedBox(
+                                                                    height: 16,
+                                                                  ),
+                                                                  Text(
+                                                                    app.name,
+                                                                    textAlign:
+                                                                        TextAlign
+                                                                            .center,
+                                                                    maxLines: 2,
+                                                                    overflow:
+                                                                        TextOverflow
+                                                                            .ellipsis,
+                                                                    style: TextStyle(
+                                                                      color: Colors
+                                                                          .white,
+                                                                      fontSize:
+                                                                          16,
+                                                                      fontWeight:
+                                                                          FontWeight
+                                                                              .w500,
+                                                                      shadows: [
+                                                                        Shadow(
+                                                                          offset: Offset(
+                                                                            0,
+                                                                            1,
+                                                                          ),
+                                                                          blurRadius:
+                                                                              4,
+                                                                          color: Colors
+                                                                              .black54,
+                                                                        ),
+                                                                      ],
+                                                                    ),
                                                                   ),
                                                                 ],
                                                               ),
-                                                            ),
-                                                          ],
+                                                              if (_canPinApp(app) &&
+                                                                  !isPinned &&
+                                                                  (isHovered ||
+                                                                      isSelected))
+                                                                Positioned(
+                                                                  top: 8,
+                                                                  right: 8,
+                                                                  child: Tooltip(
+                                                                    message:
+                                                                        'Pin to Dock (Ctrl+P)',
+                                                                    child: InkWell(
+                                                                      borderRadius:
+                                                                          BorderRadius.circular(
+                                                                            16,
+                                                                          ),
+                                                                      onTap: () =>
+                                                                          _togglePinToDock(
+                                                                            app,
+                                                                          ),
+                                                                      child: Container(
+                                                                        padding:
+                                                                            const EdgeInsets.all(
+                                                                              6,
+                                                                            ),
+                                                                        decoration: BoxDecoration(
+                                                                          color: Colors.black.withOpacity(0.45),
+                                                                          shape: BoxShape.circle,
+                                                                          border: Border.all(
+                                                                            color: Colors.white24,
+                                                                          ),
+                                                                        ),
+                                                                        child: const Icon(
+                                                                          Icons.push_pin_outlined,
+                                                                          size: 16,
+                                                                          color: Colors.white70,
+                                                                        ),
+                                                                      ),
+                                                                    ),
+                                                                  ),
+                                                                ),
+                                                            ],
+                                                          ),
                                                         ),
                                                       ),
                                                     ),

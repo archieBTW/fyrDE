@@ -5292,6 +5292,32 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     }
   }
 
+  void _reorderTrack(int oldIndex, int newIndex) {
+    final preview = [...tracks];
+    final check = reorderTrackList(
+      preview,
+      oldIndex: oldIndex,
+      newIndex: newIndex,
+      selectedIndex: selectedTrackIndex,
+      anchorIndex: _trackSelectionAnchorIndex,
+    );
+    if (check == null) return;
+    _saveState();
+    setState(() {
+      final res = reorderTrackList(
+        tracks,
+        oldIndex: oldIndex,
+        newIndex: newIndex,
+        selectedIndex: selectedTrackIndex,
+        anchorIndex: _trackSelectionAnchorIndex,
+      );
+      if (res != null) {
+        selectedTrackIndex = res.selectedIndex;
+        _trackSelectionAnchorIndex = res.anchorIndex;
+      }
+    });
+  }
+
   void _executeDeleteTrack(Track track) {
     _saveState();
     setState(() {
@@ -6884,14 +6910,23 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
             ),
           ),
           Expanded(
-            child: ListView.builder(
+            child: ReorderableListView.builder(
               padding: EdgeInsets.zero,
-              controller: _headerScrollController,
+              scrollController: _headerScrollController,
+              buildDefaultDragHandles: false,
+              proxyDecorator: (child, index, animation) => Material(
+                color: panelLight.withValues(alpha: 0.92),
+                elevation: 6,
+                child: child,
+              ),
+              onReorder: _reorderTrack,
               itemCount: tracks.length,
               itemBuilder: (context, index) {
                 final track = tracks[index];
                 if (!_isTrackVisibleInArrange(track)) {
-                  return const SizedBox.shrink();
+                  return SizedBox.shrink(
+                    key: ValueKey('track_hdr_${track.id}'),
+                  );
                 }
                 final isSelected = _isTrackSelected(track, index);
                 final isPrimarySelected = selectedTrackIndex == index;
@@ -6899,7 +6934,20 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                 final bool batchDeleteSelected =
                     multiSelectedTrackIds.length > 1 &&
                     multiSelectedTrackIds.contains(track.id);
+                final visibleFlags =
+                    tracks.map(_isTrackVisibleInArrange).toList();
+                final int? prevVisibleIdx = adjacentVisibleTrackIndex(
+                  visibleFlags,
+                  index,
+                  -1,
+                );
+                final int? nextVisibleIdx = adjacentVisibleTrackIndex(
+                  visibleFlags,
+                  index,
+                  1,
+                );
                 return GestureDetector(
+                  key: ValueKey('track_hdr_${track.id}'),
                   onSecondaryTapUp: (d) {
                     final RenderBox overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
                     showMenu<String>(
@@ -6909,6 +6957,30 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                         Offset.zero & overlay.size,
                       ),
                       items: [
+                        if (prevVisibleIdx != null)
+                          PopupMenuItem(
+                            value: 'move_up',
+                            child: Row(
+                              children: const [
+                                Icon(Icons.arrow_upward, size: 14),
+                                SizedBox(width: 8),
+                                Text('Move Track Up'),
+                              ],
+                            ),
+                          ),
+                        if (nextVisibleIdx != null)
+                          PopupMenuItem(
+                            value: 'move_down',
+                            child: Row(
+                              children: const [
+                                Icon(Icons.arrow_downward, size: 14),
+                                SizedBox(width: 8),
+                                Text('Move Track Down'),
+                              ],
+                            ),
+                          ),
+                        if (prevVisibleIdx != null || nextVisibleIdx != null)
+                          PopupMenuDivider(),
                         PopupMenuItem(value: 'color', child: Text('Change Track Color')),
                         if (track.type != TrackType.group &&
                             tracks.any((t) => t.type == TrackType.group))
@@ -6929,6 +7001,12 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                         ),
                       ],
                     ).then((value) {
+                      if (value == 'move_up' && prevVisibleIdx != null) {
+                        _reorderTrack(index, prevVisibleIdx);
+                      }
+                      if (value == 'move_down' && nextVisibleIdx != null) {
+                        _reorderTrack(index, nextVisibleIdx + 1);
+                      }
                       if (value == 'color') _showTrackColorPicker(track);
                       if (value == 'assign_group') _assignTrackToGroupDialog(track);
                       if (value == 'bounce') _bounceTrackToAudio(track);
@@ -6973,6 +7051,21 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                       children: [
                         Row(
                           children: [
+                            ReorderableDragStartListener(
+                              key: Key('track_drag_handle_${track.id}'),
+                              index: index,
+                              child: MouseRegion(
+                                cursor: SystemMouseCursors.grab,
+                                child: Padding(
+                                  padding: const EdgeInsets.only(right: 4),
+                                  child: Icon(
+                                    Icons.drag_indicator,
+                                    size: 14,
+                                    color: textMuted,
+                                  ),
+                                ),
+                              ),
+                            ),
                             InkWell(
                               onTap: () => _showTrackColorPicker(track),
                               child: Container(

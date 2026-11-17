@@ -127,6 +127,8 @@ bool isMultiplePicker = false;
 String? initialDirectoryPath;
 String? initialSelectedPath;
 String? pickerTitle;
+@visibleForTesting
+Future<void> Function(String filePath)? onFileOpenOverride;
 
 void _parsePickerPath(String raw) {
   String arg = raw.trim();
@@ -593,6 +595,29 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
       }
     });
     _ensureIndexVisible(newIndex);
+  }
+
+  Future<void> _activateEntity(FileSystemEntity file) async {
+    final isDir = FileSystemEntity.isDirectorySync(file.path);
+    if (isDir) {
+      openDirectory(file is Directory ? file : Directory(file.path));
+      return;
+    }
+    final filePath = file.path;
+    if (isPicker) {
+      if (isSavePicker) {
+        _saveFileNameController.text = p.basename(filePath);
+        selectedPaths
+          ..clear()
+          ..add(filePath);
+        await _confirmPickerSelection();
+      } else {
+        stdout.writeln(filePath);
+        await stdout.flush();
+        exit(0);
+      }
+    }
+    await _openFileOrLaunch(filePath);
   }
 
   void _updateSelection() {
@@ -1997,25 +2022,7 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
           () => DoubleTapGestureRecognizer(),
           (DoubleTapGestureRecognizer instance) {
             instance.onDoubleTap = () async {
-              if (isDir) {
-                openDirectory(file as Directory);
-              } else {
-                var filePath = file.path;
-                if (isPicker) {
-                  if (isSavePicker) {
-                    _saveFileNameController.text = p.basename(filePath);
-                    selectedPaths
-                      ..clear()
-                      ..add(filePath);
-                    await _confirmPickerSelection();
-                  } else {
-                    stdout.writeln(filePath);
-                    await stdout.flush();
-                    exit(0);
-                  }
-                }
-                await _openFileOrLaunch(filePath);
-              }
+              await _activateEntity(file);
             };
           },
         ),
@@ -2170,6 +2177,30 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
 
         if (key == LogicalKeyboardKey.controlLeft ||
             key == LogicalKeyboardKey.controlRight) {
+          return KeyEventResult.ignored;
+        } else if ((key == LogicalKeyboardKey.enter ||
+                key == LogicalKeyboardKey.numpadEnter) &&
+            !isControlPressed &&
+            !isAltPressed &&
+            !isMetaPressed) {
+          if (previewImagePath != null) {
+            setState(() {
+              previewImagePath = null;
+            });
+            return KeyEventResult.handled;
+          }
+          FileSystemEntity? target;
+          final idx = _currentSelectionIndex();
+          if (idx != null && idx >= 0 && idx < files.length) {
+            target = files[idx];
+          } else if (selectedPaths.length == 1) {
+            final sp = selectedPaths.first;
+            target = files.where((f) => f.path == sp).firstOrNull;
+          }
+          if (target != null) {
+            _activateEntity(target);
+            return KeyEventResult.handled;
+          }
           return KeyEventResult.ignored;
         } else if (key == LogicalKeyboardKey.keyA && isControlPressed) {
           setState(() {
@@ -3597,6 +3628,10 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
   }
 
   Future<void> _openFileOrLaunch(String filePath) async {
+    if (onFileOpenOverride != null) {
+      await onFileOpenOverride!(filePath);
+      return;
+    }
     if (filePath.endsWith('.desktop')) {
       await _launchDesktopFile(filePath);
       return;

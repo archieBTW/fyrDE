@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -23,6 +24,7 @@ class _StartMenuPopupState extends State<StartMenuPopup>
   final TextEditingController _searchController = TextEditingController();
   late AnimationController _animationController;
   late Animation<Offset> _slideAnimation;
+  StreamSubscription<void>? _appsChangedSub;
 
   @override
   void initState() {
@@ -41,27 +43,28 @@ class _StartMenuPopupState extends State<StartMenuPopup>
     _animationController.forward();
 
     _filteredApps = _apps;
-    if (_apps.isEmpty) {
+    _loadApps();
+    _appsChangedSub = AppService.onAppsChanged.listen((_) {
       _loadApps();
-    }
+    });
     _searchController.addListener(_filterApps);
   }
 
   @override
   void dispose() {
+    _appsChangedSub?.cancel();
     _animationController.dispose();
     _searchController.dispose();
     super.dispose();
   }
 
   Future<void> _loadApps() async {
-    AppService.cachedApps = null;
-    final apps = await AppService.getInstalledApps();
+    final apps = await AppService.getInstalledApps(forceRefresh: true);
     if (mounted) {
       setState(() {
         _apps = apps;
-        _filteredApps = apps;
       });
+      _filterApps();
     }
   }
 
@@ -502,57 +505,77 @@ class _StartMenuPopupState extends State<StartMenuPopup>
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
-                  PowerButton(
-                    icon: Icons.lock_outline,
-                    label: "Lock",
-                    onTap: () => _runCommand('dbus-send', [
-                      '--system',
-                      '--type=method_call',
-                      '--dest=org.freedesktop.DisplayManager',
-                      '/org/freedesktop/DisplayManager/Seat0',
-                      'org.freedesktop.DisplayManager.Seat.SwitchToGreeter',
-                    ]),
-                  ),
-                  PowerButton(
-                    icon: Icons.logout,
-                    label: "Logout",
-                    onTap: () => _confirmPowerAction(
-                      title: 'Log Out',
-                      message:
-                          'Are you sure you want to log out of your current session?',
-                      confirmLabel: 'Log Out',
-                      icon: Icons.logout,
-                      command: 'swaymsg',
-                      args: ['exit'],
+                  Expanded(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: PowerButton(
+                        icon: Icons.lock_outline,
+                        label: "Lock",
+                        onTap: () => _runCommand('dbus-send', [
+                          '--system',
+                          '--type=method_call',
+                          '--dest=org.freedesktop.DisplayManager',
+                          '/org/freedesktop/DisplayManager/Seat0',
+                          'org.freedesktop.DisplayManager.Seat.SwitchToGreeter',
+                        ]),
+                      ),
                     ),
                   ),
-                  PowerButton(
-                    icon: Icons.restart_alt,
-                    label: "Restart",
-                    onTap: () => _confirmPowerAction(
-                      title: 'Restart Computer',
-                      message:
-                          'Are you sure you want to restart your computer? Any unsaved work will be lost.',
-                      confirmLabel: 'Restart',
-                      icon: Icons.restart_alt,
-                      command: 'systemctl',
-                      args: ['reboot'],
+                  Expanded(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: PowerButton(
+                        icon: Icons.logout,
+                        label: "Logout",
+                        onTap: () => _confirmPowerAction(
+                          title: 'Log Out',
+                          message:
+                              'Are you sure you want to log out of your current session?',
+                          confirmLabel: 'Log Out',
+                          icon: Icons.logout,
+                          command: 'swaymsg',
+                          args: ['exit'],
+                        ),
+                      ),
                     ),
                   ),
-                  PowerButton(
-                    icon: Icons.power_settings_new,
-                    label: "Shutdown",
-                    onTap: () => _confirmPowerAction(
-                      title: 'Shut Down Computer',
-                      message:
-                          'Are you sure you want to shut down your computer? Any unsaved work will be lost.',
-                      confirmLabel: 'Shut Down',
-                      icon: Icons.power_settings_new,
-                      command: 'systemctl',
-                      args: ['poweroff'],
-                      isDanger: true,
+                  Expanded(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: PowerButton(
+                        icon: Icons.restart_alt,
+                        label: "Restart",
+                        onTap: () => _confirmPowerAction(
+                          title: 'Restart Computer',
+                          message:
+                              'Are you sure you want to restart your computer? Any unsaved work will be lost.',
+                          confirmLabel: 'Restart',
+                          icon: Icons.restart_alt,
+                          command: 'systemctl',
+                          args: ['reboot'],
+                        ),
+                      ),
                     ),
-                    isDanger: true,
+                  ),
+                  Expanded(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: PowerButton(
+                        icon: Icons.power_settings_new,
+                        label: "Shutdown",
+                        onTap: () => _confirmPowerAction(
+                          title: 'Shut Down Computer',
+                          message:
+                              'Are you sure you want to shut down your computer? Any unsaved work will be lost.',
+                          confirmLabel: 'Shut Down',
+                          icon: Icons.power_settings_new,
+                          command: 'systemctl',
+                          args: ['poweroff'],
+                          isDanger: true,
+                        ),
+                        isDanger: true,
+                      ),
+                    ),
                   ),
                 ],
               ),

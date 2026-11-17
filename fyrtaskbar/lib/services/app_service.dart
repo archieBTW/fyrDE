@@ -1,15 +1,32 @@
+import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:fyrtaskbar/fyr_theme.dart';
 import 'package:fyrtaskbar/models/app_entry.dart';
 
 class AppService {
   static List<DesktopApp>? cachedApps;
+  static Set<String>? searchPathsOverride;
+  static final List<StreamSubscription<FileSystemEvent>> _watchers = [];
+  static final StreamController<void> _updatesController =
+      StreamController<void>.broadcast();
 
-  static Future<List<DesktopApp>> getInstalledApps() async {
-    if (cachedApps != null) return cachedApps!;
+  static Stream<void> get onAppsChanged => _updatesController.stream;
 
-    Map<String, DesktopApp> appMap = {};
+  @visibleForTesting
+  static Future<void> resetForTest() async {
+    cachedApps = null;
+    for (final sub in _watchers) {
+      await sub.cancel();
+    }
+    _watchers.clear();
+  }
+
+  static Set<String> _getSearchPaths() {
+    if (searchPathsOverride != null) {
+      return Set<String>.from(searchPathsOverride!);
+    }
     final Set<String> searchPaths = {};
     final home = Platform.environment['HOME'] ?? '';
     if (home.isNotEmpty) {
@@ -28,6 +45,40 @@ class AppService {
     searchPaths.add('/usr/share/applications');
     searchPaths.add('/var/lib/flatpak/exports/share/applications');
     searchPaths.add('/var/lib/snapd/desktop/applications');
+    return searchPaths;
+  }
+
+  static void ensureWatchersStarted() {
+    if (_watchers.isNotEmpty) return;
+    for (final path in _getSearchPaths()) {
+      final dir = Directory(path);
+      if (!dir.existsSync()) continue;
+      try {
+        final sub = dir.watch().listen(
+          (event) {
+            if (event.path.endsWith('.desktop') ||
+                event.type == FileSystemEvent.create ||
+                event.type == FileSystemEvent.delete ||
+                event.type == FileSystemEvent.move) {
+              cachedApps = null;
+              _updatesController.add(null);
+            }
+          },
+          onError: (_) {},
+        );
+        _watchers.add(sub);
+      } catch (_) {}
+    }
+  }
+
+  static Future<List<DesktopApp>> getInstalledApps({
+    bool forceRefresh = false,
+  }) async {
+    ensureWatchersStarted();
+    if (!forceRefresh && cachedApps != null) return cachedApps!;
+
+    Map<String, DesktopApp> appMap = {};
+    final Set<String> searchPaths = _getSearchPaths();
 
     for (String path in searchPaths) {
       final dir = Directory(path);

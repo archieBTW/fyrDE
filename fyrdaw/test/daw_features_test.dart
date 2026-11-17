@@ -4415,4 +4415,153 @@ Default Source: alsa_input.usb-Focusrite_Scarlett_Solo_USB_Y7PE74V22E69FD-00.Dir
       expect(snowShk.chokeGroup, 0);
     });
   });
+
+  group('Sampler Waveform Trim Editor', () {
+    testWidgets('Renders square-edged waveform trim handles with live IN/OUT/LEN readout and drags accurately', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final track = Track(id: 'smp_trim', name: 'Drums', type: TrackType.sampler);
+      track.samplerPads[0]!
+        ..name = 'Floor Tom'
+        ..waveformData = List<double>.generate(120, (i) => 0.15 + 0.75 * sin(i * 0.18).abs());
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 960,
+              height: 440,
+              child: StatefulBuilder(
+                builder: (context, setModalState) => SamplerEditorWidget(
+                  track: track,
+                  onStateChanged: () => setModalState(() {}),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Square-edged container without RangeSlider pill artifacts
+      expect(find.byType(RangeSlider), findsNothing);
+      final trimBox = tester.widget<Container>(
+        find.byKey(const Key('sampler_waveform_trim_box')),
+      );
+      final deco = trimBox.decoration as BoxDecoration;
+      expect(deco.borderRadius, isNull);
+
+      expect(find.text('IN'), findsOneWidget);
+      expect(find.text('OUT'), findsOneWidget);
+
+      final startHandle = find.byKey(const Key('sampler_trim_start_handle'));
+      final endHandle = find.byKey(const Key('sampler_trim_end_handle'));
+      expect(startHandle, findsOneWidget);
+      expect(endHandle, findsOneWidget);
+
+      await tester.drag(startHandle, const Offset(80, 0));
+      await tester.pumpAndSettle();
+      expect(track.samplerPads[0]!.trimStart, greaterThan(0.05));
+
+      await tester.drag(endHandle, const Offset(-80, 0));
+      await tester.pumpAndSettle();
+      expect(track.samplerPads[0]!.trimEnd, lessThan(0.95));
+
+      // Reset link restores 0..1 cleanly
+      expect(find.text('RESET'), findsOneWidget);
+      await tester.tap(find.text('RESET'));
+      await tester.pumpAndSettle();
+      expect(track.samplerPads[0]!.trimStart, 0.0);
+      expect(track.samplerPads[0]!.trimEnd, 1.0);
+    });
+  });
+
+  group('Timeline Track Reordering', () {
+    test('reorderTrackList and adjacentVisibleTrackIndex move tracks and remap selection cleanly', () {
+      final list = ['Audio 1', 'Audio 2', 'Synth 1'];
+      final downRes = reorderTrackList(
+        list,
+        oldIndex: 0,
+        newIndex: 3, // move Audio 1 to bottom
+        selectedIndex: 0,
+        anchorIndex: 1,
+      );
+      expect(downRes, isNotNull);
+      expect(list, ['Audio 2', 'Synth 1', 'Audio 1']);
+      expect(downRes!.selectedIndex, 2); // followed Audio 1
+      expect(downRes.anchorIndex, 0); // followed Audio 2
+
+      final upRes = reorderTrackList(
+        list,
+        oldIndex: 2,
+        newIndex: 0, // move Audio 1 back to top
+        selectedIndex: 2,
+        anchorIndex: 0,
+      );
+      expect(upRes, isNotNull);
+      expect(list, ['Audio 1', 'Audio 2', 'Synth 1']);
+      expect(upRes!.selectedIndex, 0);
+      expect(upRes.anchorIndex, 1);
+
+      // Collapsed group skips hidden children when finding adjacent visible track
+      final visible = [true, false, false, true];
+      expect(adjacentVisibleTrackIndex(visible, 0, 1), 3);
+      expect(adjacentVisibleTrackIndex(visible, 3, -1), 0);
+      expect(adjacentVisibleTrackIndex(visible, 0, -1), isNull);
+    });
+
+    testWidgets('DawApp reorders tracks via drag handle and right-click Move Track Down / Up', (tester) async {
+      tester.view.physicalSize = const Size(1600, 960);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+
+      await tester.pumpWidget(const MaterialApp(home: DawApp()));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // Add two Audio tracks
+      for (int i = 0; i < 2; i++) {
+        await tester.tap(find.byIcon(Icons.add).first);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Add Audio Track'));
+        await tester.pumpAndSettle();
+      }
+
+      final state = tester.state(find.byType(DawMainScreen)) as dynamic;
+      expect((state.tracks as List).length, 2);
+      final t0 = state.tracks[0];
+      final t1 = state.tracks[1];
+
+      final hdr0 = find.byKey(Key('track_header_${t0.id}'));
+      final hdr1 = find.byKey(Key('track_header_${t1.id}'));
+      expect(hdr0, findsOneWidget);
+      expect(hdr1, findsOneWidget);
+
+      expect(tester.getTopLeft(hdr0).dy, lessThan(tester.getTopLeft(hdr1).dy));
+
+      // Drag first Audio track's grip handle below second Audio track midpoint
+      final grip0 = find.byKey(Key('track_drag_handle_${t0.id}'));
+      expect(grip0, findsOneWidget);
+      await tester.timedDrag(
+        grip0,
+        const Offset(0, 160),
+        const Duration(milliseconds: 350),
+      );
+      await tester.pumpAndSettle();
+
+      expect(state.tracks[0].id, t1.id);
+      expect(state.tracks[1].id, t0.id);
+      expect(tester.getTopLeft(hdr1).dy, lessThan(tester.getTopLeft(hdr0).dy));
+
+      // Right-click Audio 1 -> Move Track Up restores Audio 1 above Audio 2
+      await tester.tap(hdr0, buttons: kSecondaryMouseButton);
+      await tester.pumpAndSettle();
+      expect(find.text('Move Track Up'), findsOneWidget);
+      await tester.tap(find.text('Move Track Up'));
+      await tester.pumpAndSettle();
+
+      expect(state.tracks[0].id, t0.id);
+      expect(state.tracks[1].id, t1.id);
+      expect(tester.getTopLeft(hdr0).dy, lessThan(tester.getTopLeft(hdr1).dy));
+      expect(tester.takeException(), isNull);
+    });
+  });
 }
