@@ -4042,10 +4042,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       track.activeMidiHandles.clear();
       if (_isSoloudReady) {
         for (final pad in track.samplerPads.values) {
-          if (pad.currentHandle != null &&
-              SoLoud.instance.getIsValidVoiceHandle(pad.currentHandle!)) {
-            SoLoud.instance.stop(pad.currentHandle!);
-          }
+          pad.stopActive();
         }
       }
     }
@@ -4131,6 +4128,9 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                 auxReverbBus,
                 track.volume * track.reverbSend,
                 track.pan,
+                null,
+                null,
+                true,
               );
             }
             if (track.delaySend > 0.01 && auxDelayBus != null) {
@@ -4139,6 +4139,9 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                 auxDelayBus,
                 track.volume * track.delaySend,
                 track.pan,
+                null,
+                null,
+                true,
               );
             }
           }

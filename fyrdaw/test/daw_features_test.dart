@@ -4386,4 +4386,33 @@ Default Source: alsa_input.usb-Focusrite_Scarlett_Solo_USB_Y7PE74V22E69FD-00.Dir
       expect(tester.takeException(), isNull);
     });
   });
+
+  group('SamplerPad Polyphony & Choke Group Rules', () {
+    test('SamplerPad.padsToChoke only chokes sibling pads sharing a non-zero chokeGroup', () {
+      final kick = SamplerPad()..midiNote = 36..chokeGroup = 0;
+      final snare = SamplerPad()..midiNote = 38..chokeGroup = 0;
+      final chh = SamplerPad()..midiNote = 42..chokeGroup = 1;
+      final ohh = SamplerPad()..midiNote = 46..chokeGroup = 1;
+      final pads = [kick, snare, chh, ohh];
+
+      expect(SamplerPad.padsToChoke(kick, pads), isEmpty);
+      expect(SamplerPad.padsToChoke(snare, pads), isEmpty);
+      expect(SamplerPad.padsToChoke(chh, pads), equals([ohh]));
+      expect(SamplerPad.padsToChoke(ohh, pads), equals([chh]));
+    });
+
+    test('Shakers and holiday percussion do not choke each other while hi-hats choke cleanly', () {
+      final trap = findDrumKitById('808_trap')!;
+      final shaker808 = trap.pads.firstWhere((p) => p.label == '808 Shaker');
+      final chh808 = trap.pads.firstWhere((p) => p.label == '808 CHH');
+      expect(shaker808.chokeGroup, 0);
+      expect(chh808.chokeGroup, 1);
+
+      final xmas = findDrumKitById('christmas_holiday')!;
+      final tri = xmas.pads.firstWhere((p) => p.label == 'Triangle');
+      final snowShk = xmas.pads.firstWhere((p) => p.label == 'Snow Shaker');
+      expect(tri.chokeGroup, 0);
+      expect(snowShk.chokeGroup, 0);
+    });
+  });
 }

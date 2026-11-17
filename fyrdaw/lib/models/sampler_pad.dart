@@ -12,6 +12,7 @@ class SamplerPad {
   String? name;
   AudioSource? source;
   SoundHandle? currentHandle;
+  final List<SoundHandle> activeHandles = [];
   List<double>? waveformData;
   double trimStart = 0.0;
   double trimEnd = 1.0;
@@ -54,13 +55,35 @@ class SamplerPad {
     await extractWaveform();
   }
 
+  /// Returns the other pads on the track that should be silenced when
+  /// [triggered] starts (only pads sharing a non-zero [chokeGroup]).
+  static List<SamplerPad> padsToChoke(
+    SamplerPad triggered,
+    Iterable<SamplerPad>? trackPads,
+  ) {
+    if (triggered.chokeGroup <= 0 || trackPads == null) return const [];
+    return trackPads
+        .where(
+          (other) =>
+              !identical(other, triggered) &&
+              other.chokeGroup == triggered.chokeGroup,
+        )
+        .toList();
+  }
+
   void stopActive() {
-    if (currentHandle == null) return;
-    try {
-      if (SoLoud.instance.getIsValidVoiceHandle(currentHandle!)) {
-        SoLoud.instance.stop(currentHandle!);
-      }
-    } catch (_) {}
+    final handlesToStop = <SoundHandle>{
+      ...activeHandles,
+      ?currentHandle,
+    };
+    for (final h in handlesToStop) {
+      try {
+        if (SoLoud.instance.getIsValidVoiceHandle(h)) {
+          SoLoud.instance.stop(h);
+        }
+      } catch (_) {}
+    }
+    activeHandles.clear();
     currentHandle = null;
   }
 
@@ -71,17 +94,36 @@ class SamplerPad {
     double trackPan = 0.0,
     Iterable<SamplerPad>? trackPads,
     double? pitchMultiplierOverride,
+    bool isAuxSend = false,
   ]) {
     if (source == null) return;
     try {
-      if (chokeGroup > 0 && trackPads != null) {
-        for (final other in trackPads) {
-          if (!identical(other, this) && other.chokeGroup == chokeGroup) {
-            other.stopActive();
-          }
+      if (!isAuxSend) {
+        for (final other in padsToChoke(this, trackPads)) {
+          other.stopActive();
+        }
+        // Only choke prior hits on this pad when assigned to a choke group;
+        // unchoked drum/cymbal pads ring polyphonically across rapid rolls.
+        if (chokeGroup > 0) {
+          stopActive();
         }
       }
-      stopActive();
+
+      activeHandles.removeWhere((h) {
+        try {
+          return !SoLoud.instance.getIsValidVoiceHandle(h);
+        } catch (_) {
+          return true;
+        }
+      });
+      while (activeHandles.length >= 8) {
+        final oldest = activeHandles.removeAt(0);
+        try {
+          if (SoLoud.instance.getIsValidVoiceHandle(oldest)) {
+            SoLoud.instance.stop(oldest);
+          }
+        } catch (_) {}
+      }
 
       final totalLen = SoLoud.instance.getLength(source!);
       final startPos = totalLen * trimStart;
@@ -107,7 +149,10 @@ class SamplerPad {
               pan: trackPan,
               paused: true,
             );
-      currentHandle = handle;
+      activeHandles.add(handle);
+      if (!isAuxSend) {
+        currentHandle = handle;
+      }
       if (trimStart > 0.0005 && startPos > Duration.zero) {
         SoLoud.instance.seek(handle, startPos);
       }
@@ -137,16 +182,22 @@ class SamplerPad {
         if (fadeOutTime > playLength) fadeOutTime = playLength;
         Duration waitTime = playLength - fadeOutTime;
         Timer(waitTime, () {
-          if (SoLoud.instance.getIsValidVoiceHandle(handle)) {
-            SoLoud.instance.fadeVolume(handle, 0.0, fadeOutTime);
-          }
+          try {
+            if (SoLoud.instance.getIsValidVoiceHandle(handle)) {
+              SoLoud.instance.fadeVolume(handle, 0.0, fadeOutTime);
+            }
+          } catch (_) {}
         });
       }
 
       Timer(playLength, () {
-        if (SoLoud.instance.getIsValidVoiceHandle(handle)) {
-          SoLoud.instance.stop(handle);
-        }
+        activeHandles.remove(handle);
+        if (currentHandle == handle) currentHandle = null;
+        try {
+          if (SoLoud.instance.getIsValidVoiceHandle(handle)) {
+            SoLoud.instance.stop(handle);
+          }
+        } catch (_) {}
       });
     } catch (_) {}
   }
