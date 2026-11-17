@@ -7,6 +7,7 @@ import 'package:fyrtaskbar/fyr_theme.dart';
 import 'package:fyrtaskbar/models/notification.dart';
 import 'package:fyrtaskbar/notification_service.dart';
 import 'package:fyrtaskbar/phone_service.dart';
+import 'package:fyrtaskbar/services/update_scheduler.dart';
 
 class SystemState {
   static final ValueNotifier<int> batteryLevel = ValueNotifier(100);
@@ -85,6 +86,7 @@ class SystemState {
     _loadWeatherLocation();
     NotificationService.init();
     PhoneService.init();
+    UpdateScheduler.init();
     // Periodic fallback runs at 15s for slow-changing hardware stats (battery, wifi, bt)
     // while Sway, volume, and Fyr config changes arrive immediately via event streams.
     _timer = Timer.periodic(const Duration(seconds: 15), (_) {
@@ -110,6 +112,7 @@ class SystemState {
     _swayDirSub = null;
     await _dockDirSub?.cancel();
     _dockDirSub = null;
+    UpdateScheduler.dispose();
   }
 
   static void _startSwaySubscription() {

@@ -22,7 +22,7 @@ WIDTH=$(echo $RES | cut -d'x' -f1)
 HEIGHT=$(echo $RES | cut -d'x' -f2)
 echo "Detected resolution: ${WIDTH}x${HEIGHT}"
 
-flutter_apps=("fyrdock" "fyroverview" "fyrwindowoverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrstore" "fyrvirt" "fyrtext" "fyrdaw" "fyrphone" "fyrcalculator" "fyrcode" "fyrvideo" "fyrmusic" "fyrphotos" "fyrcamera" "fyrbrowser" "fyrjournal" "fyrcalender" "fyrclock" "fyrtorrent" "fyrapi" "fyrgraphics" "fyremu" "fyrdirector")
+flutter_apps=("fyrdock" "fyroverview" "fyrwindowoverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrstore" "fyrvirt" "fyrtext" "fyrdaw" "fyrphone" "fyrcalculator" "fyrcode" "fyrvideo" "fyrmusic" "fyrphotos" "fyrcamera" "fyrbrowser" "fyrjournal" "fyrcalender" "fyrclock" "fyrtorrent" "fyrapi" "fyrgraphics" "fyremu" "fyrdirector" "fyrdisks")
 
 # --- Progress Tracking & Terminal Management ---
 CURRENT_STEP=0
@@ -134,7 +134,7 @@ install_deps() {
             "wireplumber" "pipewire" "pipewire-pulse" "wlsunset" "cmake" "cpio" "pkg-config" "gcc" "wf-recorder" "grim" "ninja" "clang" "alsa-utils"
             "meson" "scdoc" "wayland-protocols" "pcre2" "json-c" "pango" "cairo" "gdk-pixbuf2" "unzip" "virt-viewer" "libvirt" "virt-install" "qemu-desktop"
             "bluez" "bluez-utils" "xdg-utils" "slurp" "libnotify" "polkit-gnome" "network-manager-applet" "pavucontrol" "playerctl" "jq" "libcanberra" "psmisc" "pamixer" "sddm" "accountsservice" "qt5-declarative" "qt5-quickcontrols" "qt5-quickcontrols2" "qt5-graphicaleffects" "kdeconnect"
-            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "mpv" "ffmpeg" "noto-fonts-emoji" "zsh" "xorg-server-xvfb" "p7zip" "zip" "tar" "gzip" "bzip2" "nodejs" "npm" "clang" "virglrenderer" "libpulse" "rclone" "fuse3"
+            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "mpv" "ffmpeg" "noto-fonts-emoji" "zsh" "xorg-server-xvfb" "p7zip" "zip" "tar" "gzip" "bzip2" "nodejs" "npm" "clang" "virglrenderer" "libpulse" "rclone" "fuse3" "udisks2" "cryptsetup" "parted" "gptfdisk" "dosfstools" "exfatprogs" "ntfs-3g" "gnupg"
             "gstreamer" "gst-plugins-base" "gst-plugins-good" "gst-plugins-bad" "gst-plugins-ugly" "gst-libav" "gst-plugin-pipewire" "libcamera" "gst-plugin-libcamera"
         )
         sudo pacman -S --needed --noconfirm "${deps[@]}"
@@ -149,7 +149,7 @@ install_deps() {
             "xclip" "wl-clipboard" "brightnessctl" "wireplumber" "pipewire" "pipewire-pulse" "cmake" "cpio" "libasound2-dev" "alsa-utils"
             "pkg-config" "gcc" "wf-recorder" "grim" "ninja-build" "clang" "curl" "git" "unzip" "xz-utils" "zip" "libglu1-mesa" "sway" "virt-viewer" "libvirt-clients" "libvirt-daemon-system" "virtinst" "qemu-kvm" "qemu-system"
             "bluez" "bluez-tools" "xdg-utils" "slurp" "libnotify-bin" "polkit-gnome" "network-manager-gnome" "pavucontrol" "playerctl" "jq" "libcanberra-gtk3-module" "libcanberra-gtk-module" "psmisc" "pamixer" "sddm" "accountsservice" "policykit-1-gnome" "qml-module-qtquick-controls" "qml-module-qtquick-controls2" "qml-module-qtgraphicaleffects" "kdeconnect"
-            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "libmpv-dev" "ffmpeg" "fonts-noto-color-emoji" "zsh" "xvfb" "p7zip-full" "tar" "gzip" "bzip2" "nodejs" "npm" "clangd" "libvirglrenderer-dev" "libpulse-dev" "rclone" "fuse3"
+            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "libmpv-dev" "ffmpeg" "fonts-noto-color-emoji" "zsh" "xvfb" "p7zip-full" "tar" "gzip" "bzip2" "nodejs" "npm" "clangd" "libvirglrenderer-dev" "libpulse-dev" "rclone" "fuse3" "udisks2" "cryptsetup" "parted" "gdisk" "dosfstools" "exfatprogs" "ntfs-3g" "gnupg"
             "libgstreamer1.0-dev" "libgstreamer-plugins-base1.0-dev" "gstreamer1.0-plugins-base" "gstreamer1.0-plugins-good" "gstreamer1.0-plugins-bad" "gstreamer1.0-libav"
         )
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${deps[@]}"
@@ -164,7 +164,7 @@ install_deps() {
             "xclip" "wl-clipboard" "brightnessctl" "wireplumber" "pipewire" "pipewire-pulseaudio" "cmake" "cpio"
             "pkgconf" "gcc" "wf-recorder" "grim" "ninja-build" "clang" "curl" "git" "unzip" "zip" "mesa-libGLU" "sway" "virt-viewer" "libvirt" "virt-install" "qemu-kvm"
             "bluez" "bluez-utils" "xdg-utils" "slurp" "libnotify" "polkit-gnome" "nm-connection-editor" "pavucontrol" "playerctl" "jq" "libcanberra-gtk3" "psmisc" "pamixer" "sddm" "accountsservice" "lxqt-policykit" "qt5-qtquickcontrols" "qt5-qtquickcontrols2" "qt5-qtgraphicaleffects" "kdeconnect"
-            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "mpv-libs-devel" "ffmpeg" "google-noto-emoji-color-fonts" "zsh" "xorg-x11-server-Xvfb" "p7zip" "tar" "gzip" "bzip2" "nodejs" "npm" "clang" "virglrenderer-devel" "rclone" "fuse3"
+            "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "mpv-libs-devel" "ffmpeg" "google-noto-emoji-color-fonts" "zsh" "xorg-x11-server-Xvfb" "p7zip" "tar" "gzip" "bzip2" "nodejs" "npm" "clang" "virglrenderer-devel" "rclone" "fuse3" "udisks2" "cryptsetup" "parted" "gdisk" "dosfstools" "exfatprogs" "ntfs-3g" "gnupg2"
             "gstreamer1-devel" "gstreamer1-plugins-base-devel" "gstreamer1-plugins-good" "gstreamer1-plugins-bad-free" "gstreamer1-libav"
         )
         sudo dnf install -y "${deps[@]}"
@@ -922,6 +922,26 @@ Type=Application
 Categories=AudioVideo;Video;AudioVideoEditing;
 MimeType=video/mp4;video/x-matroska;video/webm;video/quicktime;application/x-fyrdirector;
 Keywords=video;editor;kdenlive;capcut;timeline;render;ffmpeg;
+EOF
+            ;;
+        "fyrdisks")
+            sudo ln -sf /opt/fyrdisks/fyrdisks /usr/local/bin/fyrdisks
+            if [ -f "./fyrdisks/assets/icons/fyrdisks.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrdisks/assets/icons/fyrdisks.png /usr/share/icons/hicolor/512x512/apps/fyrdisks.png
+            fi
+            sudo tee /usr/share/applications/fyrdisks.desktop > /dev/null <<'EOF'
+[Desktop Entry]
+Name=fyrDisks
+GenericName=Disks & ISO Flasher
+Comment=Manage disks, partitions, LUKS encrypted volumes, and flash ISOs to USB drives
+Exec=/usr/local/bin/fyrdisks %f
+Icon=fyrdisks
+Terminal=false
+Type=Application
+Categories=System;Utility;HardwareSettings;
+MimeType=application/x-iso9660-image;application/x-raw-disk-image;inode/blockdevice;
+Keywords=disk;partition;usb;iso;flash;format;luks;encrypt;drive;
 EOF
             ;;
         "fyrdock"|"fyrtaskbar"|"fyroverview"|"fyrwindowoverview"|"fyrsearch"|"fyrhelp"|"fyremoji")

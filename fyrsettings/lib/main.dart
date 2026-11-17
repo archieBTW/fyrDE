@@ -11,6 +11,10 @@ import 'panes/default_apps_pane.dart';
 import 'panes/sound_pane.dart';
 import 'panes/touchpad_pane.dart';
 import 'panes/shortcuts_pane.dart';
+import 'panes/updates_pane.dart';
+import 'panes/users_pane.dart';
+import 'panes/firewall_pane.dart';
+import 'panes/backup_pane.dart';
 import 'fyr_theme.dart';
 
 void main(List<String> args) async {
@@ -42,6 +46,14 @@ void main(List<String> args) async {
       initialIndex = 7;
     } else if (arg == 'shortcuts' || arg == 'keybinds' || arg == 'gestures') {
       initialIndex = 8;
+    } else if (arg == 'updates' || arg == 'update') {
+      initialIndex = 9;
+    } else if (arg == 'users' || arg == 'accounts' || arg == 'user') {
+      initialIndex = 10;
+    } else if (arg == 'firewall' || arg == 'security' || arg == 'ufw') {
+      initialIndex = 11;
+    } else if (arg == 'backup' || arg == 'backups' || arg == 'restore') {
+      initialIndex = 12;
     }
   }
 
@@ -133,6 +145,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       SettingsCategory('Power', Icons.battery_charging_full, PowerPane()),
       SettingsCategory('Mouse & Touchpad', Icons.touch_app, TouchpadPane()),
       SettingsCategory('Shortcuts', Icons.keyboard, ShortcutsPane()),
+      SettingsCategory('Updates', Icons.system_update_alt, UpdatesPane()),
+      SettingsCategory('Users', Icons.people, UsersPane()),
+      SettingsCategory('Firewall', Icons.security, FirewallPane()),
+      SettingsCategory('Backup', Icons.backup, BackupPane()),
     ];
 
     return Scaffold(

@@ -1,7 +1,9 @@
 import 'dart:io';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:fyrtaskbar/main.dart';
 import 'package:fyrtaskbar/services/app_service.dart';
 import 'package:fyrtaskbar/ui/start_menu.dart';
 
@@ -90,5 +92,33 @@ void main() {
       await tester.pumpWidget(const SizedBox());
       await tester.pump();
     });
+  });
+
+  testWidgets('DesktopBackgroundScreen opens context menu on right-click and closes on tap', (
+    WidgetTester tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      const MaterialApp(home: DesktopBackgroundScreen()),
+    );
+    await tester.pump();
+
+    expect(find.text('Change Wallpaper...'), findsNothing);
+
+    await tester.tapAt(
+      const Offset(400, 400),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pump();
+
+    expect(find.text('Change Wallpaper...'), findsOneWidget);
+    expect(find.text('Display Settings'), findsOneWidget);
+    expect(find.text('Open Terminal'), findsOneWidget);
+
+    await tester.tapAt(const Offset(50, 50));
+    await tester.pump();
+    expect(find.text('Change Wallpaper...'), findsNothing);
   });
 }

@@ -19,13 +19,24 @@ class NotificationCard extends StatelessWidget {
     this.isPopup = false,
   });
 
+  void _handleAction(String actionKey) {
+    if (actionKey == 'open_updates') {
+      const optBin = '/opt/fyrsettings/fyrsettings';
+      final cmd = File(optBin).existsSync() ? optBin : 'fyrsettings';
+      Process.start(cmd, ['--updates'], mode: ProcessStartMode.detached);
+    }
+    NotificationService.sendActionInvoked(notification.id, actionKey);
+    SystemState.dismissNotification(notification.id);
+  }
+
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: () {
         if (notification.actions.contains('default')) {
-          NotificationService.sendActionInvoked(notification.id, 'default');
-          SystemState.dismissNotification(notification.id);
+          _handleAction('default');
+        } else if (notification.actions.contains('open_updates')) {
+          _handleAction('open_updates');
         }
       },
       child: Container(
@@ -119,15 +130,7 @@ class NotificationCard extends StatelessWidget {
                                   final label =
                                       notification.actions[entry.key + 1];
                                   return TextButton(
-                                    onPressed: () {
-                                      NotificationService.sendActionInvoked(
-                                        notification.id,
-                                        key,
-                                      );
-                                      SystemState.dismissNotification(
-                                        notification.id,
-                                      );
-                                    },
+                                    onPressed: () => _handleAction(key),
                                     style: TextButton.styleFrom(
                                       backgroundColor: FyrTheme.accentColor
                                           .withOpacity(0.1),

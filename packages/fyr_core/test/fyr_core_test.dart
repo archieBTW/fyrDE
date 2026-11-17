@@ -187,4 +187,144 @@ void main() {
       expect(hiddenCount, 2);
     });
   });
+
+  group('DisplayTarget resolution', () {
+    test('parseSwayOutputs sorts deterministically by x, y, name and filters inactive', () {
+      final outputs = parseSwayOutputs([
+        {
+          'name': 'DP-5',
+          'model': 'External',
+          'active': true,
+          'focused': true,
+          'rect': {'x': 1920, 'y': 0, 'width': 1920, 'height': 1080},
+        },
+        {
+          'name': 'HDMI-1',
+          'active': false,
+          'rect': {'x': 0, 'y': 0, 'width': 1920, 'height': 1080},
+        },
+        {
+          'name': 'eDP-1',
+          'model': 'Built-in',
+          'active': true,
+          'focused': false,
+          'rect': {'x': 0, 'y': 0, 'width': 1920, 'height': 1080},
+        },
+      ]);
+
+      expect(outputs.map((o) => o.name).toList(), ['eDP-1', 'DP-5']);
+      // Primary resolution picks preferredName regardless of transient focus.
+      expect(
+        resolvePrimaryOutput(outputs, preferredName: 'DP-5')?.name,
+        'DP-5',
+      );
+      // Falls back deterministically to (0, 0) output even though DP-5 was focused.
+      expect(
+        resolvePrimaryOutput(outputs)?.name,
+        'eDP-1',
+      );
+    });
+
+    test('readConfiguredPrimaryDisplay prefers ~/.config/fyr/primary_display over sway conf', () async {
+      final tmpHome = Directory.systemTemp.createTempSync('fyr_disp_test_');
+      addTearDown(() {
+        if (tmpHome.existsSync()) tmpHome.deleteSync(recursive: true);
+      });
+
+      final swayDropIn = File(
+        '${tmpHome.path}/.config/sway/conf.d/20-primary-output.conf',
+      );
+      swayDropIn.parent.createSync(recursive: true);
+      swayDropIn.writeAsStringSync('assign [app_id="fyrdock"] output DP-5\n');
+
+      expect(
+        await readConfiguredPrimaryDisplay(homeOverride: tmpHome.path),
+        'DP-5',
+      );
+
+      final primaryFile = File('${tmpHome.path}/.config/fyr/primary_display');
+      primaryFile.parent.createSync(recursive: true);
+      primaryFile.writeAsStringSync('eDP-1\n');
+
+      expect(
+        await readConfiguredPrimaryDisplay(homeOverride: tmpHome.path),
+        'eDP-1',
+      );
+    });
+  });
+
+  group('UpdateService parsers and config', () {
+    test('parses pacman/yay, flatpak, and snap update outputs accurately', () {
+      final pacmanUpdates = UpdateService.parsePacmanQuOutput(
+        ':: Synchronizing...\n'
+        'linux 6.12.1-1 -> 6.12.2-1\n'
+        'mesa 24.3.0-1 -> 24.3.1-1\n'
+        'ignored-pkg 1.0 -> 2.0 [ignored]\n',
+      );
+      expect(pacmanUpdates.length, 2);
+      expect(pacmanUpdates[0].name, 'linux');
+      expect(pacmanUpdates[0].currentVersion, '6.12.1-1');
+      expect(pacmanUpdates[0].newVersion, '6.12.2-1');
+      expect(pacmanUpdates[0].source, UpdateSource.pacman);
+
+      final aurUpdates = UpdateService.parsePacmanQuOutput(
+        'yay-bin 12.4.0-1 -> 13.1.0-1\n',
+        source: UpdateSource.aur,
+      );
+      expect(aurUpdates.single.source, UpdateSource.aur);
+      expect(aurUpdates.single.name, 'yay-bin');
+
+      final flatpaks = UpdateService.parseFlatpakUpdatesOutput(
+        'org.freedesktop.Platform.GL.default\tMesa\t26.2.5\t25.08\n'
+        'org.mozilla.firefox\tFirefox\t\tstable\n',
+      );
+      expect(flatpaks.length, 2);
+      expect(flatpaks[0].name, 'Mesa');
+      expect(flatpaks[0].newVersion, '26.2.5');
+      expect(flatpaks[0].source, UpdateSource.flatpak);
+      expect(flatpaks[1].name, 'Firefox');
+      expect(flatpaks[1].newVersion, 'latest');
+
+      final snaps = UpdateService.parseSnapRefreshListOutput(
+        'Name     Version   Rev   Publisher   Notes\n'
+        'spotify  1.2.40    78    spotify     -\n',
+      );
+      expect(snaps.length, 1);
+      expect(snaps[0].name, 'spotify');
+      expect(snaps[0].newVersion, '1.2.40');
+      expect(snaps[0].currentVersion, 'rev 78');
+      expect(snaps[0].source, UpdateSource.snap);
+
+      final summary = UpdateService.formatNotificationBody([
+        ...pacmanUpdates,
+        ...aurUpdates,
+        ...flatpaks,
+        ...snaps,
+      ]);
+      expect(summary, contains('2 Pacman'));
+      expect(summary, contains('1 AUR (yay)'));
+      expect(summary, contains('2 Flatpak'));
+      expect(summary, contains('1 Snap'));
+    });
+
+    test('persists UpdatesConfig atomically', () async {
+      final tmpHome = Directory.systemTemp.createTempSync('fyr_updates_cfg_');
+      addTearDown(() {
+        if (tmpHome.existsSync()) tmpHome.deleteSync(recursive: true);
+      });
+
+      const cfg = UpdatesConfig(
+        notificationsEnabled: true,
+        autoUpdateEnabled: true,
+        checkIntervalHours: 12,
+        includeSnap: false,
+      );
+      await UpdateService.saveConfig(cfg, homeOverride: tmpHome.path);
+      final loaded = await UpdateService.loadConfig(homeOverride: tmpHome.path);
+      expect(loaded.notificationsEnabled, isTrue);
+      expect(loaded.autoUpdateEnabled, isTrue);
+      expect(loaded.checkIntervalHours, 12);
+      expect(loaded.includeSnap, isFalse);
+    });
+  });
 }

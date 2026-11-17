@@ -11,6 +11,20 @@ import 'package:flutter/services.dart';
 import 'fyr_theme.dart';
 
 final waylandLayerShellPlugin = WaylandLayerShell();
+const MethodChannel _dockChannel = MethodChannel('fyrdock/resize');
+
+Future<bool> _bindDockToOutput(DisplayOutputInfo? target) async {
+  if (target == null) return false;
+  try {
+    final res = await _dockChannel.invokeMethod<bool>(
+      'setMonitor',
+      target.toMonitorArgs(),
+    );
+    return res ?? false;
+  } catch (_) {
+    return false;
+  }
+}
 
 /// Returns true when [rawAppId] identifies the Fyr search/launcher overlay.
 bool isSearchOverlayAppId(String rawAppId) {
@@ -25,14 +39,17 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await windowManager.ensureInitialized();
 
+  final DisplayOutputInfo? initialTarget = await resolveTargetDisplayOutput();
+
   bool isSupported = await waylandLayerShellPlugin.initialize(800, 200);
   if (isSupported) {
     try {
-      await const MethodChannel('fyrdock/resize').invokeMethod(
+      await _dockChannel.invokeMethod(
         'setNamespace',
         'fyrdock',
       );
     } catch (_) {}
+    await _bindDockToOutput(initialTarget);
     await waylandLayerShellPlugin.setAnchor(ShellEdge.edgeBottom, true);
     await waylandLayerShellPlugin.setAnchor(ShellEdge.edgeLeft, false);
     await waylandLayerShellPlugin.setAnchor(ShellEdge.edgeRight, false);
@@ -56,14 +73,16 @@ void main() async {
   windowManager.waitUntilReadyToShow(windowOptions, () async {
     await windowManager.setAsFrameless();
     await windowManager.setBackgroundColor(Colors.transparent);
+    await _bindDockToOutput(initialTarget);
     await windowManager.show();
   });
 
-  runApp(const FyrDockApp());
+  runApp(FyrDockApp(initialTarget: initialTarget));
 }
 
 class FyrDockApp extends StatelessWidget {
-  const FyrDockApp({super.key});
+  final DisplayOutputInfo? initialTarget;
+  const FyrDockApp({super.key, this.initialTarget});
 
   @override
   Widget build(BuildContext context) {
@@ -95,14 +114,15 @@ class FyrDockApp extends StatelessWidget {
             secondary: FyrTheme.accentColor,
           ),
         ),
-        home: DockScreen(),
+        home: DockScreen(initialTarget: initialTarget),
       ),
     );
   }
 }
 
 class DockScreen extends StatefulWidget {
-  const DockScreen({super.key});
+  final DisplayOutputInfo? initialTarget;
+  const DockScreen({super.key, this.initialTarget});
 
   @override
   State<DockScreen> createState() => _DockScreenState();
@@ -116,8 +136,11 @@ class _DockScreenState extends State<DockScreen>
   Timer? _visibilityDebounce;
   Timer? _fullscreenRecheckTimer;
   Timer? _geometryPollTimer;
+  Timer? _monitorSyncDebounce;
+  DisplayOutputInfo? _boundTarget;
   SwaySubscription? _swaySub;
   StreamSubscription<FileSystemEvent>? _dockDirSub;
+  StreamSubscription<FileSystemEvent>? _fyrDirSub;
   bool _isVisible = true;
   bool _isSearchOverlayOpen = false;
   bool _hasFullscreenWindow = false;
@@ -179,8 +202,10 @@ class _DockScreenState extends State<DockScreen>
   }
 
   Future<void> _initializeDock() async {
+    _boundTarget = widget.initialTarget;
     await _loadConfig();
     await _loadPinnedApps();
+    await _syncDockMonitor(forceRebind: _boundTarget == null);
     await _checkWindowVisibility();
     _startSwaySubscription();
     _startConfigWatcher();
@@ -190,8 +215,30 @@ class _DockScreenState extends State<DockScreen>
     _swaySub?.cancel();
     _swaySub = SwayIpc.subscribe(
       const ['window', 'workspace', 'output'],
-      onEvent: (_) => _scheduleVisibilityCheck(),
+      onEvent: (event) {
+        if (!event.containsKey('container') && !event.containsKey('current')) {
+          _scheduleMonitorSync();
+        }
+        _scheduleVisibilityCheck();
+      },
     );
+  }
+
+  void _scheduleMonitorSync() {
+    _monitorSyncDebounce?.cancel();
+    _monitorSyncDebounce = Timer(
+      const Duration(milliseconds: 150),
+      () => _syncDockMonitor(),
+    );
+  }
+
+  Future<void> _syncDockMonitor({bool forceRebind = false}) async {
+    final next = await resolveTargetDisplayOutput();
+    if (next == null) return;
+    if (!forceRebind && next.samePlacement(_boundTarget)) return;
+    _boundTarget = next;
+    await _bindDockToOutput(next);
+    _scheduleVisibilityCheck();
   }
 
   void _scheduleVisibilityCheck() {
@@ -229,6 +276,24 @@ class _DockScreenState extends State<DockScreen>
             },
             onError: (_) {},
           );
+    } catch (_) {}
+
+    _fyrDirSub?.cancel();
+    try {
+      final fyrDir = Directory(
+        '${Platform.environment['HOME']}/.config/fyr',
+      );
+      if (!fyrDir.existsSync()) {
+        fyrDir.createSync(recursive: true);
+      }
+      _fyrDirSub = fyrDir.watch().listen(
+        (event) {
+          if (event.path.endsWith('primary_display')) {
+            _scheduleMonitorSync();
+          }
+        },
+        onError: (_) {},
+      );
     } catch (_) {}
   }
 
@@ -373,6 +438,29 @@ class _DockScreenState extends State<DockScreen>
         .toList();
     if (outputs.isEmpty) return null;
 
+    if (primaryDisplayName != null) {
+      for (final out in outputs) {
+        if (out['name']?.toString() == primaryDisplayName) {
+          // If GDK currently places the dock on a different rect than the primary
+          // output, trigger a monitor rebind so taskbar and dock stay synced.
+          if (monitorRect != null && out['rect'] is Map) {
+            final rect = out['rect'] as Map;
+            final x = (rect['x'] as num?)?.toInt() ?? 0;
+            final y = (rect['y'] as num?)?.toInt() ?? 0;
+            final w = (rect['width'] as num?)?.toInt() ?? 0;
+            final h = (rect['height'] as num?)?.toInt() ?? 0;
+            if ((x - monitorRect['x']!).abs() > 2 ||
+                (y - monitorRect['y']!).abs() > 2 ||
+                (w - monitorRect['width']!).abs() > 2 ||
+                (h - monitorRect['height']!).abs() > 2) {
+              _scheduleMonitorSync();
+            }
+          }
+          return primaryDisplayName;
+        }
+      }
+    }
+
     if (monitorRect != null) {
       for (final out in outputs) {
         final rect = out['rect'];
@@ -391,16 +479,11 @@ class _DockScreenState extends State<DockScreen>
       }
     }
 
-    if (primaryDisplayName != null) {
-      for (final out in outputs) {
-        if (out['name']?.toString() == primaryDisplayName) {
-          return primaryDisplayName;
-        }
-      }
-    }
-
     for (final out in outputs) {
-      if (out['focused'] == true) {
+      final rect = out['rect'];
+      if (rect is Map &&
+          (rect['x'] as num?)?.toInt() == 0 &&
+          (rect['y'] as num?)?.toInt() == 0) {
         return out['name']?.toString();
       }
     }
@@ -606,8 +689,10 @@ class _DockScreenState extends State<DockScreen>
     _visibilityDebounce?.cancel();
     _fullscreenRecheckTimer?.cancel();
     _geometryPollTimer?.cancel();
+    _monitorSyncDebounce?.cancel();
     _swaySub?.cancel();
     _dockDirSub?.cancel();
+    _fyrDirSub?.cancel();
     _fadeController.dispose();
     super.dispose();
   }

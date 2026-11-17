@@ -1,5 +1,5 @@
+import 'dart:async';
 import 'dart:io';
-import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -12,8 +12,221 @@ import 'package:wayland_layer_shell/wayland_layer_shell.dart';
 import 'package:wayland_layer_shell/types.dart';
 import 'fyr_theme.dart';
 
+const MethodChannel _taskbarChannel = MethodChannel('fyrtaskbar/resize');
+
+String? _parseOutputArg(List<String> args) {
+  for (int i = 0; i < args.length; i++) {
+    final arg = args[i];
+    if (arg.startsWith('--output=')) {
+      final val = arg.substring('--output='.length).trim();
+      return val.isEmpty ? null : val;
+    }
+    if (arg == '--output' && i + 1 < args.length) {
+      final val = args[i + 1].trim();
+      return val.isEmpty ? null : val;
+    }
+  }
+  return null;
+}
+
+Future<bool> _bindWindowToOutput(DisplayOutputInfo? target) async {
+  if (target == null) return false;
+  try {
+    final res = await _taskbarChannel.invokeMethod<bool>(
+      'setMonitor',
+      target.toMonitorArgs(),
+    );
+    return res ?? false;
+  } catch (_) {
+    return false;
+  }
+}
+
+Future<void> _applyWindowSize(int width, int height) async {
+  try {
+    await _taskbarChannel.invokeMethod('setSize', {
+      'width': width,
+      'height': height,
+    });
+  } catch (_) {}
+  try {
+    await windowManager.setSize(Size(width.toDouble(), height.toDouble()));
+  } catch (_) {}
+}
+
+/// Manages one `--desktop` layer surface per active Sway output so desktop
+/// right-click works across every monitor, including on hotplug.
+class _DesktopLayerCoordinator {
+  DisplayOutputInfo? ownTarget;
+  final Map<String, Process> _workers = {};
+  SwaySubscription? _swaySub;
+  Timer? _syncDebounce;
+  bool _disposed = false;
+
+  _DesktopLayerCoordinator(this.ownTarget);
+
+  Future<void> start() async {
+    await _reconcileOutputs();
+    _swaySub = SwayIpc.subscribe(
+      const ['output'],
+      onEvent: (_) => _scheduleReconcile(),
+    );
+    try {
+      ProcessSignal.sigterm.watch().listen((_) async {
+        await stop();
+        exit(0);
+      });
+      ProcessSignal.sigint.watch().listen((_) async {
+        await stop();
+        exit(0);
+      });
+    } catch (_) {}
+  }
+
+  void _scheduleReconcile() {
+    if (_disposed) return;
+    _syncDebounce?.cancel();
+    _syncDebounce = Timer(const Duration(milliseconds: 250), _reconcileOutputs);
+  }
+
+  Future<void> _reconcileOutputs() async {
+    if (_disposed) return;
+    final outputs = await getActiveSwayOutputs();
+    if (outputs.isEmpty) return;
+
+    final preferred = await readConfiguredPrimaryDisplay();
+    DisplayOutputInfo nextOwn;
+    if (ownTarget != null && outputs.any((o) => o.name == ownTarget!.name)) {
+      nextOwn = outputs.firstWhere((o) => o.name == ownTarget!.name);
+    } else {
+      nextOwn =
+          resolvePrimaryOutput(outputs, preferredName: preferred) ??
+          outputs.first;
+    }
+
+    // Ensure no child worker duplicates our own output before rebinding self.
+    final staleSelfWorker = _workers.remove(nextOwn.name);
+    staleSelfWorker?.kill();
+
+    if (!nextOwn.samePlacement(ownTarget)) {
+      ownTarget = nextOwn;
+      SystemState.screenWidth = nextOwn.width;
+      SystemState.screenHeight = nextOwn.height;
+      await _bindWindowToOutput(nextOwn);
+      await _applyWindowSize(nextOwn.width, nextOwn.height);
+    }
+
+    final activeOtherNames = outputs
+        .where((o) => o.name != nextOwn.name)
+        .map((o) => o.name)
+        .toSet();
+
+    for (final existingName in _workers.keys.toList()) {
+      if (!activeOtherNames.contains(existingName)) {
+        _workers.remove(existingName)?.kill();
+      }
+    }
+
+    for (final name in activeOtherNames) {
+      if (!_workers.containsKey(name)) {
+        await _spawnWorker(name);
+      }
+    }
+  }
+
+  Future<void> _spawnWorker(String outputName) async {
+    if (_disposed) return;
+    try {
+      final proc = await Process.start(
+        Platform.resolvedExecutable,
+        ['--desktop', '--output=$outputName'],
+      );
+      _workers[outputName] = proc;
+      proc.exitCode.then((_) {
+        if (_workers[outputName] == proc) {
+          _workers.remove(outputName);
+        }
+      });
+    } catch (_) {}
+  }
+
+  Future<void> stop() async {
+    _disposed = true;
+    _syncDebounce?.cancel();
+    _swaySub?.cancel();
+    for (final proc in _workers.values) {
+      try {
+        proc.kill();
+      } catch (_) {}
+    }
+    _workers.clear();
+  }
+}
+
+/// Watches Sway output changes for a dedicated `--desktop --output=<name>`
+/// worker, resizing or exiting cleanly when its monitor disconnects.
+void _watchWorkerOutput(DisplayOutputInfo initialTarget) {
+  DisplayOutputInfo current = initialTarget;
+  Timer? debounce;
+  SwayIpc.subscribe(const ['output'], onEvent: (_) {
+    debounce?.cancel();
+    debounce = Timer(const Duration(milliseconds: 250), () async {
+      final next = await resolveTargetDisplayOutput(
+        requestedOutput: current.name,
+      );
+      if (next == null) {
+        exit(0);
+      }
+      if (!next.samePlacement(current)) {
+        current = next;
+        SystemState.screenWidth = next.width;
+        SystemState.screenHeight = next.height;
+        await _bindWindowToOutput(next);
+        await _applyWindowSize(next.width, next.height);
+      }
+    });
+  });
+}
+
+/// Keeps the primary taskbar bound to the shared primary display output.
+void _watchTaskbarPrimaryOutput(DisplayOutputInfo? initialTarget) {
+  DisplayOutputInfo? current = initialTarget;
+  Timer? debounce;
+
+  Future<void> sync() async {
+    final next = await resolveTargetDisplayOutput();
+    if (next == null || next.samePlacement(current)) return;
+    current = next;
+    SystemState.screenWidth = next.width;
+    SystemState.screenHeight = next.height;
+    await _bindWindowToOutput(next);
+    await _applyWindowSize(next.width, 56);
+  }
+
+  void schedule() {
+    debounce?.cancel();
+    debounce = Timer(const Duration(milliseconds: 200), sync);
+  }
+
+  SwayIpc.subscribe(const ['output'], onEvent: (_) => schedule());
+
+  try {
+    final home = Platform.environment['HOME'] ?? '';
+    if (home.isNotEmpty) {
+      final dir = Directory('$home/.config/fyr');
+      if (!dir.existsSync()) dir.createSync(recursive: true);
+      dir.watch().listen((event) {
+        if (event.path.endsWith('primary_display')) {
+          schedule();
+        }
+      }, onError: (_) {});
+    }
+  } catch (_) {}
+}
+
 void main(List<String> args) async {
   final isDesktopLayer = args.contains('--desktop');
+  final requestedOutput = _parseOutputArg(args);
   FyrTheme.initialize();
   WidgetsFlutterBinding.ensureInitialized();
   await windowManager.ensureInitialized();
@@ -32,42 +245,17 @@ void main(List<String> args) async {
   int screenWidth = 1920;
   int screenHeight = 1080;
 
-  try {
-    final swayRes = await Process.run('swaymsg', ['-t', 'get_outputs']);
-    if (swayRes.exitCode == 0 && swayRes.stdout.toString().trim().isNotEmpty) {
-      final List<dynamic> outputs = jsonDecode(swayRes.stdout.toString());
-      String? primaryName;
-      final primaryFile = File('${Platform.environment['HOME']}/.config/fyr/primary_display');
-      if (await primaryFile.exists()) {
-        final content = (await primaryFile.readAsString()).trim();
-        if (content.isNotEmpty) primaryName = content;
-      }
-      if (primaryName == null) {
-        final configFile = File('${Platform.environment['HOME']}/.config/sway/config');
-        if (await configFile.exists()) {
-          final configContent = await configFile.readAsString();
-          final match = RegExp(r'assign\s+\[app_id="fyrtaskbar"\]\s+output\s+([^\s]+)').firstMatch(configContent);
-          if (match != null) primaryName = match.group(1);
-        }
-      }
-      final target = outputs.firstWhere(
-        (o) => o['name'] == primaryName && o['active'] == true,
-        orElse: () => outputs.firstWhere(
-          (o) => o['focused'] == true,
-          orElse: () => outputs.firstWhere(
-            (o) => o['active'] == true,
-            orElse: () => outputs.isNotEmpty ? outputs.first : null,
-          ),
-        ),
-      );
-      if (target != null && target['rect'] != null) {
-        screenWidth = (target['rect']['width'] as num?)?.toInt() ?? screenWidth;
-        screenHeight = (target['rect']['height'] as num?)?.toInt() ?? screenHeight;
-      }
-    } else {
-      throw Exception('Sway outputs unavailable');
-    }
-  } catch (_) {
+  final DisplayOutputInfo? initialTarget = await resolveTargetDisplayOutput(
+    requestedOutput: isDesktopLayer ? requestedOutput : null,
+  );
+  if (isDesktopLayer && requestedOutput != null && initialTarget == null) {
+    exit(0);
+  }
+
+  if (initialTarget != null) {
+    screenWidth = initialTarget.width;
+    screenHeight = initialTarget.height;
+  } else {
     try {
       final res = await Process.run('sh', [
         '-c',
@@ -92,11 +280,12 @@ void main(List<String> args) async {
     );
     if (isSupported) {
       try {
-        await const MethodChannel('fyrtaskbar/resize').invokeMethod(
+        await _taskbarChannel.invokeMethod(
           'setNamespace',
           'fyrdesktop',
         );
       } catch (_) {}
+      await _bindWindowToOutput(initialTarget);
       await waylandLayerShellPlugin.setLayer(ShellLayer.layerBottom);
       await waylandLayerShellPlugin.setAnchor(ShellEdge.edgeTop, true);
       await waylandLayerShellPlugin.setAnchor(ShellEdge.edgeBottom, true);
@@ -108,13 +297,7 @@ void main(List<String> args) async {
       );
     }
 
-    const channel = MethodChannel('fyrtaskbar/resize');
-    try {
-      await channel.invokeMethod('setSize', {
-        'width': screenWidth,
-        'height': screenHeight,
-      });
-    } catch (_) {}
+    await _applyWindowSize(screenWidth, screenHeight);
 
     WindowOptions windowOptions = WindowOptions(
       size: Size(screenWidth.toDouble(), screenHeight.toDouble()),
@@ -126,11 +309,16 @@ void main(List<String> args) async {
     windowManager.waitUntilReadyToShow(windowOptions, () async {
       await windowManager.setAsFrameless();
       await windowManager.setBackgroundColor(Colors.transparent);
-      await windowManager.setSize(
-        Size(screenWidth.toDouble(), screenHeight.toDouble()),
-      );
+      await _bindWindowToOutput(initialTarget);
+      await _applyWindowSize(screenWidth, screenHeight);
       await windowManager.show();
     });
+
+    if (requestedOutput != null && initialTarget != null) {
+      _watchWorkerOutput(initialTarget);
+    } else {
+      _DesktopLayerCoordinator(initialTarget).start();
+    }
 
     runApp(const FyrDesktopLayerApp());
     return;
@@ -139,11 +327,12 @@ void main(List<String> args) async {
   bool isSupported = await waylandLayerShellPlugin.initialize(screenWidth, 56);
   if (isSupported) {
     try {
-      await const MethodChannel('fyrtaskbar/resize').invokeMethod(
+      await _taskbarChannel.invokeMethod(
         'setNamespace',
         'fyrtaskbar',
       );
     } catch (_) {}
+    await _bindWindowToOutput(initialTarget);
     await waylandLayerShellPlugin.setLayer(ShellLayer.layerTop);
     await waylandLayerShellPlugin.setAnchor(ShellEdge.edgeTop, true);
     await waylandLayerShellPlugin.setAnchor(ShellEdge.edgeLeft, true);
@@ -164,9 +353,11 @@ void main(List<String> args) async {
   windowManager.waitUntilReadyToShow(windowOptions, () async {
     await windowManager.setAsFrameless();
     await windowManager.setBackgroundColor(Colors.transparent);
+    await _bindWindowToOutput(initialTarget);
     await windowManager.show();
   });
 
+  _watchTaskbarPrimaryOutput(initialTarget);
   runApp(const FyrTaskbarApp());
 }
 

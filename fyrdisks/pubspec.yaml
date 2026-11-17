@@ -1,0 +1,29 @@
+name: fyrdisks
+description: "fyrDisks — Disk, Partition, LUKS Encryption & ISO Flash Utility for FyrDE."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.2.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  fyr_core:
+    path: ../packages/fyr_core
+  cupertino_icons: ^1.0.8
+  crypto: ^3.0.7
+  file_picker: ^11.0.2
+  google_fonts: ^8.1.0
+  path: ^1.9.1
+  window_manager: ^0.5.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/icons/

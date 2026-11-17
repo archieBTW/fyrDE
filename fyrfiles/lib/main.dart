@@ -15,6 +15,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'fyr_theme.dart';
 import 's3_service.dart';
+import 'services/crypto_service.dart';
+import 'services/drives_service.dart';
+import 'widgets/drive_crypto_dialogs.dart';
 
 const dragChannel = MethodChannel('fyr_files/drag');
 
@@ -458,6 +461,9 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
   );
   S3Config s3config = S3Config.empty();
   List<TransferProgress> activeTransfers = [];
+  List<ExternalDriveVolume> _externalDrives = [];
+  Timer? _drivesTimer;
+  String _drivesSignature = '';
 
   Future<void> _confirmPickerSelection() async {
     String output;
@@ -968,6 +974,7 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
 
   @override
   void dispose() {
+    _drivesTimer?.cancel();
     windowManager.removeListener(this);
     _mainFocusNode.dispose();
     _saveFileNameController.dispose();
@@ -980,6 +987,11 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
     super.initState();
     windowManager.addListener(this);
     windowManager.setPreventClose(true);
+
+    _refreshExternalDrives();
+    _drivesTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      _refreshExternalDrives();
+    });
 
     getHomeDirectoryByPlatform().then((Directory dir) async {
       final homePath = dir.path;
@@ -1603,6 +1615,329 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
     );
   }
 
+  void _showSnack(String message, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? Colors.redAccent : FyrTheme.accentColor,
+      ),
+    );
+  }
+
+  Future<void> _refreshExternalDrives() async {
+    final drives = await DrivesService.listExternalDrives();
+    if (!mounted) return;
+    final sig = drives
+        .map((d) => '${d.devicePath}|${d.mountPoint}|${d.isUnlocked}|${d.fsType}|${d.sizeBytes}')
+        .join(';');
+    if (sig != _drivesSignature) {
+      setState(() {
+        _externalDrives = drives;
+        _drivesSignature = sig;
+      });
+    }
+  }
+
+  Future<void> _openInFyrDisks([String? arg]) async {
+    try {
+      await Process.start('fyrdisks', arg != null ? [arg] : [], mode: ProcessStartMode.detached);
+    } catch (e) {
+      _showSnack('Could not launch fyrDisks: $e', isError: true);
+    }
+  }
+
+  Future<void> _handleDriveTap(ExternalDriveVolume drive) async {
+    if (drive.isMounted && drive.mountPoint != null) {
+      openDirectory(Directory(drive.mountPoint!));
+      return;
+    }
+    if (drive.isLocked) {
+      await _handleUnlockDrive(drive);
+      return;
+    }
+    if (drive.fsType == null || drive.fsType!.isEmpty) {
+      _showSnack('${drive.displayName} is unformatted. Opening in fyrDisks...');
+      await _openInFyrDisks(drive.parentDiskPath);
+      return;
+    }
+    final res = await DrivesService.mountVolume(drive);
+    await _refreshExternalDrives();
+    if (!res.ok) {
+      _showSnack(res.message, isError: true);
+      return;
+    }
+    if (res.mountPoint != null && Directory(res.mountPoint!).existsSync()) {
+      openDirectory(Directory(res.mountPoint!));
+    } else {
+      _showSnack(res.message);
+    }
+  }
+
+  Future<void> _handleUnlockDrive(ExternalDriveVolume drive) async {
+    final mountOrMapper = await showDialog<String>(
+      context: context,
+      builder: (_) => UnlockDriveDialog(volume: drive),
+    );
+    await _refreshExternalDrives();
+    if (mountOrMapper != null && mountOrMapper.isNotEmpty && Directory(mountOrMapper).existsSync()) {
+      openDirectory(Directory(mountOrMapper));
+    }
+  }
+
+  Future<void> _maybeLeaveRemovedMount(String? unmountedPath) async {
+    if (unmountedPath == null || unmountedPath.isEmpty) return;
+    if (currentDir.path == unmountedPath || currentDir.path.startsWith('$unmountedPath/')) {
+      final home = await getHomeDirectoryByPlatform();
+      if (mounted) openDirectory(home);
+    }
+  }
+
+  Future<void> _handleEjectDrive(ExternalDriveVolume drive) async {
+    final oldMount = drive.mountPoint;
+    final res = await DrivesService.ejectVolume(drive);
+    await _refreshExternalDrives();
+    if (res.ok) {
+      await _maybeLeaveRemovedMount(oldMount);
+      _showSnack(res.message);
+    } else {
+      _showSnack(res.message, isError: true);
+    }
+  }
+
+  Future<void> _handleLockDrive(ExternalDriveVolume drive) async {
+    final oldMount = drive.mountPoint;
+    final res = await DrivesService.lockVolume(drive);
+    await _refreshExternalDrives();
+    if (res.ok) {
+      await _maybeLeaveRemovedMount(oldMount);
+      _showSnack(res.message);
+    } else {
+      _showSnack(res.message, isError: true);
+    }
+  }
+
+  Future<void> _handleUnmountDrive(ExternalDriveVolume drive) async {
+    final oldMount = drive.mountPoint;
+    final res = await DrivesService.unmountVolume(drive);
+    await _refreshExternalDrives();
+    if (res.ok) {
+      await _maybeLeaveRemovedMount(oldMount);
+      _showSnack(res.message);
+    } else {
+      _showSnack(res.message, isError: true);
+    }
+  }
+
+  Future<void> _showDriveContextMenu(BuildContext context, Offset position, ExternalDriveVolume drive) async {
+    await showMenu(
+      context: context,
+      position: RelativeRect.fromLTRB(position.dx, position.dy, position.dx, position.dy),
+      items: [
+        if (drive.isMounted && drive.mountPoint != null)
+          PopupMenuItem(
+            onTap: () => openDirectory(Directory(drive.mountPoint!)),
+            child: const ListTile(leading: Icon(Icons.folder_open), title: Text('Open')),
+          ),
+        if (drive.isLocked)
+          PopupMenuItem(
+            onTap: () => Future.microtask(() => _handleUnlockDrive(drive)),
+            child: const ListTile(leading: Icon(Icons.lock_open), title: Text('Unlock & Mount...')),
+          ),
+        if (!drive.isLocked && !drive.isMounted && drive.fsType != null && drive.fsType!.isNotEmpty)
+          PopupMenuItem(
+            onTap: () => Future.microtask(() => _handleDriveTap(drive)),
+            child: const ListTile(leading: Icon(Icons.usb), title: Text('Mount')),
+          ),
+        if (drive.isMounted)
+          PopupMenuItem(
+            onTap: () => Future.microtask(() => _handleUnmountDrive(drive)),
+            child: const ListTile(leading: Icon(Icons.link_off), title: Text('Unmount')),
+          ),
+        if (drive.isEncrypted && drive.isUnlocked)
+          PopupMenuItem(
+            onTap: () => Future.microtask(() => _handleLockDrive(drive)),
+            child: const ListTile(leading: Icon(Icons.lock), title: Text('Lock Encrypted Volume')),
+          ),
+        if (drive.isMounted || drive.isUnlocked || drive.isRemovable || drive.isHotplug)
+          PopupMenuItem(
+            onTap: () => Future.microtask(() => _handleEjectDrive(drive)),
+            child: const ListTile(leading: Icon(Icons.eject), title: Text('Safely Eject')),
+          ),
+        PopupMenuItem(
+          onTap: () => Future.microtask(() => _openInFyrDisks(drive.parentDiskPath)),
+          child: const ListTile(leading: Icon(Icons.storage), title: Text('Manage in fyrDisks')),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDriveSidebarItem(ExternalDriveVolume drive) {
+    final IconData icon;
+    final Color iconColor;
+    if (drive.isLocked) {
+      icon = Icons.lock;
+      iconColor = Colors.amberAccent;
+    } else if (drive.isEncrypted) {
+      icon = Icons.enhanced_encryption;
+      iconColor = drive.isMounted ? Colors.greenAccent : FyrTheme.accentColor;
+    } else if (drive.transport == 'usb' || drive.isRemovable || drive.isHotplug) {
+      icon = Icons.usb;
+      iconColor = drive.isMounted ? Colors.greenAccent : FyrTheme.accentColor;
+    } else {
+      icon = Icons.storage;
+      iconColor = drive.isMounted ? Colors.greenAccent : FyrTheme.accentColor;
+    }
+
+    Widget item;
+    if (isSidebarCollapsed) {
+      item = Tooltip(
+        message: '${drive.displayName}\n${drive.subtitle}',
+        child: InkWell(
+          onTap: () => _handleDriveTap(drive),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 14.0),
+            child: Icon(icon, size: 22, color: iconColor),
+          ),
+        ),
+      );
+    } else {
+      item = Listener(
+        onPointerDown: (ev) {
+          if (ev.buttons == kSecondaryMouseButton) {
+            _showDriveContextMenu(context, ev.position, drive);
+          }
+        },
+        child: ListTile(
+          leading: Icon(icon, size: 20, color: iconColor),
+          title: Text(
+            drive.displayName,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+            overflow: TextOverflow.ellipsis,
+          ),
+          subtitle: Text(
+            drive.subtitle,
+            style: TextStyle(fontSize: 11, color: FyrTheme.textColorMuted),
+            overflow: TextOverflow.ellipsis,
+          ),
+          dense: true,
+          onTap: () => _handleDriveTap(drive),
+          trailing: (drive.isMounted || drive.isUnlocked)
+              ? IconButton(
+                  tooltip: drive.isEncrypted ? 'Lock & Eject' : 'Eject',
+                  icon: const Icon(Icons.eject, size: 16),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  onPressed: () => _handleEjectDrive(drive),
+                )
+              : null,
+        ),
+      );
+    }
+
+    if (drive.isMounted && drive.mountPoint != null) {
+      final mp = drive.mountPoint!;
+      return DragTarget<List<String>>(
+        onWillAcceptWithDetails: (details) => !details.data.contains(mp),
+        onAcceptWithDetails: (details) => _moveItemsToDirectory(details.data, mp),
+        builder: (context, candidateData, _) {
+          final isHovered = candidateData.isNotEmpty;
+          return Container(
+            decoration: BoxDecoration(
+              color: isHovered ? FyrTheme.accentColor.withOpacity(0.2) : Colors.transparent,
+              borderRadius: BorderRadius.circular(8),
+              border: isHovered ? Border.all(color: FyrTheme.accentColor, width: 1.5) : null,
+            ),
+            child: item,
+          );
+        },
+      );
+    }
+    return item;
+  }
+
+  Future<void> _handleEncryptSelection(List<String> targetPaths) async {
+    if (targetPaths.isEmpty) return;
+    final req = await showDialog<EncryptDialogRequest>(
+      context: context,
+      builder: (_) => EncryptFilesDialog(
+        paths: targetPaths,
+        destinationDir: currentDir.path,
+      ),
+    );
+    if (req == null || !mounted) return;
+
+    final transferId = 'enc_${DateTime.now().millisecondsSinceEpoch}';
+    final label = 'Encrypting ${req.outputName}';
+    final tp = TransferProgress(id: transferId, label: label, progress: 0.35);
+    setState(() => activeTransfers.add(tp));
+
+    final res = await CryptoService.encryptPaths(
+      paths: targetPaths,
+      destinationDir: currentDir.path,
+      passphrase: req.passphrase,
+      method: req.method,
+      deleteOriginals: req.deleteOriginals,
+      customOutputName: req.outputName,
+    );
+
+    if (!mounted) return;
+    setState(() {
+      tp.progress = 1.0;
+      tp.isCompleted = res.ok;
+      tp.isError = !res.ok;
+      tp.errorMessage = res.ok ? null : res.message;
+      if (res.ok && req.deleteOriginals) {
+        selectedPaths.removeAll(targetPaths);
+      }
+      files = currentDir.listSync();
+    });
+    _showSnack(res.message, isError: !res.ok);
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted) {
+        setState(() => activeTransfers.removeWhere((t) => t.id == transferId));
+      }
+    });
+  }
+
+  Future<void> _handleDecryptFile(String encryptedPath) async {
+    final req = await showDialog<DecryptDialogRequest>(
+      context: context,
+      builder: (_) => DecryptFileDialog(filePath: encryptedPath),
+    );
+    if (req == null || !mounted) return;
+
+    final transferId = 'dec_${DateTime.now().millisecondsSinceEpoch}';
+    final tp = TransferProgress(
+      id: transferId,
+      label: 'Decrypting ${p.basename(encryptedPath)}',
+      progress: 0.35,
+    );
+    setState(() => activeTransfers.add(tp));
+
+    final res = await CryptoService.decryptFile(
+      encryptedPath: encryptedPath,
+      destinationDir: p.dirname(encryptedPath),
+      passphrase: req.passphrase,
+      deleteEncrypted: req.deleteEncrypted,
+    );
+
+    if (!mounted) return;
+    setState(() {
+      tp.progress = 1.0;
+      tp.isCompleted = res.ok;
+      tp.isError = !res.ok;
+      tp.errorMessage = res.ok ? null : res.message;
+      files = currentDir.listSync();
+    });
+    _showSnack(res.message, isError: !res.ok);
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted) {
+        setState(() => activeTransfers.removeWhere((t) => t.id == transferId));
+      }
+    });
+  }
+
   Widget _buildSidebarItem(IconData icon, String label, VoidCallback onTap, {VoidCallback? onUnpin, String? targetPath}) {
     Widget item;
     if (isSidebarCollapsed) {
@@ -1912,6 +2247,14 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
     );
   }
 
+  IconData _iconForEntity(String path, bool isDir) {
+    if (isDir) return Icons.folder;
+    if (CryptoService.isEncryptedFile(path)) return Icons.lock;
+    final lower = path.toLowerCase();
+    if (lower.endsWith('.iso') || lower.endsWith('.img')) return Icons.disc_full;
+    return Icons.file_copy;
+  }
+
   Widget _buildFileItem(FileSystemEntity file, int index, bool isList) {
     var isDir = FileSystemEntity.isDirectorySync(file.path);
     FileInfo? currentFileInfo = fileInfoList.firstWhere(
@@ -1930,7 +2273,7 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
           children: [
             (!isDir && (file.path.toLowerCase().endsWith('.png') || file.path.toLowerCase().endsWith('.jpg') || file.path.toLowerCase().endsWith('.jpeg') || file.path.toLowerCase().endsWith('.gif') || file.path.toLowerCase().endsWith('.webp')))
                 ? Image.file(File(file.path), width: 32, height: 32, fit: BoxFit.cover)
-                : Icon(isDir ? Icons.folder : Icons.file_copy, size: 32, color: FyrTheme.accentColor),
+                : Icon(_iconForEntity(file.path, isDir), size: 32, color: FyrTheme.accentColor),
             const SizedBox(width: 16),
             Expanded(
               child: Text(
@@ -1955,7 +2298,7 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
               children: [
                 (!isDir && (file.path.toLowerCase().endsWith('.png') || file.path.toLowerCase().endsWith('.jpg') || file.path.toLowerCase().endsWith('.jpeg') || file.path.toLowerCase().endsWith('.gif') || file.path.toLowerCase().endsWith('.webp')))
                     ? Image.file(File(file.path), width: 48, height: 48, fit: BoxFit.cover)
-                    : Icon(isDir ? Icons.folder : Icons.file_copy, size: 48, color: FyrTheme.accentColor),
+                    : Icon(_iconForEntity(file.path, isDir), size: 48, color: FyrTheme.accentColor),
                 Text(
                   p.basename(file.path),
                   textAlign: TextAlign.center,
@@ -2523,6 +2866,47 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
                                         _buildSidebarItem(Icons.cloud, 'S3 Storage', () => openDirectory(Directory(S3Service.mountPath)), targetPath: S3Service.mountPath),
                                       const SizedBox(height: 8),
                                       if (!isSidebarCollapsed)
+                                        Padding(
+                                          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 6.0),
+                                          child: Row(
+                                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                            children: [
+                                              const Text("Drives", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                                              Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  InkWell(
+                                                    onTap: _refreshExternalDrives,
+                                                    child: Tooltip(
+                                                      message: 'Refresh drives',
+                                                      child: Icon(Icons.refresh, size: 15, color: FyrTheme.textColorMuted),
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 8),
+                                                  InkWell(
+                                                    onTap: () => _openInFyrDisks(),
+                                                    child: Tooltip(
+                                                      message: 'Open fyrDisks',
+                                                      child: Icon(Icons.disc_full, size: 15, color: FyrTheme.textColorMuted),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      if (_externalDrives.isEmpty && !isSidebarCollapsed)
+                                        Padding(
+                                          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+                                          child: Text(
+                                            'No external drives',
+                                            style: TextStyle(fontSize: 12, color: FyrTheme.textColorMuted),
+                                          ),
+                                        )
+                                      else
+                                        ..._externalDrives.map(_buildDriveSidebarItem),
+                                      const SizedBox(height: 8),
+                                      if (!isSidebarCollapsed)
                                         const Padding(
                                           padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
                                           child: Text("Custom Pins", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
@@ -2929,8 +3313,8 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
     );
   }
 
-  Future<dynamic> openIconContextMenuRightClick(
-      BuildContext context, PointerDownEvent event, FileSystemEntity file) {
+  List<PopupMenuEntry<dynamic>> _buildIconContextMenuItems(
+      BuildContext context, FileSystemEntity file) {
     final currentFileInfo = fileInfoList.firstWhere(
       (info) => info.filePath == file.path,
       orElse: () => FileInfo(filePath: file.path),
@@ -2939,205 +3323,235 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
     final targetPaths = selectedPaths.contains(file.path) && selectedPaths.length > 1
         ? selectedPaths.toList()
         : [file.path];
+    final lowerPath = file.path.toLowerCase();
+    final isSingleEncryptedFile = targetPaths.length == 1 &&
+        !FileSystemEntity.isDirectorySync(file.path) &&
+        CryptoService.isEncryptedFile(file.path);
+    final isDiskImage = targetPaths.length == 1 &&
+        !FileSystemEntity.isDirectorySync(file.path) &&
+        (lowerPath.endsWith('.iso') || lowerPath.endsWith('.img'));
 
+    return [
+      PopupMenuItem(
+        child: ListTile(
+          leading: const Icon(Icons.copy),
+          title: const Text('Copy'),
+          onTap: () {
+            String paths = selectedPaths.contains(file.path) && selectedPaths.length > 1
+                ? selectedPaths.join('\n')
+                : file.path;
+            Clipboard.setData(ClipboardData(text: paths));
+            Navigator.pop(context);
+          },
+        ),
+      ),
+      PopupMenuItem(
+        child: ListTile(
+          leading: const Icon(Icons.edit),
+          title: const Text('Rename'),
+          onTap: () async {
+            Navigator.pop(context);
+            await _showRenameDialog(context, file);
+          },
+        ),
+      ),
+      PopupMenuItem(
+        child: ListTile(
+          leading: const Icon(Icons.delete),
+          title: const Text('Delete'),
+          onTap: () {
+            for (String path in targetPaths) {
+              try {
+                var result = Process.runSync('gio', ['trash', path]);
+                if (result.exitCode != 0) {
+                  FileSystemEntity.typeSync(path) == FileSystemEntityType.directory
+                      ? Directory(path).deleteSync(recursive: true)
+                      : File(path).deleteSync();
+                }
+              } catch (e) {
+                FileSystemEntity.typeSync(path) == FileSystemEntityType.directory
+                    ? Directory(path).deleteSync(recursive: true)
+                    : File(path).deleteSync();
+              }
+            }
+            setState(() {
+              selectedPaths.clear();
+            });
+            Navigator.pop(context);
+          },
+        ),
+      ),
+      if (file.path.endsWith('.desktop'))
+        PopupMenuItem(
+          child: ListTile(
+            leading: const Icon(Icons.play_arrow),
+            title: const Text('Launch Application'),
+            onTap: () {
+              Navigator.pop(context);
+              _launchDesktopFile(file.path);
+            },
+          ),
+        ),
+      if (!FileSystemEntity.isDirectorySync(file.path))
+        PopupMenuItem(
+          child: ListTile(
+            leading: const Icon(Icons.open_in_new),
+            title: const Text('Open With...'),
+            onTap: () {
+              Navigator.pop(context);
+              _showOpenWithDialog(context, file.path);
+            },
+          ),
+        ),
+      if (isDiskImage)
+        PopupMenuItem(
+          child: ListTile(
+            leading: const Icon(Icons.usb),
+            title: const Text('Flash to USB Drive (fyrDisks)...'),
+            onTap: () {
+              Navigator.pop(context);
+              _openInFyrDisks(file.path);
+            },
+          ),
+        ),
+      if (_isImageFile(file.path))
+        PopupMenuItem(
+          child: ListTile(
+            leading: const Icon(Icons.wallpaper),
+            title: const Text('Set as Wallpaper'),
+            onTap: () {
+              Navigator.pop(context);
+              _setAsWallpaper(file.path);
+            },
+          ),
+        ),
+      if (_isArchive(file.path))
+        PopupMenuItem(
+          child: ListTile(
+            leading: const Icon(Icons.unarchive),
+            title: const Text('Extract Here'),
+            onTap: () {
+              Navigator.pop(context);
+              _extractArchive(file.path);
+            },
+          ),
+        ),
+      if (isSingleEncryptedFile)
+        PopupMenuItem(
+          child: ListTile(
+            leading: const Icon(Icons.lock_open),
+            title: const Text('Decrypt...'),
+            onTap: () {
+              Navigator.pop(context);
+              _handleDecryptFile(file.path);
+            },
+          ),
+        ),
+      PopupMenuItem(
+        child: ListTile(
+          leading: const Icon(Icons.enhanced_encryption),
+          title: const Text('Encrypt...'),
+          onTap: () {
+            Navigator.pop(context);
+            _handleEncryptSelection(targetPaths);
+          },
+        ),
+      ),
+      PopupMenuItem(
+        child: ListTile(
+          leading: const Icon(Icons.archive),
+          title: const Text('Compress...'),
+          onTap: () {
+            Navigator.pop(context);
+            _handleCompress(targetPaths);
+          },
+        ),
+      ),
+      PopupMenuItem(
+        child: Column(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.info),
+              title: const Text('Properties'),
+              onTap: () {
+                Navigator.pop(context);
+                var fileStat = file.statSync();
+                var properties = fileStatToMap(fileStat, file.path);
+                showPropertiesDialog(context, properties);
+              },
+            ),
+            if (FileSystemEntity.isDirectorySync(file.path) && !customPins.contains(file.path))
+              ListTile(
+                leading: const Icon(Icons.push_pin),
+                title: const Text('Pin to Sidebar'),
+                onTap: () {
+                  Navigator.pop(context);
+                  setState(() {
+                    customPins.add(file.path);
+                  });
+                  saveCustomPins();
+                },
+              ),
+          ],
+        ),
+      ),
+      if (hasActiveTag)
+        PopupMenuItem(
+          onTap: () async {
+            setState(() {
+              for (final tp in targetPaths) {
+                fileInfoList.removeWhere((info) => info.filePath == tp);
+              }
+            });
+            await writeTagsToFile(fileInfoList, tagsFilePath);
+          },
+          child: Row(
+            children: [
+              Icon(Icons.label_off_outlined, color: Colors.red.shade300, size: 18),
+              const SizedBox(width: 8),
+              Text('Remove Tag', style: TextStyle(color: Colors.red.shade300)),
+            ],
+          ),
+        ),
+      ...customTags.map((tag) {
+        final isTagApplied = currentFileInfo.tag == tag['id'];
+        return PopupMenuItem(
+          onTap: () async {
+            setState(() {
+              if (isTagApplied) {
+                for (final tp in targetPaths) {
+                  fileInfoList.removeWhere((info) => info.filePath == tp);
+                }
+              } else {
+                for (final tp in targetPaths) {
+                  fileInfoList.removeWhere((info) => info.filePath == tp);
+                  fileInfoList.add(FileInfo(filePath: tp, tag: tag['id']));
+                }
+              }
+            });
+            await writeTagsToFile(fileInfoList, tagsFilePath);
+          },
+          child: Row(
+            children: [
+              getDotColor(Color(tag['colorValue'])),
+              const SizedBox(width: 8),
+              Expanded(child: Text(tag['name'])),
+              if (isTagApplied)
+                Icon(Icons.check, size: 16, color: FyrTheme.accentColor),
+            ],
+          ),
+        );
+      }),
+    ];
+  }
+
+  Future<dynamic> openIconContextMenuRightClick(
+      BuildContext context, PointerDownEvent event, FileSystemEntity file) {
     return showMenu(
       context: context,
       position: RelativeRect.fromLTRB(event.position.dx, event.position.dy,
           event.position.dx, event.position.dy),
-      items: [
-        PopupMenuItem(
-          child: ListTile(
-            leading: const Icon(Icons.copy),
-            title: const Text('Copy'),
-            onTap: () {
-              String paths = selectedPaths.contains(file.path) && selectedPaths.length > 1 
-                  ? selectedPaths.join('\n') 
-                  : file.path;
-              Clipboard.setData(ClipboardData(text: paths));
-              Navigator.pop(context);
-            },
-          ),
-        ),
-        PopupMenuItem(
-          child: ListTile(
-            leading: const Icon(Icons.edit),
-            title: const Text('Rename'),
-            onTap: () async {
-              Navigator.pop(context);
-              await _showRenameDialog(context, file);
-            },
-          ),
-        ),
-        PopupMenuItem(
-          child: ListTile(
-            leading: const Icon(Icons.delete),
-            title: const Text('Delete'),
-            onTap: () {
-              List<String> toDelete = selectedPaths.contains(file.path) && selectedPaths.length > 1 
-                  ? selectedPaths.toList() 
-                  : [file.path];
-              for (String path in toDelete) {
-                try {
-                  var result = Process.runSync('gio', ['trash', path]);
-                  if (result.exitCode != 0) {
-                    FileSystemEntity.typeSync(path) == FileSystemEntityType.directory 
-                        ? Directory(path).deleteSync(recursive: true)
-                        : File(path).deleteSync();
-                  }
-                } catch (e) {
-                  FileSystemEntity.typeSync(path) == FileSystemEntityType.directory 
-                      ? Directory(path).deleteSync(recursive: true)
-                      : File(path).deleteSync();
-                }
-              }
-              setState(() {
-                selectedPaths.clear();
-              });
-              Navigator.pop(context);
-            },
-          ),
-        ),
-        if (file.path.endsWith('.desktop'))
-          PopupMenuItem(
-            child: ListTile(
-              leading: const Icon(Icons.play_arrow),
-              title: const Text('Launch Application'),
-              onTap: () {
-                Navigator.pop(context);
-                _launchDesktopFile(file.path);
-              },
-            ),
-          ),
-        if (!FileSystemEntity.isDirectorySync(file.path))
-          PopupMenuItem(
-            child: ListTile(
-              leading: const Icon(Icons.open_in_new),
-              title: const Text('Open With...'),
-              onTap: () {
-                Navigator.pop(context);
-                _showOpenWithDialog(context, file.path);
-              },
-            ),
-          ),
-        if (_isImageFile(file.path))
-          PopupMenuItem(
-            child: ListTile(
-              leading: const Icon(Icons.wallpaper),
-              title: const Text('Set as Wallpaper'),
-              onTap: () {
-                Navigator.pop(context);
-                _setAsWallpaper(file.path);
-              },
-            ),
-          ),
-        if (_isArchive(file.path))
-          PopupMenuItem(
-            child: ListTile(
-              leading: const Icon(Icons.unarchive),
-              title: const Text('Extract Here'),
-              onTap: () {
-                Navigator.pop(context);
-                _extractArchive(file.path);
-              },
-            ),
-          ),
-        PopupMenuItem(
-          child: ListTile(
-            leading: const Icon(Icons.archive),
-            title: const Text('Compress...'),
-            onTap: () {
-              Navigator.pop(context);
-              List<String> toCompress = selectedPaths.contains(file.path) 
-                  ? selectedPaths.toList() 
-                  : [file.path];
-              _handleCompress(toCompress);
-            },
-          ),
-        ),
-        PopupMenuItem(
-          child: Column(
-            children: [
-              ListTile(
-                leading: const Icon(Icons.info),
-                title: const Text('Properties'),
-                onTap: () {
-                  Navigator.pop(context);
-                  var fileStat = file.statSync();
-                  var properties = fileStatToMap(fileStat, file.path);
-                  showPropertiesDialog(context, properties);
-                },
-              ),
-              if (FileSystemEntity.isDirectorySync(file.path) && !customPins.contains(file.path))
-                ListTile(
-                  leading: const Icon(Icons.push_pin),
-                  title: const Text('Pin to Sidebar'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    setState(() {
-                      customPins.add(file.path);
-                    });
-                    saveCustomPins();
-                  },
-                ),
-            ],
-          ),
-        ),
-        if (hasActiveTag)
-          PopupMenuItem(
-            onTap: () async {
-              setState(() {
-                for (final tp in targetPaths) {
-                  fileInfoList.removeWhere((info) => info.filePath == tp);
-                }
-              });
-              await writeTagsToFile(fileInfoList, tagsFilePath);
-            },
-            child: Row(
-              children: [
-                Icon(Icons.label_off_outlined, color: Colors.red.shade300, size: 18),
-                const SizedBox(width: 8),
-                Text('Remove Tag', style: TextStyle(color: Colors.red.shade300)),
-              ],
-            ),
-          ),
-        ...customTags.map((tag) {
-          final currentFileInfo = fileInfoList.firstWhere(
-            (info) => info.filePath == file.path,
-            orElse: () => FileInfo(filePath: file.path),
-          );
-          final isTagApplied = currentFileInfo.tag == tag['id'];
-          final targetPaths = selectedPaths.contains(file.path) && selectedPaths.length > 1
-              ? selectedPaths.toList()
-              : [file.path];
-
-          return PopupMenuItem(
-            onTap: () async {
-              setState(() {
-                if (isTagApplied) {
-                  for (final tp in targetPaths) {
-                    fileInfoList.removeWhere((info) => info.filePath == tp);
-                  }
-                } else {
-                  for (final tp in targetPaths) {
-                    fileInfoList.removeWhere((info) => info.filePath == tp);
-                    fileInfoList.add(FileInfo(filePath: tp, tag: tag['id']));
-                  }
-                }
-              });
-              await writeTagsToFile(fileInfoList, tagsFilePath);
-            },
-            child: Row(
-              children: [
-                getDotColor(Color(tag['colorValue'])),
-                const SizedBox(width: 8),
-                Expanded(child: Text(tag['name'])),
-                if (isTagApplied)
-                  Icon(Icons.check, size: 16, color: FyrTheme.accentColor),
-              ],
-            ),
-          );
-        }),
-      ],
+      items: _buildIconContextMenuItems(context, file),
     );
   }
 
@@ -3414,15 +3828,6 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
 
   Future<dynamic> openIconContextMenu(BuildContext context,
       LongPressStartDetails event, FileSystemEntity file) {
-    final currentFileInfo = fileInfoList.firstWhere(
-      (info) => info.filePath == file.path,
-      orElse: () => FileInfo(filePath: file.path),
-    );
-    final hasActiveTag = currentFileInfo.tag != null && currentFileInfo.tag!.isNotEmpty;
-    final targetPaths = selectedPaths.contains(file.path) && selectedPaths.length > 1
-        ? selectedPaths.toList()
-        : [file.path];
-
     return showMenu(
       context: context,
       position: RelativeRect.fromLTRB(
@@ -3430,206 +3835,17 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
           event.globalPosition.dy,
           event.globalPosition.dx,
           event.globalPosition.dy),
-      items: [
-        PopupMenuItem(
-          child: ListTile(
-            leading: const Icon(Icons.copy),
-            title: const Text('Copy'),
-            onTap: () {
-              String paths = selectedPaths.contains(file.path) && selectedPaths.length > 1 
-                  ? selectedPaths.join('\n') 
-                  : file.path;
-              Clipboard.setData(ClipboardData(text: paths));
-              Navigator.pop(context);
-            },
-          ),
-        ),
-        PopupMenuItem(
-          child: ListTile(
-            leading: const Icon(Icons.edit),
-            title: const Text('Rename'),
-            onTap: () async {
-              Navigator.pop(context);
-              await _showRenameDialog(context, file);
-            },
-          ),
-        ),
-        PopupMenuItem(
-          child: ListTile(
-            leading: const Icon(Icons.delete),
-            title: const Text('Delete'),
-            onTap: () {
-              List<String> toDelete = selectedPaths.contains(file.path) && selectedPaths.length > 1 
-                  ? selectedPaths.toList() 
-                  : [file.path];
-              for (String path in toDelete) {
-                try {
-                  var result = Process.runSync('gio', ['trash', path]);
-                  if (result.exitCode != 0) {
-                    FileSystemEntity.typeSync(path) == FileSystemEntityType.directory 
-                        ? Directory(path).deleteSync(recursive: true)
-                        : File(path).deleteSync();
-                  }
-                } catch (e) {
-                  FileSystemEntity.typeSync(path) == FileSystemEntityType.directory 
-                      ? Directory(path).deleteSync(recursive: true)
-                      : File(path).deleteSync();
-                }
-              }
-              setState(() {
-                selectedPaths.clear();
-              });
-              Navigator.pop(context);
-            },
-          ),
-        ),
-        if (file.path.endsWith('.desktop'))
-          PopupMenuItem(
-            child: ListTile(
-              leading: const Icon(Icons.play_arrow),
-              title: const Text('Launch Application'),
-              onTap: () {
-                Navigator.pop(context);
-                _launchDesktopFile(file.path);
-              },
-            ),
-          ),
-        if (!FileSystemEntity.isDirectorySync(file.path))
-          PopupMenuItem(
-            child: ListTile(
-              leading: const Icon(Icons.open_in_new),
-              title: const Text('Open With...'),
-              onTap: () {
-                Navigator.pop(context);
-                _showOpenWithDialog(context, file.path);
-              },
-            ),
-          ),
-        if (_isImageFile(file.path))
-          PopupMenuItem(
-            child: ListTile(
-              leading: const Icon(Icons.wallpaper),
-              title: const Text('Set as Wallpaper'),
-              onTap: () {
-                Navigator.pop(context);
-                _setAsWallpaper(file.path);
-              },
-            ),
-          ),
-        if (_isArchive(file.path))
-          PopupMenuItem(
-            child: ListTile(
-              leading: const Icon(Icons.unarchive),
-              title: const Text('Extract Here'),
-              onTap: () {
-                Navigator.pop(context);
-                _extractArchive(file.path);
-              },
-            ),
-          ),
-        PopupMenuItem(
-          child: ListTile(
-            leading: const Icon(Icons.archive),
-            title: const Text('Compress...'),
-            onTap: () {
-              Navigator.pop(context);
-              List<String> toCompress = selectedPaths.contains(file.path) 
-                  ? selectedPaths.toList() 
-                  : [file.path];
-              _handleCompress(toCompress);
-            },
-          ),
-        ),
-        PopupMenuItem(
-          child: Column(
-            children: [
-              ListTile(
-                leading: const Icon(Icons.info),
-                title: const Text('Properties'),
-                onTap: () {
-                  Navigator.pop(context);
-                  var fileStat = file.statSync();
-                  var properties = fileStatToMap(fileStat, file.path);
-                  showPropertiesDialog(context, properties);
-                },
-              ),
-              if (FileSystemEntity.isDirectorySync(file.path) && !customPins.contains(file.path))
-                ListTile(
-                  leading: const Icon(Icons.push_pin),
-                  title: const Text('Pin to Sidebar'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    setState(() {
-                      customPins.add(file.path);
-                    });
-                    saveCustomPins();
-                  },
-                ),
-            ],
-          ),
-        ),
-        if (hasActiveTag)
-          PopupMenuItem(
-            onTap: () async {
-              setState(() {
-                for (final tp in targetPaths) {
-                  fileInfoList.removeWhere((info) => info.filePath == tp);
-                }
-              });
-              await writeTagsToFile(fileInfoList, tagsFilePath);
-            },
-            child: Row(
-              children: [
-                Icon(Icons.label_off_outlined, color: Colors.red.shade300, size: 18),
-                const SizedBox(width: 8),
-                Text('Remove Tag', style: TextStyle(color: Colors.red.shade300)),
-              ],
-            ),
-          ),
-        ...customTags.map((tag) {
-          final currentFileInfo = fileInfoList.firstWhere(
-            (info) => info.filePath == file.path,
-            orElse: () => FileInfo(filePath: file.path),
-          );
-          final isTagApplied = currentFileInfo.tag == tag['id'];
-          final targetPaths = selectedPaths.contains(file.path) && selectedPaths.length > 1
-              ? selectedPaths.toList()
-              : [file.path];
-
-          return PopupMenuItem(
-            onTap: () async {
-              setState(() {
-                if (isTagApplied) {
-                  for (final tp in targetPaths) {
-                    fileInfoList.removeWhere((info) => info.filePath == tp);
-                  }
-                } else {
-                  for (final tp in targetPaths) {
-                    fileInfoList.removeWhere((info) => info.filePath == tp);
-                    fileInfoList.add(FileInfo(filePath: tp, tag: tag['id']));
-                  }
-                }
-              });
-              await writeTagsToFile(fileInfoList, tagsFilePath);
-            },
-            child: Row(
-              children: [
-                getDotColor(Color(tag['colorValue'])),
-                const SizedBox(width: 8),
-                Expanded(child: Text(tag['name'])),
-                if (isTagApplied)
-                  Icon(Icons.check, size: 16, color: FyrTheme.accentColor),
-              ],
-            ),
-          );
-        }),
-      ],
+      items: _buildIconContextMenuItems(context, file),
     );
   }
 
   Future<void> _openFileOrLaunch(String filePath) async {
     if (onFileOpenOverride != null) {
       await onFileOpenOverride!(filePath);
+      return;
+    }
+    if (CryptoService.isEncryptedFile(filePath)) {
+      await _handleDecryptFile(filePath);
       return;
     }
     if (filePath.endsWith('.desktop')) {

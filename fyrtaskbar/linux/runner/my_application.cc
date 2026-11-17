@@ -1,5 +1,6 @@
 #include "my_application.h"
 
+#include <cstdlib>
 #include <cstring>
 #include <flutter_linux/flutter_linux.h>
 #include <gtk-layer-shell.h>
@@ -23,6 +24,73 @@ static void first_frame_cb(MyApplication *self, FlView *view) {
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
 }
 
+static GdkMonitor *find_target_monitor(FlValue *args) {
+  if (!args || fl_value_get_type(args) != FL_VALUE_TYPE_MAP) {
+    return nullptr;
+  }
+  GdkDisplay *display = gdk_display_get_default();
+  if (!display) return nullptr;
+
+  int n = gdk_display_get_n_monitors(display);
+  if (n <= 0) return nullptr;
+
+  FlValue *x_val = fl_value_lookup_string(args, "x");
+  FlValue *y_val = fl_value_lookup_string(args, "y");
+  FlValue *w_val = fl_value_lookup_string(args, "width");
+  FlValue *h_val = fl_value_lookup_string(args, "height");
+  FlValue *model_val = fl_value_lookup_string(args, "model");
+
+  const bool has_rect =
+      x_val && y_val && w_val && h_val &&
+      fl_value_get_type(x_val) == FL_VALUE_TYPE_INT &&
+      fl_value_get_type(y_val) == FL_VALUE_TYPE_INT &&
+      fl_value_get_type(w_val) == FL_VALUE_TYPE_INT &&
+      fl_value_get_type(h_val) == FL_VALUE_TYPE_INT;
+  const int req_x = has_rect ? static_cast<int>(fl_value_get_int(x_val)) : 0;
+  const int req_y = has_rect ? static_cast<int>(fl_value_get_int(y_val)) : 0;
+  const int req_w = has_rect ? static_cast<int>(fl_value_get_int(w_val)) : 0;
+  const int req_h = has_rect ? static_cast<int>(fl_value_get_int(h_val)) : 0;
+
+  const char *req_model =
+      (model_val && fl_value_get_type(model_val) == FL_VALUE_TYPE_STRING)
+          ? fl_value_get_string(model_val)
+          : nullptr;
+
+  if (has_rect) {
+    GdkMonitor *rect_match = nullptr;
+    for (int i = 0; i < n; ++i) {
+      GdkMonitor *mon = gdk_display_get_monitor(display, i);
+      if (!mon) continue;
+      GdkRectangle geom{};
+      gdk_monitor_get_geometry(mon, &geom);
+      if (std::abs(geom.x - req_x) <= 2 && std::abs(geom.y - req_y) <= 2 &&
+          std::abs(geom.width - req_w) <= 2 &&
+          std::abs(geom.height - req_h) <= 2) {
+        if (req_model && req_model[0] != '\0') {
+          const char *mon_model = gdk_monitor_get_model(mon);
+          if (mon_model && std::strstr(mon_model, req_model) != nullptr) {
+            return mon;
+          }
+        }
+        if (!rect_match) rect_match = mon;
+      }
+    }
+    if (rect_match) return rect_match;
+  }
+
+  if (req_model && req_model[0] != '\0') {
+    for (int i = 0; i < n; ++i) {
+      GdkMonitor *mon = gdk_display_get_monitor(display, i);
+      if (!mon) continue;
+      const char *mon_model = gdk_monitor_get_model(mon);
+      if (mon_model && std::strstr(mon_model, req_model) != nullptr) {
+        return mon;
+      }
+    }
+  }
+  return nullptr;
+}
+
 static void fyr_method_call_cb(FlMethodChannel *channel,
                                FlMethodCall *method_call, gpointer user_data) {
   GtkWindow *window = GTK_WINDOW(user_data);
@@ -37,10 +105,37 @@ static void fyr_method_call_cb(FlMethodChannel *channel,
         int width = fl_value_get_int(width_val);
         int height = fl_value_get_int(height_val);
         gtk_widget_set_size_request(GTK_WIDGET(window), width, height);
+        gtk_window_resize(window, width, height);
       }
     }
     g_autoptr(FlMethodResponse) response =
         FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+    fl_method_call_respond(method_call, response, nullptr);
+  } else if (strcmp(method, "setMonitor") == 0) {
+    gboolean bound = FALSE;
+    if (gtk_layer_is_supported()) {
+      GdkMonitor *target =
+          find_target_monitor(fl_method_call_get_args(method_call));
+      if (target != nullptr) {
+        if (!gtk_layer_is_layer_window(window)) {
+          gtk_layer_init_for_window(window);
+        }
+        if (gtk_layer_get_monitor(window) != target) {
+          gboolean was_mapped = gtk_widget_get_mapped(GTK_WIDGET(window));
+          if (was_mapped) {
+            gtk_widget_hide(GTK_WIDGET(window));
+          }
+          gtk_layer_set_monitor(window, target);
+          if (was_mapped) {
+            gtk_widget_show(GTK_WIDGET(window));
+          }
+        }
+        bound = TRUE;
+      }
+    }
+    g_autoptr(FlValue) result = fl_value_new_bool(bound);
+    g_autoptr(FlMethodResponse) response =
+        FL_METHOD_RESPONSE(fl_method_success_response_new(result));
     fl_method_call_respond(method_call, response, nullptr);
   } else if (strcmp(method, "setNamespace") == 0) {
     FlValue *args = fl_method_call_get_args(method_call);

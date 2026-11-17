@@ -71,11 +71,14 @@ class _DisplayPaneState extends State<DisplayPane> {
       // 2. Reload Sway config so output assignments and workspace bindings take effect immediately
       await Process.run('swaymsg', ['reload']);
 
-      // 3. Restart fyrtaskbar and fyrdock so layer-shell surfaces immediately bind to the new output
+      // 3. Restart fyrtaskbar (bar + desktop layer) and fyrdock so layer-shell
+      // surfaces immediately bind to the new primary output across all monitors
       await Process.run('sh', [
         '-c',
-        'pkill -x fyrtaskbar 2>/dev/null; (/opt/fyrtaskbar/fyrtaskbar >/dev/null 2>&1 &); '
-        'pkill -x fyrdock 2>/dev/null; (/opt/fyrdock/fyrdock >/dev/null 2>&1 &); '
+        'pkill -x fyrtaskbar 2>/dev/null; pkill -x fyrdock 2>/dev/null; sleep 0.2; '
+        '(/opt/fyrtaskbar/fyrtaskbar >/dev/null 2>&1 &); '
+        '(/opt/fyrtaskbar/fyrtaskbar --desktop >/dev/null 2>&1 &); '
+        '(/opt/fyrdock/fyrdock >/dev/null 2>&1 &); '
         'if pgrep -x fyrdesktop >/dev/null 2>&1; then pkill -x fyrdesktop; (/opt/fyrdesktop/fyrdesktop >/dev/null 2>&1 &); fi'
       ]);
     } catch (e) {
