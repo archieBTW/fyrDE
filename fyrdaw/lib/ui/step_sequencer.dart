@@ -3,7 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:fyrdaw/main.dart';
 import 'package:fyrdaw/models/daw_clip.dart';
 import 'package:fyrdaw/models/midi_note.dart';
+import 'package:fyrdaw/models/song_marker.dart';
+import 'package:fyrdaw/models/tempo_marker.dart';
 import 'package:fyrdaw/models/track.dart';
+import 'package:fyrdaw/utils/timeline_grid.dart';
 
 class StepSequencerWidget extends StatefulWidget {
   final Track track;
@@ -14,6 +17,8 @@ class StepSequencerWidget extends StatefulWidget {
   final VoidCallback? onChangeStart;
   final VoidCallback onNotesChanged;
   final VoidCallback? onSwitchToPianoRoll;
+  final List<SongMarker> markers;
+  final List<TempoMarker> tempoMarkers;
 
   const StepSequencerWidget({
     super.key,
@@ -25,6 +30,8 @@ class StepSequencerWidget extends StatefulWidget {
     this.onChangeStart,
     required this.onNotesChanged,
     this.onSwitchToPianoRoll,
+    this.markers = const [],
+    this.tempoMarkers = const [],
   });
 
   @override
@@ -282,6 +289,135 @@ class _StepSequencerWidgetState extends State<StepSequencerWidget> {
               ),
             ],
             ),
+          ),
+        ),
+        Container(
+          height: 22,
+          color: bgDark,
+          child: Builder(
+            builder: (context) {
+              final gridLines = buildTimelineGridLines(
+                clipStart: widget.clip.start,
+                visibleUnits: _stepsCount * _stepWidth,
+                zoomX: 4.0,
+                baseBpm: widget.bpm,
+                baseTimeSigTop: widget.timeSigTop,
+                tempoMarkers: widget.tempoMarkers,
+                subdivisionsPerBeatOverride: 4,
+              );
+              return Row(
+                children: [
+                  Container(
+                    width: 130,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    alignment: Alignment.centerLeft,
+                    decoration: BoxDecoration(
+                      color: panelDark,
+                      border: Border(
+                        right: BorderSide(color: borderMain),
+                        bottom: BorderSide(color: borderMain),
+                      ),
+                    ),
+                    child: Text(
+                      'BAR / MARKERS',
+                      style: TextStyle(
+                        color: textFaint,
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: Row(
+                      children: List.generate(_stepsCount, (step) {
+                        final double worldStepStart =
+                            widget.clip.start + step * _stepWidth;
+                        final double worldStepEnd = worldStepStart + _stepWidth;
+                        TimelineGridLine? matchedBeat;
+                        for (final gl in gridLines) {
+                          if (gl.isBeat &&
+                              (gl.worldPos - worldStepStart).abs() <
+                                  _stepWidth * 0.45) {
+                            matchedBeat = gl;
+                            break;
+                          }
+                        }
+                        SongMarker? matchedMarker;
+                        for (final m in widget.markers) {
+                          if (m.position >= worldStepStart - 1e-6 &&
+                              m.position < worldStepEnd - 1e-6) {
+                            matchedMarker = m;
+                            break;
+                          }
+                        }
+                        final bool isCurrent = step == currentStep;
+                        return Expanded(
+                          child: Container(
+                            alignment: Alignment.centerLeft,
+                            padding: const EdgeInsets.only(left: 3),
+                            decoration: BoxDecoration(
+                              color: isCurrent
+                                  ? Colors.cyanAccent.withValues(alpha: 0.16)
+                                  : panelDark.withValues(alpha: 0.65),
+                              border: Border(
+                                left: BorderSide(
+                                  color: matchedBeat?.isMeasure == true
+                                      ? textMuted
+                                      : (matchedBeat != null
+                                            ? borderMain
+                                            : Colors.transparent),
+                                  width: matchedBeat?.isMeasure == true
+                                      ? 1.5
+                                      : 0.8,
+                                ),
+                                bottom: BorderSide(color: borderMain),
+                              ),
+                            ),
+                            child: matchedMarker != null
+                                ? Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 3,
+                                      vertical: 1,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Color(matchedMarker.colorValue),
+                                      borderRadius: BorderRadius.circular(2),
+                                    ),
+                                    child: Text(
+                                      matchedMarker.label,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        color: Colors.black,
+                                        fontSize: 8,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  )
+                                : (matchedBeat != null
+                                      ? Text(
+                                          matchedBeat.isMeasure
+                                              ? '${matchedBeat.measureNumber}'
+                                              : '${matchedBeat.measureNumber}.${matchedBeat.beatInMeasure + 1}',
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            color: matchedBeat.isMeasure
+                                                ? textMain
+                                                : textFaint,
+                                            fontSize: 9,
+                                            fontWeight: matchedBeat.isMeasure
+                                                ? FontWeight.bold
+                                                : FontWeight.normal,
+                                          ),
+                                        )
+                                      : null),
+                          ),
+                        );
+                      }),
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
         ),
         Expanded(

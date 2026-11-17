@@ -11,6 +11,7 @@ import 'package:fyrdaw/ui/meters.dart';
 import 'package:fyrdaw/ui/parametric_eq_widget.dart';
 import 'package:fyrdaw/ui/tuner_gate_panel.dart';
 import 'package:fyrdaw/utils/audio_input_channel.dart';
+import 'package:fyrdaw/utils/effect_presets.dart';
 import 'package:fyrdaw/utils/pitch_detector.dart';
 
 /// Modular Stompbox Effects Rack view with Audio Input Source / Tuner & Noise Gate,
@@ -813,26 +814,40 @@ class EffectsRackView extends StatelessWidget {
                   PopupMenuButton<String>(
                     tooltip: 'Load Effect Chain Preset',
                     color: panelDark,
+                    constraints: const BoxConstraints(minWidth: 240, maxWidth: 340),
                     onSelected: onApplyPreset,
-                    itemBuilder: (_) => const [
-                      PopupMenuItem(
-                        value: 'Crunch Guitar',
-                        child: Text('Crunch Guitar Rig'),
-                      ),
-                      PopupMenuItem(
-                        value: 'Vocal Polish',
-                        child: Text('Vocal Polish Chain'),
-                      ),
-                      PopupMenuItem(
-                        value: 'Lo-Fi Tape',
-                        child: Text('Lo-Fi Tape Machine'),
-                      ),
-                      PopupMenuItem(
-                        value: 'Wide Ambient',
-                        child: Text('Wide Ambient Space'),
-                      ),
-                      PopupMenuDivider(),
-                      PopupMenuItem(
+                    itemBuilder: (_) => <PopupMenuEntry<String>>[
+                      for (final p in kEffectChainPresets.where(
+                        (e) => !e.isVocal,
+                      ))
+                        PopupMenuItem<String>(
+                          value: p.id,
+                          child: Text(
+                            p.label,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      const PopupMenuDivider(),
+                      for (final p in kEffectChainPresets.where(
+                        (e) => e.isVocal,
+                      ))
+                        PopupMenuItem<String>(
+                          value: p.id,
+                          child: Row(
+                            children: [
+                              Icon(Icons.mic, size: 13, color: lavenderAccent),
+                              const SizedBox(width: 6),
+                              Flexible(
+                                child: Text(
+                                  p.label,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      const PopupMenuDivider(),
+                      const PopupMenuItem<String>(
                         value: 'Clear Chain',
                         child: Text('Clear All Effects'),
                       ),

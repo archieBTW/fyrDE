@@ -47,7 +47,8 @@ class SamplerPad {
         source = path.startsWith('assets/')
             ? await SoLoud.instance.loadAsset(path)
             : await SoLoud.instance.loadFile(path);
-        source!.filters.pitchShiftFilter.activate();
+        // Do NOT pre-activate pitchShiftFilter unconditionally: Signalsmith
+        // Stretch adds ~120ms STFT analysis/synthesis latency even at 1.0x pitch.
       }
     } catch (_) {}
     await extractWaveform();
@@ -89,29 +90,46 @@ class SamplerPad {
 
       if (playLength <= Duration.zero) return;
 
+      final double effPitch =
+          (pitch * (pitchMultiplierOverride ?? 1.0)).clamp(0.1, 4.0);
+      final bool needsPitchShift = (effPitch - 1.0).abs() > 0.005;
+      if (needsPitchShift && !source!.filters.pitchShiftFilter.isActive) {
+        source!.filters.pitchShiftFilter.activate();
+      }
+
+      final double targetVol = volume * (velocity / 127.0) * trackVolume;
+      final double initialVol = fadeIn > 0.0 ? 0.0 : targetVol;
       final handle = bus != null
-          ? bus.play(source!, volume: 0.0, pan: trackPan, paused: true)
+          ? bus.play(source!, volume: initialVol, pan: trackPan, paused: true)
           : SoLoud.instance.play(
               source!,
-              volume: 0.0,
+              volume: initialVol,
               pan: trackPan,
               paused: true,
             );
       currentHandle = handle;
-      SoLoud.instance.seek(handle, startPos);
-      source!.filters.pitchShiftFilter.shift(soundHandle: handle).value =
-          (pitch * (pitchMultiplierOverride ?? 1.0)).clamp(0.1, 4.0);
+      if (trimStart > 0.0005 && startPos > Duration.zero) {
+        SoLoud.instance.seek(handle, startPos);
+      }
+      if (source!.filters.pitchShiftFilter.isActive) {
+        if (needsPitchShift) {
+          source!.filters.pitchShiftFilter.wet(soundHandle: handle).value = 1.0;
+          source!.filters.pitchShiftFilter
+              .shift(soundHandle: handle)
+              .value = effPitch;
+        } else {
+          // Dry bypass avoids ~120ms STFT lookahead delay on un-pitched hits.
+          source!.filters.pitchShiftFilter.wet(soundHandle: handle).value = 0.0;
+        }
+      }
       SoLoud.instance.setPause(handle, false);
 
-      double targetVol = volume * (velocity / 127.0) * trackVolume;
       if (fadeIn > 0.0) {
         SoLoud.instance.fadeVolume(
           handle,
           targetVol,
           Duration(milliseconds: (fadeIn * 1000).toInt()),
         );
-      } else {
-        SoLoud.instance.setVolume(handle, targetVol);
       }
 
       if (fadeOut > 0.0) {

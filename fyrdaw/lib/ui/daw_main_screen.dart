@@ -952,15 +952,18 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       final scaled = m.mapMidiValue(value);
       setState(() {
         if (m.trackId == '__master__' && m.param == 'volume') {
-          masterVolume = scaled.clamp(0.0, 1.0);
+          masterVolume = (scaled * kMaxMasterVolume).clamp(0.0, kMaxMasterVolume);
           _syncMasterAndAuxFilters();
           return;
         }
         final track = tracks.where((t) => t.id == m.trackId).firstOrNull;
         if (track == null) return;
         if (m.param == 'volume') {
-          track.volume = scaled.clamp(0.0, 1.0);
-          _syncTrackMonitoringHandles();
+          _onTrackVolumeChanged(
+            track,
+            (scaled * kMaxTrackVolume).clamp(0.0, kMaxTrackVolume),
+            updateState: false,
+          );
         } else if (m.param == 'pan') {
           track.pan = (scaled * 2.0 - 1.0).clamp(-1.0, 1.0);
         } else if (m.param == 'reverbSend') {
@@ -1109,6 +1112,36 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     }
   }
 
+  Future<String?> _pickExportSavePath(String format) async {
+    final defaultName = 'mixdown.$format';
+    if (Platform.isLinux) {
+      try {
+        final docsDir = await getApplicationDocumentsDirectory();
+        final suggested = '${docsDir.path}/$defaultName';
+        final result = await Process.run('zenity', [
+          '--file-selection',
+          '--save',
+          '--confirm-overwrite',
+          '--title=Export Mixdown (.${format.toUpperCase()})',
+          '--filename=$suggested',
+          '--file-filter=*.$format',
+        ]);
+        if (result.exitCode != 0) return null;
+        final chosen = result.stdout.toString().trim();
+        if (chosen.isEmpty) return null;
+        return MixdownRenderer.normalizeExportPath(chosen, format);
+      } catch (_) {}
+    }
+    final picked = await FilePicker.saveFile(
+      dialogTitle: 'Export Mixdown (.${format.toUpperCase()})',
+      fileName: defaultName,
+      type: FileType.custom,
+      allowedExtensions: [format],
+    );
+    if (picked == null || picked.trim().isEmpty) return null;
+    return MixdownRenderer.normalizeExportPath(picked, format);
+  }
+
   Future<void> _exportAudio() async {
     String? format = await showDialog<String>(
       context: context,
@@ -1146,9 +1179,15 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     if (format == null) return;
 
     try {
-      final dir = await getApplicationDocumentsDirectory();
+      final String? finalPath = await _pickExportSavePath(format);
+      if (finalPath == null) return;
+
       final ts = DateTime.now().millisecondsSinceEpoch;
-      final wavPath = '${dir.path}/mixdown_$ts.wav';
+      final bool needsTranscode = format == 'mp3' || format == 'flac';
+      final String wavPath = needsTranscode
+          ? '${Directory.systemTemp.path}/fyrdaw_mixdown_$ts.wav'
+          : finalPath;
+
       final ok = await MixdownRenderer.renderToWav(
         tracks: tracks,
         trackClips: trackClips,
@@ -1165,6 +1204,11 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         tempoMarkers: tempoMarkers,
       );
       if (!ok) {
+        try {
+          if (needsTranscode && File(wavPath).existsSync()) {
+            File(wavPath).deleteSync();
+          }
+        } catch (_) {}
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('Nothing to export — add audio or MIDI clips first!')),
@@ -1173,18 +1217,29 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         return;
       }
 
-      String finalPath = wavPath;
-      if (format == 'mp3' || format == 'flac') {
-        final target = '${dir.path}/mixdown_$ts.$format';
-        final args = format == 'mp3'
-            ? ['-y', '-i', wavPath, '-b:a', '320k', target]
-            : ['-y', '-i', wavPath, target];
-        final res = await Process.run('ffmpeg', args);
-        if (res.exitCode == 0 && File(target).existsSync()) {
-          finalPath = target;
-          try {
+      if (needsTranscode) {
+        final transcodeRes = await MixdownRenderer.transcodeWithFfmpegDetailed(
+          wavPath,
+          finalPath,
+          format: format,
+        );
+        try {
+          if (File(wavPath).existsSync()) {
             File(wavPath).deleteSync();
-          } catch (_) {}
+          }
+        } catch (_) {}
+        if (!transcodeRes.ok) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  '${format.toUpperCase()} export failed: ${transcodeRes.error ?? 'ffmpeg unavailable'}',
+                ),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+          return;
         }
       }
 
@@ -1816,7 +1871,6 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     if (SoLoud.instance.isInitialized) {
       try {
         sharedSrc = await SoLoud.instance.loadFile(clip.filePath);
-        sharedSrc.filters.pitchShiftFilter.activate();
       } catch (_) {}
     }
 
@@ -2701,8 +2755,17 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
             (activeAudio || busHasActiveVoices(t.bus))) {
           try {
             enableBusVisualization(t.bus!);
-            rawL = t.bus!.getChannelVolume(0);
-            rawR = t.bus!.getChannelVolume(1);
+            final double postScale = t.type == TrackType.audio
+                ? _effectiveTrackVolume(
+                    t,
+                    sidechainGain: (1.0 - (_sidechainGr[t.id] ?? 0.0)).clamp(
+                      0.08,
+                      1.0,
+                    ),
+                  )
+                : 1.0;
+            rawL = t.bus!.getChannelVolume(0) * postScale;
+            rawR = t.bus!.getChannelVolume(1) * postScale;
           } catch (_) {}
         }
         rawTrackAmps[t.id] = (rawL, rawR);
@@ -2853,27 +2916,18 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         _sidechainGr[track.id] = smoothedGr;
 
         final scGain = (1.0 - smoothedGr).clamp(0.08, 1.0);
-        for (final c in trackClips[track.id] ?? const <DawClip>[]) {
-          if (c is AudioClip &&
-              c.currentHandle != null &&
-              SoLoud.instance.getIsValidVoiceHandle(c.currentHandle!)) {
-            final baseEnv = _computeClipEnvelope(c, playheadPosition);
-            try {
-              SoLoud.instance.setVolume(
-                c.currentHandle!,
-                (track.volume * baseEnv * scGain).clamp(0.0, 2.5),
-              );
-            } catch (_) {}
-          }
-        }
-        for (final h in track.activeMidiHandles) {
-          if (SoLoud.instance.getIsValidVoiceHandle(h)) {
-            try {
-              SoLoud.instance.setVolume(
-                h,
-                (track.volume * scGain).clamp(0.0, 1.5),
-              );
-            } catch (_) {}
+        if (track.type == TrackType.audio) {
+          _syncTrackBusOutputVolume(track);
+        } else {
+          for (final h in track.activeMidiHandles) {
+            if (SoLoud.instance.getIsValidVoiceHandle(h)) {
+              try {
+                SoLoud.instance.setVolume(
+                  h,
+                  (track.volume * scGain).clamp(0.0, 4.0),
+                );
+              } catch (_) {}
+            }
           }
         }
       }
@@ -2899,9 +2953,103 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         .firstOrNull;
   }
 
-  double _effectiveTrackVolume(Track t) {
+  double _effectiveTrackVolume(Track t, {double sidechainGain = 1.0}) {
     final g = _groupForTrack(t);
-    return (t.volume * (g?.volume ?? 1.0)).clamp(0.0, 1.5);
+    return (t.volume * (g?.volume ?? 1.0) * sidechainGain).clamp(0.0, 4.0);
+  }
+
+  /// Applies post-FX fader & group gain directly to [t]'s audio [Bus] output
+  /// handle so effects like Overdrive/GuitarAmp/Compressor cannot clamp away
+  /// track fader boosts.
+  void _syncTrackBusOutputVolume(Track t) {
+    if (!_isSoloudReady || t.type != TrackType.audio || t.bus == null) return;
+    t.bus = ensureActiveBus(t.bus);
+    final handle = t.bus!.soundHandle;
+    if (handle == null) return;
+    final bool anySolo = tracks.any((tr) => tr.isSolo);
+    final bool audible = _isTrackAudible(t, anySolo);
+    final double scGain =
+        (1.0 - (_sidechainGr[t.id] ?? 0.0)).clamp(0.08, 1.0);
+    final double busVol = audible
+        ? _effectiveTrackVolume(t, sidechainGain: scGain)
+        : 0.0;
+    try {
+      if (SoLoud.instance.getIsValidVoiceHandle(handle)) {
+        SoLoud.instance.setVolume(handle, busVol);
+      }
+    } catch (_) {}
+  }
+
+  void _onTrackVolumeChanged(
+    Track t,
+    double nextVolume, {
+    bool updateState = true,
+  }) {
+    final double clamped = nextVolume.clamp(0.0, kMaxTrackVolume);
+    if (updateState) {
+      setState(() => t.volume = clamped);
+    } else {
+      t.volume = clamped;
+    }
+
+    if (t.type == TrackType.group) {
+      for (final child in tracks) {
+        if (child.groupTrackId == t.id) {
+          _syncTrackBusOutputVolume(child);
+        }
+      }
+    } else {
+      _syncTrackBusOutputVolume(t);
+    }
+
+    if (_isSoloudReady) {
+      final double effTrackVol = _effectiveTrackVolume(t);
+      for (final c in trackClips[t.id] ?? const <DawClip>[]) {
+        if (c is AudioClip) {
+          final double env = _computeClipEnvelope(
+            c,
+            playheadPosition,
+            track: t,
+          );
+          if (c.currentHandle != null) {
+            try {
+              final double voiceVol = t.type == TrackType.audio
+                  ? env.clamp(0.0, 2.5)
+                  : (effTrackVol * env).clamp(0.0, 4.0);
+              SoLoud.instance.setVolume(c.currentHandle!, voiceVol);
+            } catch (_) {}
+          }
+          if (c.reverbSendHandle != null) {
+            try {
+              SoLoud.instance.setVolume(
+                c.reverbSendHandle!,
+                ((t.reverbPreFader ? env : effTrackVol * env) * t.reverbSend)
+                    .clamp(0.0, 4.0),
+              );
+            } catch (_) {}
+          }
+          if (c.delaySendHandle != null) {
+            try {
+              SoLoud.instance.setVolume(
+                c.delaySendHandle!,
+                ((t.delayPreFader ? env : effTrackVol * env) * t.delaySend)
+                    .clamp(0.0, 4.0),
+              );
+            } catch (_) {}
+          }
+        }
+      }
+      if (t.type != TrackType.audio) {
+        for (final h in t.activeMidiHandles) {
+          try {
+            if (SoLoud.instance.getIsValidVoiceHandle(h)) {
+              SoLoud.instance.setVolume(h, clamped.clamp(0.0, 4.0));
+            }
+          } catch (_) {}
+        }
+      }
+    }
+    _syncTrackMonitoringHandles();
   }
 
   bool _isTrackAudible(Track t, bool anySolo) {
@@ -2988,7 +3136,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   void _syncMasterAndAuxFilters() {
     if (!_isSoloudReady) return;
     try {
-      SoLoud.instance.setGlobalVolume(masterVolume.clamp(0.0, 1.5));
+      SoLoud.instance.setGlobalVolume(masterVolume.clamp(0.0, kMaxMasterVolume));
       final filters = SoLoud.instance.filters;
       final lim = filters.limiterFilter;
       final activeMasterFx =
@@ -3749,13 +3897,17 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   void _playAudioClipWithSends(Track track, AudioClip clip, double atPlayhead) {
     if (clip.source == null || !SoLoud.instance.isInitialized) return;
     track.bus = ensureActiveBus(track.bus);
+    _syncTrackBusOutputVolume(track);
     final env = _computeClipEnvelope(clip, atPlayhead, track: track);
     final trackEffVol = _effectiveTrackVolume(track);
-    final effVol = (trackEffVol * env).clamp(0.0, 2.5);
+    final effVol = (trackEffVol * env).clamp(0.0, 4.0);
+    final double dryVoiceVol = track.type == TrackType.audio
+        ? env.clamp(0.0, 2.5)
+        : effVol;
     final revVol = ((track.reverbPreFader ? env : effVol) * track.reverbSend)
-        .clamp(0.0, 2.5);
+        .clamp(0.0, 4.0);
     final dlyVol = ((track.delayPreFader ? env : effVol) * track.delaySend)
-        .clamp(0.0, 2.5);
+        .clamp(0.0, 4.0);
     final bool usingCachedWsola =
         clip.preservePitch && clip.processedFilePath != null;
     final speed = usingCachedWsola
@@ -3771,7 +3923,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       clip.source!,
       volume: (_isAuditioningReference || auxReverbSolo || auxDelaySolo)
           ? 0.0
-          : effVol,
+          : dryVoiceVol,
       pan: track.pan.clamp(-1.0, 1.0),
       paused: true,
       looping: clip.isLooped,
@@ -3891,7 +4043,140 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     }
   }
 
-  void _triggerVoicesAtPosition(double pos) {
+  void _triggerMetronomeInWindow(
+    double fromPos,
+    double toPos, {
+    bool includeStart = false,
+  }) {
+    if (!isMetronomeEnabled || !_isSoloudReady || _countInBeatsLeft != 0) {
+      return;
+    }
+    final events = collectMetronomeBeatsInWindow(
+      fromPos,
+      toPos,
+      baseBpm: bpm,
+      baseTimeSigTop: timeSigTop,
+      tempoMarkers: tempoMarkers,
+      includeStart: includeStart,
+    );
+    for (final ev in events) {
+      _playMetronomeClick(ev.isDownbeat);
+    }
+  }
+
+  void _triggerTrackNotesInWindow(
+    Track track,
+    double fromPos,
+    double toPos, {
+    bool includeStart = false,
+  }) {
+    if (!_isSoloudReady) return;
+    for (var clip in trackClips[track.id] ?? []) {
+      if (clip is! MidiClip) continue;
+      final double localOld = fromPos - clip.start + clip.startOffset;
+      double localNew = toPos - clip.start + clip.startOffset;
+      final double maxLocal = clip.startOffset + clip.length;
+      if (localNew > maxLocal) localNew = maxLocal;
+      if (localNew < clip.startOffset || localOld > maxLocal) continue;
+
+      final playNotes = (track.type == TrackType.midi &&
+              track.arpSettings.enabled)
+          ? track.arpSettings.expandNotes(clip.notes, beatWidth)
+          : clip.notes;
+      for (final note in playNotes) {
+        if (note.start < clip.startOffset || note.start >= maxLocal) continue;
+        if (!shouldTriggerMidiNoteInWindow(
+          noteStart: note.start,
+          windowStart: localOld,
+          windowEnd: localNew,
+          includeStart: includeStart,
+        )) {
+          continue;
+        }
+        if (track.type == TrackType.sampler) {
+          final pad = track.samplerPads.values
+              .where((p) => p.midiNote == note.pitch)
+              .firstOrNull;
+          if (pad != null) {
+            pad.play(
+              note.velocity.toDouble(),
+              track.bus,
+              track.volume,
+              track.pan,
+              track.samplerPads.values,
+            );
+            if (track.reverbSend > 0.01 && auxReverbBus != null) {
+              pad.play(
+                note.velocity.toDouble(),
+                auxReverbBus,
+                track.volume * track.reverbSend,
+                track.pan,
+              );
+            }
+            if (track.delaySend > 0.01 && auxDelayBus != null) {
+              pad.play(
+                note.velocity.toDouble(),
+                auxDelayBus,
+                track.volume * track.delaySend,
+                track.pan,
+              );
+            }
+          }
+        } else {
+          track.activeMidiHandles.removeWhere(
+            (h) => !SoLoud.instance.getIsValidVoiceHandle(h),
+          );
+          final preset = getInstrumentPreset(track.instrumentIndex);
+          final handle = triggerInstrumentNote(
+            track,
+            note.pitch,
+            note.velocity,
+          );
+          SoundHandle? revHandle;
+          SoundHandle? dlyHandle;
+          if (track.reverbSend > 0.01 && auxReverbBus != null) {
+            revHandle = triggerInstrumentNote(
+              track,
+              note.pitch,
+              note.velocity,
+              volumeScale: track.reverbSend,
+              targetBus: auxReverbBus,
+            );
+          }
+          if (track.delaySend > 0.01 && auxDelayBus != null) {
+            dlyHandle = triggerInstrumentNote(
+              track,
+              note.pitch,
+              note.velocity,
+              volumeScale: track.delaySend,
+              targetBus: auxDelayBus,
+            );
+          }
+          if (handle != null) {
+            track.activeMidiHandles.add(handle);
+            final int noteMs = max(
+              (note.length / beatWidth * (60.0 / bpm) * 1000).round(),
+              50,
+            );
+            Timer(Duration(milliseconds: noteMs), () {
+              releaseInstrumentNote(handle, releaseMs: preset.releaseMs);
+              if (revHandle != null) {
+                releaseInstrumentNote(revHandle, releaseMs: preset.releaseMs);
+              }
+              if (dlyHandle != null) {
+                releaseInstrumentNote(dlyHandle, releaseMs: preset.releaseMs);
+              }
+            });
+          }
+        }
+      }
+    }
+  }
+
+  void _triggerVoicesAtPosition(
+    double pos, {
+    double? windowEnd,
+  }) {
     if (_isAuditioningReference && _referenceSource != null && _isSoloudReady) {
       try {
         _referenceHandle = SoLoud.instance.play(
@@ -3907,6 +4192,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       } catch (_) {}
     }
 
+    final double endPos = windowEnd ?? pos;
     final bool anySolo = tracks.any((t) => t.isSolo);
     for (final track in tracks) {
       if (track.type == TrackType.group) continue;
@@ -3923,6 +4209,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           }
         }
       }
+      _triggerTrackNotesInWindow(track, pos, endPos, includeStart: true);
     }
   }
 
@@ -3947,6 +4234,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         _lastStopwatchMicros = 0;
         if (retriggerAudio) {
           _triggerVoicesAtPosition(pos);
+          _triggerMetronomeInWindow(pos, pos, includeStart: true);
         }
       }
     });
@@ -3969,30 +4257,18 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
       isPlaying = !isPlaying;
       if (isPlaying) {
         _triggerVoicesAtPosition(playheadPosition);
-
-        // Fire Beat 1 metronome click immediately when starting on a beat boundary
-        if (isMetronomeEnabled && _isSoloudReady && _countInBeatsLeft == 0) {
-          final double bw = max(1.0, beatWidth);
-          final double rem = playheadPosition % bw;
-          if (rem < 1.0 || (bw - rem) < 1.0) {
-            final curMeter = TempoMarker.effectiveMeterAt(
-              playheadPosition,
-              tempoMarkers,
-              timeSigTop,
-              timeSigBottom,
-            );
-            final int beatIdx = (playheadPosition / bw).round();
-            final bool isDownbeat = beatIdx % max(1, curMeter.numerator) == 0;
-            _playMetronomeClick(isDownbeat);
-          }
-        }
+        _triggerMetronomeInWindow(
+          playheadPosition,
+          playheadPosition,
+          includeStart: true,
+        );
 
         _playStopwatch
           ..reset()
           ..start();
         _lastStopwatchMicros = 0;
 
-        playTimer = Timer.periodic(const Duration(milliseconds: 10), (timer) {
+        playTimer = Timer.periodic(const Duration(milliseconds: 5), (timer) {
           final int nowMicros = _playStopwatch.elapsedMicroseconds;
           final double dtSec = (nowMicros - _lastStopwatchMicros) / 1000000.0;
           _lastStopwatchMicros = nowMicros;
@@ -4005,13 +4281,18 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
               tempoMarkers,
               bpm.toDouble(),
             );
-            playheadPosition += dtSec * 100.0 * (curBpm / max(20, bpm));
+            final double rawNextPos =
+                oldPos + dtSec * 100.0 * (curBpm / max(20, bpm));
+            final bool willWrap = isLooping && rawNextPos >= loopEnd;
+            playheadPosition = willWrap
+                ? max(oldPos, loopEnd - 1e-4)
+                : rawNextPos;
 
             // Punch-in / Punch-out auto stop when leaving loopEnd
             if (isRecording &&
                 punchInLoop &&
                 isLooping &&
-                playheadPosition >= loopEnd) {
+                rawNextPos >= loopEnd) {
               Future.microtask(() {
                 if (isRecording) _toggleRecord();
               });
@@ -4023,14 +4304,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
               timeSigTop,
               timeSigBottom,
             );
-            if (isMetronomeEnabled && _isSoloudReady) {
-              int oldBeat = (oldPos / beatWidth).floor();
-              int newBeat = (playheadPosition / beatWidth).floor();
-              if (newBeat > oldBeat) {
-                bool isDownbeat = newBeat % max(1, curMeter.numerator) == 0;
-                _playMetronomeClick(isDownbeat);
-              }
-            }
+            _triggerMetronomeInWindow(oldPos, playheadPosition);
 
             // Quantized next-bar Session Launcher clip promotions
             final double barLen = beatWidth * max(1, curMeter.numerator);
@@ -4089,24 +4363,29 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                 track.delaySend = autoDlySend.clamp(0.0, 1.0);
               }
 
-              // Keep audio clip fade/gain/automation envelopes live
+              // Keep audio clip fade/gain/automation envelopes & post-FX bus fader live
+              if (track.type == TrackType.audio) {
+                _syncTrackBusOutputVolume(track);
+              }
               for (var c in trackClips[track.id] ?? []) {
                 if (c is AudioClip &&
                     c.currentHandle != null &&
                     SoLoud.instance.getIsValidVoiceHandle(c.currentHandle!)) {
                   final env = _computeClipEnvelope(c, playheadPosition, track: track);
                   final trackEffVol = _effectiveTrackVolume(track);
-                  final effVol = (trackEffVol * env).clamp(0.0, 2.5);
+                  final effVol = (trackEffVol * env).clamp(0.0, 4.0);
                   final dryPlayVol =
                       (_isAuditioningReference || auxReverbSolo || auxDelaySolo)
                           ? 0.0
-                          : effVol;
+                          : (track.type == TrackType.audio
+                                ? env.clamp(0.0, 2.5)
+                                : effVol);
                   final revVol =
                       ((track.reverbPreFader ? env : effVol) * track.reverbSend)
-                          .clamp(0.0, 2.5);
+                          .clamp(0.0, 4.0);
                   final dlyVol =
                       ((track.delayPreFader ? env : effVol) * track.delaySend)
-                          .clamp(0.0, 2.5);
+                          .clamp(0.0, 4.0);
                   try {
                     SoLoud.instance.setVolume(c.currentHandle!, dryPlayVol);
                     SoLoud.instance.setPan(
@@ -4147,14 +4426,14 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
               }
 
               for (var clip in trackClips[track.id] ?? []) {
-                if (clip.start + clip.length >= oldPos &&
-                    clip.start + clip.length < playheadPosition) {
+                if (clip.start + clip.length > oldPos &&
+                    clip.start + clip.length <= playheadPosition) {
                   if (clip is AudioClip) {
                     _stopAudioClipHandles(clip);
                   }
                 }
 
-                if (clip.start >= oldPos && clip.start < playheadPosition) {
+                if (clip.start > oldPos && clip.start <= playheadPosition) {
                   if (clip is AudioClip && clip.source != null) {
                     if (clip.currentHandle == null ||
                         !SoLoud.instance.getIsValidVoiceHandle(
@@ -4164,121 +4443,22 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                     }
                   }
                 }
-
-                if (clip is MidiClip && _isSoloudReady) {
-                  double localOld = oldPos - clip.start + clip.startOffset;
-                  double localNew =
-                      playheadPosition - clip.start + clip.startOffset;
-                  double maxLocal = clip.startOffset + clip.length;
-                  if (localNew > maxLocal) localNew = maxLocal;
-                  if (localNew >= 0 && localOld <= maxLocal) {
-                    final playNotes = (track.type == TrackType.midi &&
-                            track.arpSettings.enabled)
-                        ? track.arpSettings.expandNotes(clip.notes, beatWidth)
-                        : clip.notes;
-                    for (var note in playNotes) {
-                      if (note.start >= localOld && note.start < localNew) {
-                        if (track.type == TrackType.sampler) {
-                          var pad = track.samplerPads.values
-                              .where((p) => p.midiNote == note.pitch)
-                              .firstOrNull;
-                          if (pad != null) {
-                            pad.play(
-                              note.velocity.toDouble(),
-                              track.bus,
-                              track.volume,
-                              track.pan,
-                              track.samplerPads.values,
-                            );
-                            if (track.reverbSend > 0.01 &&
-                                auxReverbBus != null) {
-                              pad.play(
-                                note.velocity.toDouble(),
-                                auxReverbBus,
-                                track.volume * track.reverbSend,
-                                track.pan,
-                              );
-                            }
-                            if (track.delaySend > 0.01 &&
-                                auxDelayBus != null) {
-                              pad.play(
-                                note.velocity.toDouble(),
-                                auxDelayBus,
-                                track.volume * track.delaySend,
-                                track.pan,
-                              );
-                            }
-                          }
-                        } else {
-                          track.activeMidiHandles.removeWhere(
-                            (h) => !SoLoud.instance.getIsValidVoiceHandle(h),
-                          );
-                          final preset = getInstrumentPreset(
-                            track.instrumentIndex,
-                          );
-                          final handle = triggerInstrumentNote(
-                            track,
-                            note.pitch,
-                            note.velocity,
-                          );
-                          SoundHandle? revHandle;
-                          SoundHandle? dlyHandle;
-                          if (track.reverbSend > 0.01 &&
-                              auxReverbBus != null) {
-                            revHandle = triggerInstrumentNote(
-                              track,
-                              note.pitch,
-                              note.velocity,
-                              volumeScale: track.reverbSend,
-                              targetBus: auxReverbBus,
-                            );
-                          }
-                          if (track.delaySend > 0.01 && auxDelayBus != null) {
-                            dlyHandle = triggerInstrumentNote(
-                              track,
-                              note.pitch,
-                              note.velocity,
-                              volumeScale: track.delaySend,
-                              targetBus: auxDelayBus,
-                            );
-                          }
-                          if (handle != null) {
-                            track.activeMidiHandles.add(handle);
-                            final int noteMs = max(
-                              (note.length / beatWidth * (60.0 / bpm) * 1000)
-                                  .round(),
-                              50,
-                            );
-                            Timer(Duration(milliseconds: noteMs), () {
-                              releaseInstrumentNote(
-                                handle,
-                                releaseMs: preset.releaseMs,
-                              );
-                              if (revHandle != null) {
-                                releaseInstrumentNote(
-                                  revHandle,
-                                  releaseMs: preset.releaseMs,
-                                );
-                              }
-                              if (dlyHandle != null) {
-                                releaseInstrumentNote(
-                                  dlyHandle,
-                                  releaseMs: preset.releaseMs,
-                                );
-                              }
-                            });
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
               }
+              _triggerTrackNotesInWindow(track, oldPos, playheadPosition);
             }
-            if (isLooping && playheadPosition >= loopEnd) {
+            if (willWrap) {
+              final double loopSpan = max(0.0, loopEnd - loopStart);
+              final double overshoot = loopSpan > 0
+                  ? (rawNextPos - loopEnd).clamp(0.0, loopSpan * 0.5)
+                  : 0.0;
               _stopAllActivePlaybackVoices();
-              playheadPosition = loopStart;
-              _triggerVoicesAtPosition(loopStart);
+              playheadPosition = loopStart + overshoot;
+              _triggerVoicesAtPosition(loopStart, windowEnd: playheadPosition);
+              _triggerMetronomeInWindow(
+                loopStart,
+                playheadPosition,
+                includeStart: true,
+              );
             }
 
             if (autoScrollPlayhead && _horizontalScrollController.hasClients) {
@@ -4317,6 +4497,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     final bool anySolo = tracks.any((t) => t.isSolo);
     for (final t in tracks) {
       if (t.type != TrackType.audio) continue;
+      _syncTrackBusOutputVolume(t);
       if (t.isMonitoring) {
         t.bus = ensureActiveBus(t.bus);
         if (t.monitorSource == null) {
@@ -4335,8 +4516,9 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           }
         }
         if (t.monitorSource != null) {
+          _syncTrackBusOutputVolume(t);
           final double effVol =
-              (t.isMuted || (anySolo && !t.isSolo)) ? 0.0 : t.volume;
+              (t.isMuted || (anySolo && !t.isSolo)) ? 0.0 : 1.0;
           if (t.monitorHandle == null ||
               !SoLoud.instance.getIsValidVoiceHandle(t.monitorHandle!)) {
             try {
@@ -4528,10 +4710,11 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         }
 
         final double effVol =
-            (t.isMuted || (anySolo && !t.isSolo)) ? 0.0 : t.volume;
+            (t.isMuted || (anySolo && !t.isSolo)) ? 0.0 : 1.0;
         if (t.monitorHandle == null ||
             !SoLoud.instance.getIsValidVoiceHandle(t.monitorHandle!)) {
           t.bus = ensureActiveBus(t.bus);
+          _syncTrackBusOutputVolume(t);
           t.monitorHandle = t.bus!.play(
             src,
             volume: effVol,
@@ -7083,24 +7266,24 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                                           overlayShape:
                                               SliderComponentShape.noOverlay,
                                         ),
-                                        child: Slider(
-                                          onChangeStart: (_) => _saveState(),
-                                          value: track.volume,
-                                          activeColor: lavenderAccent,
-                                          onChanged: (v) => setState(() {
-                                            track.volume = v;
-                                            for (var c
-                                                in trackClips[track.id] ?? []) {
-                                              if (c is AudioClip &&
-                                                  c.currentHandle != null) {
-                                                SoLoud.instance.setVolume(
-                                                  c.currentHandle!,
-                                                  v,
-                                                );
-                                              }
-                                            }
-                                            _syncTrackMonitoringHandles();
-                                          }),
+                                        child: Tooltip(
+                                          message:
+                                              'Track Volume: ${(track.volume * 100).round()}%',
+                                          child: Slider(
+                                            key: Key(
+                                              'track_volume_slider_${track.id}',
+                                            ),
+                                            onChangeStart: (_) => _saveState(),
+                                            min: 0.0,
+                                            max: kMaxTrackVolume,
+                                            value: track.volume.clamp(
+                                              0.0,
+                                              kMaxTrackVolume,
+                                            ),
+                                            activeColor: lavenderAccent,
+                                            onChanged: (v) =>
+                                                _onTrackVolumeChanged(track, v),
+                                          ),
                                         ),
                                       ),
                                     ),
@@ -9119,38 +9302,11 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
   }
 
   void _applyEffectChainPreset(Track track, String presetName) {
+    final chain = buildEffectChainForPreset(presetName);
+    if (chain == null) return;
     _saveState();
     setState(() {
-      if (presetName == 'Clear Chain') {
-        track.effectsChain.clear();
-      } else if (presetName == 'Crunch Guitar') {
-        track.effectsChain = [
-          DawEffect('EQ', {'Low': 0.45, 'Mid': 0.65, 'High': 0.60}),
-          DawEffect('Overdrive', {
-            'Drive': 0.62,
-            'Tone': 0.55,
-            'Level': 0.70,
-          }),
-          DawEffect('GuitarAmp', {'Gain': 0.65, 'Reverb': 0.35}),
-        ];
-      } else if (presetName == 'Vocal Polish') {
-        track.effectsChain = [
-          DawEffect('EQ', {'Low': 0.35, 'Mid': 0.55, 'High': 0.72}),
-          DawEffect('Compressor', {'Thresh': 0.45, 'Ratio': 0.55}),
-          DawEffect('Reverb', {'Mix': 0.25, 'Size': 0.55}),
-        ];
-      } else if (presetName == 'Lo-Fi Tape') {
-        track.effectsChain = [
-          DawEffect('EQ', {'Low': 0.55, 'Mid': 0.60, 'High': 0.25}),
-          DawEffect('Echo', {'Mix': 0.25, 'Delay': 0.35, 'Decay': 0.40}),
-          DawEffect('Compressor', {'Thresh': 0.35, 'Ratio': 0.70}),
-        ];
-      } else if (presetName == 'Wide Ambient') {
-        track.effectsChain = [
-          DawEffect('Reverb', {'Mix': 0.65, 'Size': 0.85}),
-          DawEffect('Echo', {'Mix': 0.45, 'Delay': 0.50, 'Decay': 0.65}),
-        ];
-      }
+      track.effectsChain = chain;
     });
     if (_isMasterFxSelected) {
       masterEffectsChain = track.effectsChain;
@@ -9223,10 +9379,17 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                   if (t != null) _updateTrackFilters(t);
                   setState(() {});
                 },
-                onZoomIn: () => setState(() => _midiZoomMultiplier += 0.2),
+                onZoomIn: () => setState(
+                  () => _midiZoomMultiplier = min(
+                    16.0,
+                    _midiZoomMultiplier * 1.35,
+                  ),
+                ),
                 onZoomOut: () => setState(
-                  () =>
-                      _midiZoomMultiplier = max(0.2, _midiZoomMultiplier - 0.2),
+                  () => _midiZoomMultiplier = max(
+                    0.2,
+                    _midiZoomMultiplier / 1.35,
+                  ),
                 ),
                 playheadPosition: playheadPosition,
                 onPlayheadChanged: (v) => _seekPlayhead(v),
@@ -9237,6 +9400,8 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                 onMidiInputDialogRequested: () => _showMidiInputDialog(t!),
                 onImportMidi: () => _importMidiFile(targetTrack: t),
                 onExportMidi: _exportSelectedMidiClip,
+                markers: songMarkers,
+                tempoMarkers: tempoMarkers,
               );
             },
           );
@@ -9274,24 +9439,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           midiLearnActive: _midiLearnActive,
           midiLearnTarget: _midiLearnTarget,
           onSaveState: _saveState,
-          onTrackVolumeChanged: (t, v) {
-            setState(() => t.volume = v);
-            if (_isSoloudReady) {
-              for (final c in trackClips[t.id] ?? []) {
-                if (c is AudioClip && c.currentHandle != null) {
-                  try {
-                    SoLoud.instance.setVolume(
-                      c.currentHandle!,
-                      (_effectiveTrackVolume(t) *
-                              _computeClipEnvelope(c, playheadPosition, track: t))
-                          .clamp(0.0, 2.5),
-                    );
-                  } catch (_) {}
-                }
-              }
-            }
-            _syncTrackMonitoringHandles();
-          },
+          onTrackVolumeChanged: (t, v) => _onTrackVolumeChanged(t, v),
           onTrackPanChanged: (t, v) {
             setState(() => t.pan = v);
             if (_isSoloudReady) {
@@ -9581,15 +9729,20 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
             if (_isSoloudReady && activeAudioClip.currentHandle != null) {
               try {
                 final tr = audioOwnerTrack;
-                final vol = tr != null
-                    ? (_effectiveTrackVolume(tr) *
-                            _computeClipEnvelope(
-                              activeAudioClip,
-                              playheadPosition,
-                              track: tr,
-                            ))
-                        .clamp(0.0, 2.5)
-                    : activeAudioClip.gain.clamp(0.0, 2.5);
+                if (tr != null) {
+                  _syncTrackBusOutputVolume(tr);
+                }
+                final env = tr != null
+                    ? _computeClipEnvelope(
+                        activeAudioClip,
+                        playheadPosition,
+                        track: tr,
+                      )
+                    : activeAudioClip.gain;
+                final vol = (tr != null && tr.type != TrackType.audio
+                        ? (_effectiveTrackVolume(tr) * env)
+                        : env)
+                    .clamp(0.0, 4.0);
                 SoLoud.instance.setVolume(activeAudioClip.currentHandle!, vol);
               } catch (_) {}
             }

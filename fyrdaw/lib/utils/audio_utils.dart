@@ -246,6 +246,9 @@ DecodedWav? decodeWavBytes(Uint8List bytes) {
     if (audioFormat == 3 && bitsPerSample == 32 && bytePos + 4 <= bytes.length) {
       return bd.getFloat32(bytePos, Endian.little).toDouble();
     }
+    if (bitsPerSample == 32 && bytePos + 4 <= bytes.length) {
+      return bd.getInt32(bytePos, Endian.little) / 2147483648.0;
+    }
     if (bitsPerSample == 16 && bytePos + 2 <= bytes.length) {
       return bd.getInt16(bytePos, Endian.little) / 32768.0;
     }

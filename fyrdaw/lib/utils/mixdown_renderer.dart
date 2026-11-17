@@ -100,6 +100,9 @@ class MixdownRenderer {
         } catch (_) {}
       } else {
         decoded = await decodeWavFile(pathOrAsset);
+        if (decoded == null && File(pathOrAsset).existsSync()) {
+          decoded = await decodeAudioFileWithFfmpeg(pathOrAsset);
+        }
       }
       wavCache[pathOrAsset] = decoded;
       return decoded;
@@ -783,10 +786,106 @@ class MixdownRenderer {
     }
   }
 
+  /// Ensures [rawPath] ends with `.[format]` without duplicating the extension.
+  static String normalizeExportPath(String rawPath, String format) {
+    final trimmed = rawPath.trim();
+    if (trimmed.isEmpty) return trimmed;
+    final cleanFmt = format.trim().toLowerCase().replaceAll('.', '');
+    if (cleanFmt.isEmpty) return trimmed;
+    final ext = '.$cleanFmt';
+    return trimmed.toLowerCase().endsWith(ext) ? trimmed : '$trimmed$ext';
+  }
+
+  /// Decodes non-WAV audio files (`.mp3`, `.flac`, `.ogg`, `.aiff`, `.m4a`,
+  /// etc.) to 44.1 kHz stereo PCM via `ffmpeg` so mixdowns never silently
+  /// drop compressed audio clips.
+  static Future<DecodedWav?> decodeAudioFileWithFfmpeg(String path) async {
+    try {
+      final res = await Process.run(
+        'ffmpeg',
+        [
+          '-v',
+          'error',
+          '-y',
+          '-i',
+          path,
+          '-ar',
+          '$sampleRate',
+          '-ac',
+          '2',
+          '-c:a',
+          'pcm_s16le',
+          '-f',
+          'wav',
+          'pipe:1',
+        ],
+        stdoutEncoding: null,
+      );
+      if (res.exitCode != 0 || res.stdout is! List<int>) return null;
+      final bytes = res.stdout is Uint8List
+          ? res.stdout as Uint8List
+          : Uint8List.fromList(res.stdout as List<int>);
+      return decodeWavBytes(bytes);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Transcodes a rendered WAV file into [outPath] (.mp3 or .flac) via ffmpeg
+  /// and returns whether encoding succeeded alongside any stderr diagnostic.
+  static Future<({bool ok, String? error})> transcodeWithFfmpegDetailed(
+    String wavPath,
+    String outPath, {
+    String? format,
+  }) async {
+    try {
+      final fmt = (format ??
+              (outPath.toLowerCase().endsWith('.mp3')
+                  ? 'mp3'
+                  : (outPath.toLowerCase().endsWith('.flac') ? 'flac' : '')))
+          .toLowerCase();
+      final args = fmt == 'mp3'
+          ? <String>[
+              '-y',
+              '-i',
+              wavPath,
+              '-vn',
+              '-ar',
+              '$sampleRate',
+              '-ac',
+              '2',
+              '-c:a',
+              'libmp3lame',
+              '-b:a',
+              '320k',
+              '-id3v2_version',
+              '3',
+              outPath,
+            ]
+          : <String>['-y', '-i', wavPath, '-vn', outPath];
+      final res = await Process.run('ffmpeg', args);
+      final outFile = File(outPath);
+      final ok =
+          res.exitCode == 0 && outFile.existsSync() && outFile.lengthSync() > 0;
+      if (ok) {
+        return (ok: true, error: null);
+      }
+      final err = res.stderr.toString().trim();
+      return (
+        ok: false,
+        error: err.isNotEmpty
+            ? err
+            : 'ffmpeg exited with code ${res.exitCode}',
+      );
+    } catch (e) {
+      return (ok: false, error: e.toString());
+    }
+  }
+
   /// Transcodes a rendered WAV file into [outPath] (.mp3 or .flac) via ffmpeg.
   static Future<bool> transcodeWithFfmpeg(String wavPath, String outPath) async {
-    final res = await Process.run('ffmpeg', ['-y', '-i', wavPath, outPath]);
-    return res.exitCode == 0 && File(outPath).existsSync();
+    final res = await transcodeWithFfmpegDetailed(wavPath, outPath);
+    return res.ok;
   }
 }
 

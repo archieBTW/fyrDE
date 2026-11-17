@@ -44,6 +44,13 @@ void enableBusVisualization(Bus bus) {
   } catch (_) {}
 }
 
+/// Maximum linear gain allowed by track volume faders (3.0 = 300% / ~+9.5 dB
+/// above unity, +12 dB above the 0.75 track default).
+const double kMaxTrackVolume = 3.0;
+
+/// Maximum linear gain allowed by the master volume fader.
+const double kMaxMasterVolume = 2.0;
+
 /// Creates, plays on engine, and enables visualization for a mixing [Bus] if
 /// [existing] is null, or enables visualization on [existing] if needed.
 Bus ensureActiveBus(Bus? existing, {String name = ''}) {

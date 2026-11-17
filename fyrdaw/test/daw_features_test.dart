@@ -28,12 +28,15 @@ import 'package:fyrdaw/ui/parametric_eq_widget.dart';
 import 'package:fyrdaw/ui/sample_browser_drawer.dart';
 import 'package:fyrdaw/ui/sampler_editor.dart';
 import 'package:fyrdaw/ui/session_launcher.dart';
+import 'package:fyrdaw/utils/playback_sync.dart';
 import 'package:fyrdaw/utils/selection_helpers.dart';
+import 'package:fyrdaw/utils/timeline_grid.dart';
 import 'package:fyrdaw/ui/step_sequencer.dart';
 import 'package:fyrdaw/ui/synth_rack_panel.dart';
 import 'package:fyrdaw/ui/tempo_signature_lane.dart';
 import 'package:fyrdaw/ui/timeline_loop_bar.dart';
 import 'package:fyrdaw/utils/bus_metering.dart';
+import 'package:fyrdaw/utils/effect_presets.dart';
 import 'package:fyrdaw/ui/tuner_gate_panel.dart';
 import 'package:flutter_soloud/flutter_soloud.dart';
 import 'package:fyrdaw/utils/audio_input_channel.dart';
@@ -3422,6 +3425,418 @@ Default Source: alsa_input.usb-Focusrite_Scarlett_Solo_USB_Y7PE74V22E69FD-00.Dir
       expect(state.multiSelectedClips.map((c) => c.id).toSet(), {'mq_c0', 'mq_c1'});
       await drag2.up();
       await tester.pumpAndSettle();
+    });
+  });
+
+  group('Adaptive Timeline-Aligned Editor Grid & Markers', () {
+    test('computeGridSubdivisionsPerBeat & buildTimelineGridLines align mid-bar clips and refine on zoom', () {
+      expect(computeGridSubdivisionsPerBeat(20.0), 1);
+      expect(computeGridSubdivisionsPerBeat(40.0), 2);
+      expect(computeGridSubdivisionsPerBeat(90.0), 4);
+      expect(computeGridSubdivisionsPerBeat(200.0), 8);
+      expect(computeGridSubdivisionsPerBeat(400.0), 16);
+
+      // Clip starting mid-bar at world 75.0 (Bar 1 Beat 2.5 at 120 BPM, 4/4):
+      // Bar 2 starts at world 200.0 => localPos 125.0
+      final lines = buildTimelineGridLines(
+        clipStart: 75.0,
+        visibleUnits: 200.0,
+        zoomX: 2.0, // beatWidthPx = 100 -> 4 subdivisions per beat (1/16)
+        baseBpm: 120,
+        baseTimeSigTop: 4,
+      );
+      final bar2 = lines.where((l) => l.isMeasure && l.measureNumber == 2).firstOrNull;
+      expect(bar2, isNotNull);
+      expect(bar2!.worldPos, closeTo(200.0, 1e-6));
+      expect(bar2.localPos, closeTo(125.0, 1e-6));
+      expect(bar2.subdivisionsPerBeat, 4);
+
+      // Zooming in to zoomX = 4.0 (beatWidthPx = 200) adds 1/32 sub-cells
+      final zoomedLines = buildTimelineGridLines(
+        clipStart: 75.0,
+        visibleUnits: 200.0,
+        zoomX: 4.0,
+        baseBpm: 120,
+        baseTimeSigTop: 4,
+      );
+      expect(zoomedLines.first.subdivisionsPerBeat, 8);
+      expect(zoomedLines.length, greaterThan(lines.length));
+
+      // Snapping local position inside mid-bar clip lands on world timeline grid
+      final worldSnap = snapWorldPositionToTimelineGrid(
+        75.0 + 123.0, // near world 200.0 (Bar 2)
+        baseBpm: 120,
+        baseTimeSigTop: 4,
+        zoomX: 2.0,
+      );
+      expect(worldSnap, closeTo(200.0, 1e-6));
+    });
+
+    testWidgets('MidiEditorWidget shows timeline-aligned ruler/markers and subdivides cells on zoom in', (tester) async {
+      final track = Track(id: 'm_grid', name: 'Synth', type: TrackType.midi);
+      final clip = MidiClip(
+        id: 'mc_grid',
+        start: 75.0, // Bar 1 Beat 2.5 at 120 BPM
+        length: 200.0,
+        color: Colors.purple,
+      );
+      double zoom = 2.0; // beatWidthPx = 100 -> 1/16
+      double playhead = 75.0;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (ctx, setModalState) => SizedBox(
+                width: 1100,
+                height: 460,
+                child: MidiEditorWidget(
+                  track: track,
+                  clip: clip,
+                  snapToGrid: true,
+                  snapResolution: 12.5,
+                  zoomX: zoom,
+                  bpm: 120,
+                  timeSigTop: 4,
+                  selectedMidiNotes: const [],
+                  onSelectionChanged: (_) {},
+                  onNotesChanged: () => setModalState(() {}),
+                  onZoomIn: () => setModalState(() => zoom *= 2.0),
+                  onZoomOut: () => setModalState(() => zoom /= 2.0),
+                  playheadPosition: playhead,
+                  onPlayheadChanged: (p) => setModalState(() => playhead = p),
+                  midiDevices: const [],
+                  onCopy: () {},
+                  onPaste: () {},
+                  onInstrumentDialogRequested: () {},
+                  onMidiInputDialogRequested: () {},
+                  markers: [
+                    SongMarker(id: 'mk1', position: 200.0, label: 'Chorus'),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('midi_editor_ruler')), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('midi_editor_grid_division')),
+          matching: find.text('1/16'),
+        ),
+        findsOneWidget,
+      );
+
+      // Zoom in (2x -> beatW = 200px) => smaller 1/32 cells appear
+      await tester.ensureVisible(find.byIcon(Icons.zoom_in));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.zoom_in));
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('midi_editor_grid_division')),
+          matching: find.text('1/32'),
+        ),
+        findsOneWidget,
+      );
+
+      // Zoom in again (4x -> beatW = 400px) => smaller 1/64 cells appear
+      await tester.ensureVisible(find.byIcon(Icons.zoom_in));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.zoom_in));
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('midi_editor_grid_division')),
+          matching: find.text('1/64'),
+        ),
+        findsOneWidget,
+      );
+
+      // Tapping ruler seeks relative to clip.start on timeline
+      final rulerBox = tester.getRect(find.byKey(const Key('midi_editor_ruler')));
+      await tester.tapAt(Offset(rulerBox.left + 100, rulerBox.center.dy));
+      await tester.pumpAndSettle();
+      expect(playhead, greaterThan(75.0));
+    });
+  });
+
+  group('Audio Track Fader Headroom & Post-FX Bus Gain', () {
+    testWidgets('Track header and Mixer faders boost audio tracks up to 300% (3.0) without clamping to 100%', (tester) async {
+      final audioTrack = Track(
+        id: 'aud_vol',
+        name: 'Lead Vocal',
+        type: TrackType.audio,
+      );
+      expect(audioTrack.volume, closeTo(0.75, 1e-6));
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (ctx, setModalState) => SizedBox(
+                width: 1000,
+                height: 360,
+                child: MixerConsoleView(
+                  tracks: [audioTrack],
+                  trackLevels: const {},
+                  trackPeaks: const {},
+                  auxReverbMix: 0.5,
+                  auxDelayMix: 0.4,
+                  auxRevLevel: (0.0, 0.0),
+                  auxDlyLevel: (0.0, 0.0),
+                  auxReverbSolo: false,
+                  auxDelaySolo: false,
+                  masterVolume: 1.0,
+                  masterLimiter: false,
+                  masterLevel: (0.0, 0.0),
+                  masterPeak: (0.0, 0.0),
+                  masterLufs: -18.0,
+                  masterVizSamples: null,
+                  stereoCorrelation: 1.0,
+                  onSaveState: () {},
+                  onTrackVolumeChanged: (t, v) =>
+                      setModalState(() => t.volume = v),
+                  onTrackPanChanged: (_, _) {},
+                  onTrackRevSendChanged: (_, _) {},
+                  onTrackDlySendChanged: (_, _) {},
+                  onToggleReverbPreFader: (_) {},
+                  onToggleDelayPreFader: (_) {},
+                  onToggleMute: (_) {},
+                  onToggleSolo: (_) {},
+                  onAuxReverbMixChanged: (_) {},
+                  onAuxDelayMixChanged: (_) {},
+                  onToggleAuxReverbSolo: () {},
+                  onToggleAuxDelaySolo: () {},
+                  onMasterVolumeChanged: (_) {},
+                  onToggleMasterLimiter: () {},
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final mixerSlider = find.byKey(const Key('mixer_volume_slider_aud_vol'));
+      expect(mixerSlider, findsOneWidget);
+      final sliderWidget = tester.widget<Slider>(mixerSlider);
+      expect(sliderWidget.max, closeTo(kMaxTrackVolume, 1e-6));
+      expect(kMaxTrackVolume, greaterThanOrEqualTo(3.0));
+
+      // Invoke onChanged all the way up to max headroom (3.0 -> 300%)
+      sliderWidget.onChanged!(3.0);
+      await tester.pumpAndSettle();
+      expect(audioTrack.volume, closeTo(3.0, 1e-6));
+      expect(find.text('300%'), findsOneWidget);
+    });
+  });
+
+  group('MP3 Export, Non-WAV Decoding & Save Path Normalization', () {
+    test('MixdownRenderer normalizes export paths and transcodes/decodes audible MP3 files', () async {
+      expect(
+        MixdownRenderer.normalizeExportPath('/tmp/my_song', 'mp3'),
+        '/tmp/my_song.mp3',
+      );
+      expect(
+        MixdownRenderer.normalizeExportPath('/tmp/my_song.mp3', 'mp3'),
+        '/tmp/my_song.mp3',
+      );
+      expect(
+        MixdownRenderer.normalizeExportPath('/tmp/my_song.MP3', 'mp3'),
+        '/tmp/my_song.MP3',
+      );
+
+      final tmpDir = await Directory.systemTemp.createTemp('fyrdaw_mp3_test_');
+      addTearDown(() async {
+        if (tmpDir.existsSync()) await tmpDir.delete(recursive: true);
+      });
+
+      final srcWav = '${tmpDir.path}/tone.wav';
+      final writer = WavWriter(srcWav, sampleRate: 44100, channels: 2);
+      const frames = 22050; // 0.5s 440Hz stereo tone
+      final bd = ByteData(frames * 4);
+      for (int i = 0; i < frames; i++) {
+        final s = (sin(2 * pi * 440 * i / 44100) * 16000).round();
+        bd.setInt16(i * 4, s, Endian.little);
+        bd.setInt16(i * 4 + 2, s, Endian.little);
+      }
+      writer.write(bd.buffer.asUint8List());
+      writer.close();
+
+      final mp3Path = '${tmpDir.path}/source.mp3';
+      final tr = await MixdownRenderer.transcodeWithFfmpegDetailed(
+        srcWav,
+        mp3Path,
+        format: 'mp3',
+      );
+      expect(tr.ok, isTrue);
+      expect(File(mp3Path).existsSync(), isTrue);
+
+      // Verify an AudioClip referencing an MP3 file renders audible mixdown output
+      final audioTrack = Track(
+        id: 't_mp3',
+        name: 'MP3 Clip Track',
+        type: TrackType.audio,
+      );
+      final mp3Clip = AudioClip(
+        id: 'c_mp3',
+        name: 'MP3 Sample',
+        start: 0.0,
+        length: 50.0,
+        color: Colors.amber,
+        filePath: mp3Path,
+      );
+      final outMixWav = '${tmpDir.path}/mix.wav';
+      final ok = await MixdownRenderer.renderToWav(
+        tracks: [audioTrack],
+        trackClips: {audioTrack.id: [mp3Clip]},
+        outWavPath: outMixWav,
+        bpm: 120,
+      );
+      expect(ok, isTrue);
+
+      final decodedMix = await decodeWavFile(outMixWav);
+      expect(decodedMix, isNotNull);
+      double peak = 0.0;
+      for (final v in decodedMix!.left) {
+        if (v.abs() > peak) peak = v.abs();
+      }
+      expect(peak, greaterThan(0.15));
+    });
+  });
+
+  group('Drum & Metronome Playback Synchronization', () {
+    test('collectMetronomeBeatsInWindow and shouldTriggerMidiNoteInWindow trigger identically at Play start and beat boundaries', () {
+      // Beat 1 at play start (0.0): both metronome and drum note fire at t = 0
+      final startBeats = collectMetronomeBeatsInWindow(
+        0.0,
+        0.0,
+        baseBpm: 120,
+        baseTimeSigTop: 4,
+        includeStart: true,
+      );
+      expect(startBeats, hasLength(1));
+      expect(startBeats.first.worldPos, closeTo(0.0, 1e-6));
+      expect(startBeats.first.isDownbeat, isTrue);
+      expect(
+        shouldTriggerMidiNoteInWindow(
+          noteStart: 0.0,
+          windowStart: 0.0,
+          windowEnd: 0.0,
+          includeStart: true,
+        ),
+        isTrue,
+      );
+
+      // Tick landing right on Beat 2 (50.0): both click and drum note trigger on same tick
+      final beat2TickBeats = collectMetronomeBeatsInWindow(
+        49.2,
+        50.0,
+        baseBpm: 120,
+        baseTimeSigTop: 4,
+      );
+      expect(beat2TickBeats, hasLength(1));
+      expect(beat2TickBeats.first.worldPos, closeTo(50.0, 1e-6));
+      expect(beat2TickBeats.first.isDownbeat, isFalse);
+      expect(
+        shouldTriggerMidiNoteInWindow(
+          noteStart: 50.0,
+          windowStart: 49.2,
+          windowEnd: 50.0,
+        ),
+        isTrue,
+      );
+
+      // Immediately following tick (50.0 -> 50.8): neither double-triggers
+      expect(
+        collectMetronomeBeatsInWindow(
+          50.0,
+          50.8,
+          baseBpm: 120,
+          baseTimeSigTop: 4,
+        ),
+        isEmpty,
+      );
+      expect(
+        shouldTriggerMidiNoteInWindow(
+          noteStart: 50.0,
+          windowStart: 50.0,
+          windowEnd: 50.8,
+        ),
+        isFalse,
+      );
+    });
+  });
+
+  group('Vocal Effect Chain Presets', () {
+    test('kEffectChainPresets exposes rich vocal chains and builds distinct effect instances', () {
+      final vocalPresets =
+          kEffectChainPresets.where((p) => p.isVocal).toList();
+      expect(vocalPresets.length, greaterThanOrEqualTo(9));
+
+      for (final p in vocalPresets) {
+        final chainA = buildEffectChainForPreset(p.id);
+        final chainB = buildEffectChainForPreset(p.id);
+        expect(chainA, isNotNull);
+        expect(chainA!, isNotEmpty);
+        expect(identical(chainA.first, chainB!.first), isFalse);
+      }
+
+      expect(buildEffectChainForPreset('Clear Chain'), isEmpty);
+    });
+
+    testWidgets('EffectsRackView lists new vocal presets and applies selected chain', (tester) async {
+      final track = Track(id: 'vox1', name: 'Lead Vox', type: TrackType.audio);
+      String? appliedId;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 1100,
+              height: 360,
+              child: EffectsRackView(
+                track: track,
+                allTracks: [track],
+                inputDevices: const [],
+                selectedInputDevice: null,
+                onInputDeviceChanged: (_) {},
+                trackLevel: 0.0,
+                sidechainGr: 0.0,
+                detectedPitch: null,
+                tunerEnabled: false,
+                onSaveState: () {},
+                onToggleTuner: () {},
+                onNoiseGateChanged: (_) {},
+                onReorderEffect: (_, _) {},
+                onRemoveEffect: (_) {},
+                onToggleBypass: (_) {},
+                onParamChanged: (_, _, _) {},
+                onSidechainChanged: (_, _) {},
+                onApplyPreset: (id) => appliedId = id,
+                onAddEffectPressed: () {},
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('Presets'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Vocal: Studio Lead'), findsOneWidget);
+      expect(find.text('Vocal: Radio / Podcast'), findsOneWidget);
+      expect(find.text('Vocal: Dreamy Pop'), findsOneWidget);
+      expect(find.text('Vocal: Slapback Rock'), findsOneWidget);
+      expect(find.text('Vocal: Telephone / Megaphone'), findsOneWidget);
+
+      await tester.tap(find.text('Vocal: Studio Lead'));
+      await tester.pumpAndSettle();
+      expect(appliedId, 'Studio Lead Vocal');
     });
   });
 }

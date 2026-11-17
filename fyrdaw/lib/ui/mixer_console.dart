@@ -258,8 +258,11 @@ class MixerConsoleView extends StatelessWidget {
                                 overlayShape: SliderComponentShape.noOverlay,
                               ),
                               child: Slider(
+                                key: Key('mixer_volume_slider_${t.id}'),
                                 onChangeStart: (_) => onSaveState(),
-                                value: t.volume.clamp(0.0, 1.0),
+                                min: 0.0,
+                                max: kMaxTrackVolume,
+                                value: t.volume.clamp(0.0, kMaxTrackVolume),
                                 activeColor: t.color,
                                 onChanged: (v) => onTrackVolumeChanged(t, v),
                               ),
@@ -502,7 +505,9 @@ class MixerConsoleView extends StatelessWidget {
                         ),
                         child: Slider(
                           onChangeStart: (_) => onSaveState(),
-                          value: masterVolume.clamp(0.0, 1.0),
+                          min: 0.0,
+                          max: kMaxMasterVolume,
+                          value: masterVolume.clamp(0.0, kMaxMasterVolume),
                           activeColor: Colors.redAccent,
                           onChanged: onMasterVolumeChanged,
                         ),

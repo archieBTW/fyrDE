@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:flutter_midi_command/flutter_midi_command.dart';
 import 'package:archive/archive_io.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:fyrdaw/wav_writer.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -45,10 +46,12 @@ import 'package:fyrdaw/utils/recording_sync.dart';
 import 'package:fyrdaw/utils/selection_helpers.dart';
 import 'package:fyrdaw/utils/audio_utils.dart';
 import 'package:fyrdaw/utils/bus_metering.dart';
+import 'package:fyrdaw/utils/effect_presets.dart';
 import 'package:fyrdaw/utils/metronome_synth.dart';
 import 'package:fyrdaw/utils/midi_file_codec.dart';
 import 'package:fyrdaw/utils/mixdown_renderer.dart';
 import 'package:fyrdaw/utils/parametric_eq_dsp.dart';
+import 'package:fyrdaw/utils/playback_sync.dart';
 import 'package:fyrdaw/utils/pitch_detector.dart';
 import 'package:fyrdaw/utils/plugin_host.dart';
 import 'package:fyrdaw/utils/time_stretch.dart';
@@ -95,7 +98,7 @@ SoundHandle? triggerInstrumentNote(
               track.volume *
               preset.volumeMultiplier *
               volumeScale)
-          .clamp(0.0, 2.5);
+          .clamp(0.0, 4.0);
   final double semitoneOffset =
       (midiPitch - preset.basePitch) +
       (s.octave * 12.0) +

@@ -10,10 +10,13 @@ import 'package:fyrdaw/models/enums.dart';
 import 'package:fyrdaw/models/daw_clip.dart';
 import 'package:fyrdaw/models/track.dart';
 import 'package:fyrdaw/models/midi_note.dart';
+import 'package:fyrdaw/models/song_marker.dart';
+import 'package:fyrdaw/models/tempo_marker.dart';
 import 'package:fyrdaw/ui/painters.dart';
 import 'package:fyrdaw/ui/step_sequencer.dart';
 import 'package:fyrdaw/ui/synth_rack_panel.dart';
 import 'package:fyrdaw/utils/audio_utils.dart';
+import 'package:fyrdaw/utils/timeline_grid.dart';
 
 const Map<String, List<int>> kMidiScales = {
   'Off': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
@@ -66,6 +69,8 @@ class MidiEditorWidget extends StatefulWidget {
   final List<AudioClip> grooveAudioClips;
   final VoidCallback? onImportMidi;
   final VoidCallback? onExportMidi;
+  final List<SongMarker> markers;
+  final List<TempoMarker> tempoMarkers;
 
   const MidiEditorWidget({
     super.key,
@@ -94,6 +99,8 @@ class MidiEditorWidget extends StatefulWidget {
     this.grooveAudioClips = const [],
     this.onImportMidi,
     this.onExportMidi,
+    this.markers = const [],
+    this.tempoMarkers = const [],
   });
 
   @override
@@ -249,6 +256,27 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
     }
   }
 
+  double _adaptiveStepAtLocalX(double localX) => adaptiveGridStepAtWorldPos(
+    widget.clip.start + max(0.0, localX),
+    baseBpm: widget.bpm,
+    zoomX: widget.zoomX,
+    tempoMarkers: widget.tempoMarkers,
+  );
+
+  double _snapLocalX(double localX, {bool floorMode = false}) {
+    final safeLocal = max(0.0, localX);
+    final worldPos = widget.clip.start + safeLocal;
+    final snappedWorld = snapWorldPositionToTimelineGrid(
+      worldPos,
+      baseBpm: widget.bpm,
+      baseTimeSigTop: widget.timeSigTop,
+      zoomX: widget.zoomX,
+      tempoMarkers: widget.tempoMarkers,
+      floorMode: floorMode,
+    );
+    return max(0.0, snappedWorld - widget.clip.start);
+  }
+
   void _addNoteAt(Offset localPosition) {
     double realX = localPosition.dx / widget.zoomX;
     if (realX < 0) return;
@@ -260,15 +288,16 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
       midiPitch = _snapPitchToScale(midiPitch);
     }
 
-    double start = widget.snapToGrid
-        ? (realX / widget.snapResolution).floor() * widget.snapResolution
+    double localStart = widget.snapToGrid
+        ? _snapLocalX(realX, floorMode: true)
         : realX;
+    double start = widget.clip.startOffset + localStart;
     final double noteLen = 100.0 * 60.0 / widget.bpm;
     widget.onChangeStart?.call();
-    if (start + noteLen > widget.clip.length) {
+    if (localStart + noteLen > widget.clip.length) {
       final double barLen = noteLen * max(1, widget.timeSigTop);
       final double needed =
-          ((start + noteLen) / barLen).ceil() * barLen;
+          ((localStart + noteLen) / barLen).ceil() * barLen;
       widget.clip.length = max(widget.clip.length, needed);
       if (widget.clip.startOffset + widget.clip.length >
           widget.clip.originalLength) {
@@ -506,9 +535,8 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
       final localPh = (widget.playheadPosition - widget.clip.start)
           .clamp(0.0, max<double>(0.0, widget.clip.length - beatW))
           .toDouble();
-      final double start = widget.snapToGrid
-          ? (localPh / widget.snapResolution).round() * widget.snapResolution
-          : localPh;
+      final double start = widget.clip.startOffset +
+          (widget.snapToGrid ? _snapLocalX(localPh) : localPh);
       if (op == 'arp_up') {
         final stepLen = beatW / 2.0;
         for (int i = 0; i < intervals.length; i++) {
@@ -567,6 +595,8 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
         onChangeStart: widget.onChangeStart,
         onNotesChanged: widget.onNotesChanged,
         onSwitchToPianoRoll: () => setState(() => _stepSequencerMode = false),
+        markers: widget.markers,
+        tempoMarkers: widget.tempoMarkers,
       );
     }
     double beatW = 100.0 * 60.0 / widget.bpm * widget.zoomX;
@@ -838,13 +868,12 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                 onPressed: () {
                   widget.onChangeStart?.call();
                   for (var n in widget.clip.notes) {
-                    n.start =
-                        (n.start / widget.snapResolution).round() *
-                        widget.snapResolution;
+                    final localStart = _snapLocalX(n.start - widget.clip.startOffset);
+                    final step = _adaptiveStepAtLocalX(localStart);
+                    n.start = widget.clip.startOffset + localStart;
                     n.length = max(
                       10.0,
-                      (n.length / widget.snapResolution).round() *
-                          widget.snapResolution,
+                      (n.length / step).round() * step,
                     );
                   }
                   widget.onNotesChanged();
@@ -1058,6 +1087,29 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                 width: 60,
                 child: Column(
                   children: [
+                    Container(
+                      key: const Key('midi_editor_grid_division'),
+                      width: 60,
+                      height: 26,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: panelDark,
+                        border: Border(
+                          right: BorderSide(color: borderMain),
+                          bottom: BorderSide(color: borderMain),
+                        ),
+                      ),
+                      child: Text(
+                        gridSubdivisionLabel(
+                          computeGridSubdivisionsPerBeat(beatW),
+                        ),
+                        style: TextStyle(
+                          color: Colors.cyanAccent,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
                     Expanded(
                       child: Container(
                         width: 60,
@@ -1184,6 +1236,79 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                     width: gridW,
                     child: Column(
                       children: [
+                        Container(
+                          width: gridW,
+                          height: 26,
+                          decoration: BoxDecoration(
+                            color: panelDark,
+                            border: Border(
+                              bottom: BorderSide(color: borderMain),
+                            ),
+                          ),
+                          child: Stack(
+                            children: [
+                              GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTapDown: (d) {
+                                  double localX = max(
+                                    0.0,
+                                    d.localPosition.dx / widget.zoomX,
+                                  );
+                                  if (widget.snapToGrid) {
+                                    localX = _snapLocalX(localX);
+                                  }
+                                  widget.onPlayheadChanged(
+                                    widget.clip.start + localX,
+                                  );
+                                },
+                                onPanUpdate: (d) {
+                                  double localX = max(
+                                    0.0,
+                                    d.localPosition.dx / widget.zoomX,
+                                  );
+                                  widget.onPlayheadChanged(
+                                    widget.clip.start + localX,
+                                  );
+                                },
+                                child: CustomPaint(
+                                  key: const Key('midi_editor_ruler'),
+                                  painter: MidiEditorRulerPainter(
+                                    zoomX: widget.zoomX,
+                                    bpm: widget.bpm,
+                                    timeSigTop: widget.timeSigTop,
+                                    clipStart: widget.clip.start,
+                                    clipLength: widget.clip.length,
+                                    markers: widget.markers,
+                                    tempoMarkers: widget.tempoMarkers,
+                                  ),
+                                  size: Size(gridW, 26),
+                                ),
+                              ),
+                              if (widget.playheadPosition >=
+                                      widget.clip.start &&
+                                  widget.playheadPosition <=
+                                      widget.clip.start + widget.clip.length)
+                                Positioned(
+                                  left:
+                                      (widget.playheadPosition -
+                                              widget.clip.start) *
+                                          widget.zoomX -
+                                      4,
+                                  top: 0,
+                                  bottom: 0,
+                                  width: 10,
+                                  child: IgnorePointer(
+                                    child: Center(
+                                      child: Container(
+                                        width: 2,
+                                        color: Colors.red,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
                         Expanded(
                           child: SingleChildScrollView(
                             controller: _verticalController2,
@@ -1198,12 +1323,17 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                                       pitchHeight: _pitchHeight,
                                       beatWidth: beatW,
                                       timeSigTop: widget.timeSigTop,
+                                      zoomX: widget.zoomX,
+                                      bpm: widget.bpm,
+                                      clipStart: widget.clip.start,
                                       scalePitchClasses:
                                           _activeScalePitchClasses,
                                       rootPitchClass: _rootPitchClass,
                                       isSampler:
                                           widget.track?.type ==
                                           TrackType.sampler,
+                                      markers: widget.markers,
+                                      tempoMarkers: widget.tempoMarkers,
                                     ),
                                     size: Size(gridW, _numRows * _pitchHeight),
                                   ),
@@ -1217,7 +1347,10 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                                         )
                                         .map(
                                           (gn) => Positioned(
-                                            left: gn.start * widget.zoomX,
+                                            left:
+                                                (gn.start -
+                                                    widget.clip.startOffset) *
+                                                widget.zoomX,
                                             top:
                                                 _getRowFromMidiPitch(gn.pitch) *
                                                     _pitchHeight +
@@ -1299,7 +1432,7 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                                 double minY = min(_selStartY!, _selEndY!);
                                 double maxY = max(_selStartY!, _selEndY!);
                                 for (var n in widget.clip.notes) {
-                                  double nx = n.start;
+                                  double nx = n.start - widget.clip.startOffset;
                                   int r = _getRowFromMidiPitch(n.pitch);
                                   if (r == -1) continue;
                                   double ny = r * _pitchHeight;
@@ -1325,7 +1458,9 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                                 );
                                 return Positioned(
                                   key: ObjectKey(note),
-                                  left: note.start * widget.zoomX,
+                                  left:
+                                      (note.start - widget.clip.startOffset) *
+                                      widget.zoomX,
                                   top:
                                       _getRowFromMidiPitch(note.pitch) *
                                       _pitchHeight,
@@ -1380,7 +1515,9 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                                         for (var n in targets) {
                                           n.start +=
                                               (d.delta.dx / widget.zoomX);
-                                          if (n.start < 0) n.start = 0;
+                                          if (n.start < widget.clip.startOffset) {
+                                            n.start = widget.clip.startOffset;
+                                          }
                                           if (_dragInitialPitches.containsKey(
                                             n,
                                           )) {
@@ -1477,11 +1614,12 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                                       setState(() {
                                         if (widget.snapToGrid) {
                                           for (var n in targets) {
+                                            final snappedLocal = _snapLocalX(
+                                              n.start - widget.clip.startOffset,
+                                            );
                                             n.start =
-                                                (n.start /
-                                                        widget.snapResolution)
-                                                    .round() *
-                                                widget.snapResolution;
+                                                widget.clip.startOffset +
+                                                snappedLocal;
                                           }
                                         }
                                         _activeDragNotes = [];
@@ -1556,14 +1694,18 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                                                               .selectedMidiNotes
                                                         : [note];
                                                     for (var n in targets) {
+                                                      final step =
+                                                          _adaptiveStepAtLocalX(
+                                                            n.start -
+                                                                widget
+                                                                    .clip
+                                                                    .startOffset,
+                                                          );
                                                       n.length = max(
                                                         10.0,
-                                                        (n.length /
-                                                                    widget
-                                                                        .snapResolution)
+                                                        (n.length / step)
                                                                 .round() *
-                                                            widget
-                                                                .snapResolution,
+                                                            step,
                                                       );
                                                     }
                                                   }
@@ -1652,10 +1794,7 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                                       setState(() {
                                         widget.clip.length = max(
                                           20.0,
-                                          (widget.clip.length /
-                                                      widget.snapResolution)
-                                                  .round() *
-                                              widget.snapResolution,
+                                          _snapLocalX(widget.clip.length),
                                         );
                                         if (widget.clip.startOffset +
                                                 widget.clip.length >
