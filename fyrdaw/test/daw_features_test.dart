@@ -3839,4 +3839,329 @@ Default Source: alsa_input.usb-Focusrite_Scarlett_Solo_USB_Y7PE74V22E69FD-00.Dir
       expect(appliedId, 'Studio Lead Vocal');
     });
   });
+
+  group('Mixdown Fidelity (FX, Aux Wet Returns, OD/Amp Tone, Automation)', () {
+    Future<String> writeToneWav(String path, {required int sr, required double sec, List<double> freqs = const [220.0]}) async {
+      final int frames = (sr * sec).round();
+      final writer = WavWriter(path, sampleRate: sr, channels: 2);
+      final pcm = Int16List(frames * 2);
+      for (int i = 0; i < frames; i++) {
+        double v = 0.0;
+        for (final f in freqs) {
+          v += sin(2 * pi * f * i / sr) / freqs.length;
+        }
+        final int s = (v * 0.6 * 32767.0).round().clamp(-32767, 32767);
+        pcm[i * 2] = s;
+        pcm[i * 2 + 1] = s;
+      }
+      writer.write(ByteData.view(pcm.buffer).buffer.asUint8List());
+      writer.close();
+      return path;
+    }
+
+    double rmsRange(List<double> buf, int start, int end) {
+      if (end <= start) return 0.0;
+      double sum = 0.0;
+      for (int i = start; i < end && i < buf.length; i++) {
+        sum += buf[i] * buf[i];
+      }
+      return sqrt(sum / max(1, min(end, buf.length) - start));
+    }
+
+    test('Chorus, Flanger, and Robotize render distinct stereo/modulated FX into WAV', () async {
+      final tmpDir = await Directory.systemTemp.createTemp('fyrdaw_fx_mix_');
+      try {
+        const sr = 44100;
+        final srcPath = await writeToneWav(
+          '${tmpDir.path}/src.wav',
+          sr: sr,
+          sec: 0.6,
+          freqs: [220.0, 440.0],
+        );
+
+        Future<DecodedWav> renderWith(List<DawEffect> chain, String name) async {
+          final tr = Track(id: 't', name: 'Vox', type: TrackType.audio)
+            ..effectsChain.addAll(chain);
+          final clip = AudioClip(
+            id: 'c',
+            start: 0.0,
+            length: 60.0,
+            color: Colors.teal,
+            filePath: srcPath,
+          );
+          final out = '${tmpDir.path}/$name.wav';
+          final ok = await MixdownRenderer.renderToWav(
+            tracks: [tr],
+            trackClips: {'t': [clip]},
+            outWavPath: out,
+            bpm: 120,
+            masterLimiter: false,
+          );
+          expect(ok, isTrue);
+          return (await decodeWavFile(out))!;
+        }
+
+        final dry = await renderWith(const [], 'dry');
+        final chorus = await renderWith(
+          [DawEffect('Chorus', {'Mix': 0.85, 'Depth': 0.8, 'Rate': 0.6})],
+          'chorus',
+        );
+        final flanger = await renderWith(
+          [DawEffect('Flanger', {'Mix': 0.85, 'Delay': 0.6, 'Rate': 0.7})],
+          'flanger',
+        );
+        final robot = await renderWith(
+          [DawEffect('Robotize', {'Mix': 1.0, 'Freq': 0.5})],
+          'robot',
+        );
+
+        // Quadrature chorus creates genuine L/R stereo decorrelation (L != R)
+        double chorusLrDiff = 0.0;
+        for (int i = 2000; i < 20000; i++) {
+          chorusLrDiff += (chorus.left[i] - chorus.right[i]).abs();
+        }
+        expect(chorusLrDiff / 18000, greaterThan(0.01));
+
+        // Flanger differs audibly from dry
+        double flangerDryDiff = 0.0;
+        for (int i = 2000; i < 20000; i++) {
+          flangerDryDiff += (flanger.left[i] - dry.left[i]).abs();
+        }
+        expect(flangerDryDiff / 18000, greaterThan(0.02));
+
+        // Robotize modulates signal with carrier wave distinct from dry
+        double robotDryDiff = 0.0;
+        for (int i = 2000; i < 20000; i++) {
+          robotDryDiff += (robot.left[i] - dry.left[i]).abs();
+        }
+        expect(robotDryDiff / 18000, greaterThan(0.05));
+      } finally {
+        await tmpDir.delete(recursive: true);
+      }
+    });
+
+    test('Aux Reverb and Aux Delay returns emit pure wet signal without doubling dry track', () async {
+      final tmpDir = await Directory.systemTemp.createTemp('fyrdaw_aux_wet_');
+      try {
+        const sr = 44100;
+        // Short 15ms tone burst at t=0 followed by silence
+        final srcPath = '${tmpDir.path}/burst.wav';
+        const frames = 882; // 20ms
+        final writer = WavWriter(srcPath, sampleRate: sr, channels: 2);
+        final pcm = Int16List(frames * 2);
+        for (int i = 0; i < 660; i++) {
+          final v = (sin(2 * pi * 440.0 * i / sr) * 0.5 * 32767.0).round();
+          pcm[i * 2] = v;
+          pcm[i * 2 + 1] = v;
+        }
+        writer.write(ByteData.view(pcm.buffer).buffer.asUint8List());
+        writer.close();
+
+        Future<DecodedWav> renderAux({
+          required double revSend,
+          required double dlySend,
+          required double auxRevMix,
+          required double auxDlyMix,
+          required String name,
+        }) async {
+          final tr = Track(id: 't', name: 'Lead', type: TrackType.audio)
+            ..reverbSend = revSend
+            ..delaySend = dlySend;
+          final clip = AudioClip(
+            id: 'c',
+            start: 0.0,
+            length: 10.0,
+            color: Colors.amber,
+            filePath: srcPath,
+          );
+          final out = '${tmpDir.path}/$name.wav';
+          final ok = await MixdownRenderer.renderToWav(
+            tracks: [tr],
+            trackClips: {'t': [clip]},
+            outWavPath: out,
+            bpm: 120,
+            auxReverbMix: auxRevMix,
+            auxDelayMix: auxDlyMix,
+            masterLimiter: false,
+          );
+          expect(ok, isTrue);
+          return (await decodeWavFile(out))!;
+        }
+
+        final dryOnly = await renderAux(
+          revSend: 0.0,
+          dlySend: 0.0,
+          auxRevMix: 0.0,
+          auxDlyMix: 0.0,
+          name: 'dry',
+        );
+        final withAux = await renderAux(
+          revSend: 1.0,
+          dlySend: 1.0,
+          auxRevMix: 1.0,
+          auxDlyMix: 1.0,
+          name: 'aux',
+        );
+
+        // First 15ms (0..660 samples) are strictly earlier than Freeverb min comb (1116 samples)
+        // and Aux Delay (0.34s = 14994 samples), so zero dry bleed should be added on top!
+        double earlyDiff = 0.0;
+        for (int i = 0; i < 660; i++) {
+          earlyDiff += (withAux.left[i] - dryOnly.left[i]).abs();
+        }
+        expect(earlyDiff / 660, lessThan(1e-3));
+
+        // Tail after 25ms must contain audible wet reverb + echo return energy
+        final double tailRms = rmsRange(withAux.left, 1500, 22000);
+        expect(tailRms, greaterThan(0.004));
+      } finally {
+        await tmpDir.delete(recursive: true);
+      }
+    });
+
+    test('Overdrive and GuitarAmp shape Tone lowpass cleanly without harsh digital clipping', () async {
+      final tmpDir = await Directory.systemTemp.createTemp('fyrdaw_od_tone_');
+      try {
+        const sr = 44100;
+        // High-frequency component at 5 kHz + fundamental at 220 Hz
+        final srcPath = await writeToneWav(
+          '${tmpDir.path}/gtr.wav',
+          sr: sr,
+          sec: 0.4,
+          freqs: [220.0, 5000.0],
+        );
+
+        Future<DecodedWav> renderAmp(double tone, String name) async {
+          final tr = Track(id: 'g', name: 'Guitar', type: TrackType.audio)
+            ..effectsChain.addAll([
+              DawEffect('Overdrive', {'Drive': 0.7, 'Tone': tone, 'Level': 0.6}),
+              DawEffect('GuitarAmp', {'Drive': 0.7, 'Tone': tone, 'Level': 0.6}),
+            ]);
+          final clip = AudioClip(
+            id: 'c',
+            start: 0.0,
+            length: 40.0,
+            color: Colors.red,
+            filePath: srcPath,
+          );
+          final out = '${tmpDir.path}/$name.wav';
+          expect(
+            await MixdownRenderer.renderToWav(
+              tracks: [tr],
+              trackClips: {'g': [clip]},
+              outWavPath: out,
+              bpm: 120,
+              masterLimiter: false,
+            ),
+            isTrue,
+          );
+          return (await decodeWavFile(out))!;
+        }
+
+        final darkTone = await renderAmp(0.0, 'dark');
+        final brightTone = await renderAmp(1.0, 'bright');
+
+        // Dark Tone lowpasses 5 kHz harmonics much more aggressively than bright Tone
+        final double darkRms = rmsRange(darkTone.left, 2000, 15000);
+        final double brightRms = rmsRange(brightTone.left, 2000, 15000);
+        expect(brightRms, greaterThan(darkRms * 1.15));
+
+        // Limiter keeps output bounded
+        final maxDark = darkTone.left.fold<double>(0.0, (m, v) => max(m, v.abs()));
+        expect(maxDark, lessThanOrEqualTo(1.0));
+      } finally {
+        await tmpDir.delete(recursive: true);
+      }
+    });
+
+    test('MixdownRenderer applies effect automation curves and TempoMarker MIDI durations', () async {
+      final tmpDir = await Directory.systemTemp.createTemp('fyrdaw_auto_tempo_');
+      try {
+        const sr = 44100;
+        final srcPath = await writeToneWav(
+          '${tmpDir.path}/pad.wav',
+          sr: sr,
+          sec: 1.2,
+          freqs: [220.0, 2000.0],
+        );
+
+        // Automated Chorus Mix ramping 0.0 at t=0 -> 1.0 at t=1.0s
+        final tr = Track(id: 'v', name: 'AutoVox', type: TrackType.audio)
+          ..effectsChain.add(DawEffect('Chorus', {'Mix': 0.0, 'Depth': 0.9, 'Rate': 0.7}))
+          ..automation['Chorus_Mix'] = [
+            AutomationPoint(0.0, 0.0),
+            AutomationPoint(80.0, 1.0),
+          ];
+        final clip = AudioClip(
+          id: 'c',
+          start: 0.0,
+          length: 100.0,
+          color: Colors.purple,
+          filePath: srcPath,
+        );
+        final outAuto = '${tmpDir.path}/auto.wav';
+        expect(
+          await MixdownRenderer.renderToWav(
+            tracks: [tr],
+            trackClips: {'v': [clip]},
+            outWavPath: outAuto,
+            bpm: 120,
+            masterLimiter: false,
+          ),
+          isTrue,
+        );
+        final dec = (await decodeWavFile(outAuto))!;
+
+        // Early region (Mix ~= 0) has virtually no L/R chorus spread; late region (Mix ~= 1) does!
+        double earlySpread = 0.0;
+        for (int i = 0; i < 2000; i++) {
+          earlySpread += (dec.left[i] - dec.right[i]).abs();
+        }
+        double lateSpread = 0.0;
+        for (int i = 36000; i < 42000; i++) {
+          lateSpread += (dec.left[i] - dec.right[i]).abs();
+        }
+        expect(earlySpread / 2000, lessThan(0.005));
+        expect(lateSpread / 6000, greaterThan(0.01));
+
+        // TempoMarker half-tempo (60 BPM) doubles MIDI note duration vs 120 BPM
+        final synthTrack = Track(id: 'syn', name: 'Synth', type: TrackType.midi)
+          ..instrumentIndex = 0;
+        final midiClip = MidiClip(
+          id: 'mc',
+          start: 0.0,
+          length: 100.0,
+          color: Colors.blue,
+          notes: [MidiNote(pitch: 60, start: 0.0, length: 50.0, velocity: 110)],
+        );
+        final outSlow = '${tmpDir.path}/slow.wav';
+        final outFast = '${tmpDir.path}/fast.wav';
+        expect(
+          await MixdownRenderer.renderToWav(
+            tracks: [synthTrack],
+            trackClips: {'syn': [midiClip]},
+            outWavPath: outSlow,
+            bpm: 120,
+            tempoMarkers: [TempoMarker(id: 'tm1', position: 0.0, bpm: 60.0)],
+          ),
+          isTrue,
+        );
+        expect(
+          await MixdownRenderer.renderToWav(
+            tracks: [synthTrack],
+            trackClips: {'syn': [midiClip]},
+            outWavPath: outFast,
+            bpm: 120,
+            tempoMarkers: [TempoMarker(id: 'tm2', position: 0.0, bpm: 180.0)],
+          ),
+          isTrue,
+        );
+        final decSlow = (await decodeWavFile(outSlow))!;
+        final decFast = (await decodeWavFile(outFast))!;
+        expect(decSlow.frameCount, greaterThan(decFast.frameCount));
+      } finally {
+        await tmpDir.delete(recursive: true);
+      }
+    });
+  });
 }

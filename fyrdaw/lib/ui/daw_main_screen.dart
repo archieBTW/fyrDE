@@ -1747,9 +1747,12 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
           trackClips: trackClips,
           outWavPath: outPath,
           bpm: bpm,
+          beatWidth: beatWidth,
           onlyTrack: t,
           masterVolume: 1.0,
           masterLimiter: false,
+          auxReverbMix: auxReverbMix,
+          auxDelayMix: auxDelayMix,
           tempoMarkers: tempoMarkers,
         );
         if (ok) anyExported = true;
@@ -1791,9 +1794,12 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
         trackClips: trackClips,
         outWavPath: outPath,
         bpm: bpm,
+        beatWidth: beatWidth,
         onlyTrack: track,
         masterVolume: 1.0,
         masterLimiter: false,
+        auxReverbMix: auxReverbMix,
+        auxDelayMix: auxDelayMix,
         tempoMarkers: tempoMarkers,
       );
       if (!ok) {
