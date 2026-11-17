@@ -53,7 +53,11 @@ class FyrJournalApp extends StatelessWidget {
 }
 
 class JournalHomePage extends StatefulWidget {
-  const JournalHomePage({super.key});
+  const JournalHomePage({super.key, this.storageDirOverride});
+
+  /// Forces a storage location; used by tests to avoid touching the real home
+  /// directory.
+  final Directory? storageDirOverride;
 
   @override
   State<JournalHomePage> createState() => _JournalHomePageState();
@@ -63,25 +67,103 @@ class _JournalHomePageState extends State<JournalHomePage> {
   List<DateTime> _days = [];
   final Map<String, String> _entries = {};
   bool _isLoading = true;
-  late final String _storagePath;
+  Directory? _storageDir;
+  String? _storageError;
 
   @override
   void initState() {
     super.initState();
-    _initStorage().then((_) => _loadDays());
+    _bootstrap();
   }
 
-  Future<void> _initStorage() async {
-    final directory = await getApplicationDocumentsDirectory();
-    final path = '${directory.path}/fyrjournal';
-    final dir = Directory(path);
-    if (!dir.existsSync()) {
-      dir.createSync(recursive: true);
+  Future<void> _bootstrap() async {
+    Directory? dir = widget.storageDirOverride;
+    if (dir == null) {
+      try {
+        dir = await _resolveStorageDir();
+      } catch (e, st) {
+        debugPrint('Journal: storage lookup failed: $e\n$st');
+      }
     }
-    _storagePath = path;
+
+    if (!mounted) return;
+
+    if (dir == null) {
+      setState(() {
+        _storageError = 'Unable to find a writable folder for journal entries.';
+        _isLoading = false;
+      });
+      return;
+    }
+
+    _storageDir = dir;
+    await _loadDays();
   }
 
-  void _loadDays() async {
+  /// Picks a writable directory for the journal files.
+  ///
+  /// [getApplicationDocumentsDirectory] throws a
+  /// [MissingPlatformDirectoryException] on Linux whenever the XDG user
+  /// directories are not configured (`~/.config/user-dirs.dirs` missing), which
+  /// is the norm on minimal sway/wlroots setups without a desktop portal.
+  /// Instead of crashing we probe a list of sensible locations and use the
+  /// first one we can actually write to.
+  static Future<Directory?> _resolveStorageDir() async {
+    final home = Platform.environment['HOME'] ?? '';
+    final dataHome = Platform.environment['XDG_DATA_HOME'] ??
+        (home.isEmpty ? null : '$home/.local/share');
+
+    final candidates = <Directory>[];
+
+    try {
+      final documents = await getApplicationDocumentsDirectory();
+      candidates.add(Directory('${documents.path}/fyrjournal'));
+    } catch (e) {
+      debugPrint('Journal: platform documents directory unavailable: $e');
+    }
+
+    if (home.isNotEmpty) {
+      // Older builds stored entries here; keep any existing journal in place.
+      candidates.add(Directory('$home/Documents/fyrjournal'));
+    }
+
+    if (dataHome != null && dataHome.isNotEmpty) {
+      candidates.add(Directory('$dataHome/fyrDE/fyrjournal'));
+      candidates.add(Directory('$dataHome/fyrjournal'));
+    }
+
+    // Prefer a directory that already holds entries ...
+    for (final dir in candidates) {
+      if (dir.existsSync() && _isWritable(dir)) return dir;
+    }
+    // ... otherwise use the first location we are allowed to create.
+    for (final dir in candidates) {
+      try {
+        dir.createSync(recursive: true);
+      } catch (e) {
+        debugPrint('Journal: cannot create ${dir.path}: $e');
+        continue;
+      }
+      if (_isWritable(dir)) return dir;
+    }
+    return null;
+  }
+
+  static bool _isWritable(Directory dir) {
+    try {
+      final probe = File('${dir.path}/.write-probe');
+      probe.writeAsStringSync('');
+      probe.deleteSync();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _loadDays() async {
+    final storagePath = _storageDir?.path;
+    if (storagePath == null) return;
+
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     List<DateTime> allDays = [];
@@ -92,9 +174,13 @@ class _JournalHomePageState extends State<JournalHomePage> {
 
     for (final day in allDays) {
       final fileName = DateFormat('yyyy-MM-dd').format(day);
-      final file = File('$_storagePath/$fileName.txt');
-      if (file.existsSync()) {
-        _entries[fileName] = file.readAsStringSync();
+      final file = File('$storagePath/$fileName.txt');
+      try {
+        if (file.existsSync()) {
+          _entries[fileName] = await file.readAsString();
+        }
+      } catch (e) {
+        debugPrint('Journal: cannot read ${file.path}: $e');
       }
     }
 
@@ -105,16 +191,29 @@ class _JournalHomePageState extends State<JournalHomePage> {
 
     _days.sort((a, b) => a.compareTo(b));
 
+    if (!mounted) return;
     setState(() {
       _isLoading = false;
     });
   }
 
-  Future<void> _saveEntry(DateTime day, String text) async {
+  /// Serializes disk writes so rapid keystrokes can never land out of order.
+  Future<void> _pendingWrite = Future<void>.value();
+
+  void _saveEntry(DateTime day, String text) {
+    final storagePath = _storageDir?.path;
+    if (storagePath == null) return;
+
     final fileName = DateFormat('yyyy-MM-dd').format(day);
-    final file = File('$_storagePath/$fileName.txt');
-    await file.writeAsString(text);
     _entries[fileName] = text;
+    _pendingWrite = _pendingWrite.then((_) async {
+      try {
+        await File('$storagePath/$fileName.txt')
+            .writeAsString(text, flush: true);
+      } catch (e) {
+        debugPrint('Journal: cannot save $fileName: $e');
+      }
+    });
   }
 
   @override
@@ -153,6 +252,28 @@ class _JournalHomePageState extends State<JournalHomePage> {
               ),
             ),
           ),
+          if (_storageError != null)
+            Container(
+              width: double.infinity,
+              color: Colors.amber.shade100,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded,
+                      size: 18, color: Colors.amber.shade900),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '${_storageError!} Entries will not be saved.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.amber.shade900,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           Expanded(
             child: ListView.builder(
               itemCount: _days.length + 1,

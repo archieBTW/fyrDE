@@ -7,4 +7,4 @@ Terminal=false
 Type=Application
 Categories=Office;Utility;
 Keywords=journal;notes;notebook;
-StartupWMClass=fyrjournal
+StartupWMClass=com.fyr.fyrjournal
