@@ -129,6 +129,7 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
   final Map<MidiNote, int> _dragInitialPitches = {};
   List<MidiNote> _activeDragNotes = [];
   double _dragTotalDy = 0.0;
+  double? _lastNoteLength;
   final Map<int, SoundHandle> _previewKeyHandles = {};
 
   Set<int>? get _activeScalePitchClasses {
@@ -205,6 +206,14 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
         }
       }
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant MidiEditorWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.clip.id != widget.clip.id) {
+      _lastNoteLength = null;
+    }
   }
 
   @override
@@ -292,7 +301,9 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
         ? _snapLocalX(realX, floorMode: true)
         : realX;
     double start = widget.clip.startOffset + localStart;
-    final double noteLen = 100.0 * 60.0 / widget.bpm;
+    final double defaultCellLen = _adaptiveStepAtLocalX(localStart);
+    final double noteLen = _lastNoteLength ?? defaultCellLen;
+    _lastNoteLength = noteLen;
     widget.onChangeStart?.call();
     if (localStart + noteLen > widget.clip.length) {
       final double barLen = noteLen * max(1, widget.timeSigTop);
@@ -315,34 +326,36 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
     );
     widget.onNotesChanged();
 
-    if (widget.track != null && SoLoud.instance.isInitialized) {
-      if (widget.track!.type == TrackType.sampler) {
-        var pad = widget.track!.samplerPads.values
-            .where((p) => p.midiNote == midiPitch)
-            .firstOrNull;
-        if (pad != null) {
-          pad.play(
-            _velocity.toDouble(),
-            widget.track!.bus,
-            widget.track!.volume,
-            widget.track!.pan,
+    try {
+      if (widget.track != null && SoLoud.instance.isInitialized) {
+        if (widget.track!.type == TrackType.sampler) {
+          var pad = widget.track!.samplerPads.values
+              .where((p) => p.midiNote == midiPitch)
+              .firstOrNull;
+          if (pad != null) {
+            pad.play(
+              _velocity.toDouble(),
+              widget.track!.bus,
+              widget.track!.volume,
+              widget.track!.pan,
+            );
+          }
+        } else {
+          final handle = triggerInstrumentNote(
+            widget.track!,
+            midiPitch,
+            _velocity,
           );
-        }
-      } else {
-        final handle = triggerInstrumentNote(
-          widget.track!,
-          midiPitch,
-          _velocity,
-        );
-        if (handle != null) {
-          final preset = getInstrumentPreset(widget.track!.instrumentIndex);
-          final int dur = max((60000 / widget.bpm).round(), 350);
-          Timer(Duration(milliseconds: dur), () {
-            releaseInstrumentNote(handle, releaseMs: preset.releaseMs);
-          });
+          if (handle != null) {
+            final preset = getInstrumentPreset(widget.track!.instrumentIndex);
+            final int dur = max((60000 / widget.bpm).round(), 350);
+            Timer(Duration(milliseconds: dur), () {
+              releaseInstrumentNote(handle, releaseMs: preset.releaseMs);
+            });
+          }
         }
       }
-    }
+    } catch (_) {}
   }
 
   void _showNoteMenu(Offset pos, MidiNote note) async {
@@ -1661,38 +1674,50 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                                             right: 0,
                                             top: 0,
                                             bottom: 0,
-                                            width: 10,
+                                            width: note.length * widget.zoomX <= 22.0
+                                                ? max(4.0, note.length * widget.zoomX * 0.45)
+                                                : 10.0,
                                             child: MouseRegion(
                                               cursor: SystemMouseCursors
                                                   .resizeLeftRight,
                                               child: GestureDetector(
-                                                onPanStart: (d) => widget.onChangeStart?.call(),
-                                                onPanUpdate: (d) => setState(
-                                                  () {
-                                                    List<MidiNote> targets =
-                                                        widget.selectedMidiNotes
-                                                            .contains(note)
-                                                        ? widget
-                                                              .selectedMidiNotes
-                                                        : [note];
-                                                    for (var n in targets) {
-                                                      n.length +=
-                                                          (d.delta.dx /
-                                                          widget.zoomX);
-                                                      if (n.length < 10) {
-                                                        n.length = 10;
+                                                behavior:
+                                                    HitTestBehavior.opaque,
+                                                onHorizontalDragStart: (d) =>
+                                                    widget.onChangeStart?.call(),
+                                                onHorizontalDragUpdate: (d) =>
+                                                    setState(() {
+                                                      List<MidiNote> targets =
+                                                          widget
+                                                                  .selectedMidiNotes
+                                                                  .contains(
+                                                                    note,
+                                                                  )
+                                                              ? widget
+                                                                    .selectedMidiNotes
+                                                              : [note];
+                                                      for (var n in targets) {
+                                                        n.length = max(
+                                                          2.0,
+                                                          n.length +
+                                                              (d.delta.dx /
+                                                                  widget.zoomX),
+                                                        );
                                                       }
-                                                    }
-                                                  },
-                                                ),
-                                                onPanEnd: (d) => setState(() {
+                                                      if (targets.isNotEmpty) {
+                                                        _lastNoteLength =
+                                                            targets.last.length;
+                                                      }
+                                                    }),
+                                                onHorizontalDragEnd: (d) =>
+                                                    setState(() {
+                                                  List<MidiNote> targets =
+                                                      widget.selectedMidiNotes
+                                                          .contains(note)
+                                                      ? widget
+                                                            .selectedMidiNotes
+                                                      : [note];
                                                   if (widget.snapToGrid) {
-                                                    List<MidiNote> targets =
-                                                        widget.selectedMidiNotes
-                                                            .contains(note)
-                                                        ? widget
-                                                              .selectedMidiNotes
-                                                        : [note];
                                                     for (var n in targets) {
                                                       final step =
                                                           _adaptiveStepAtLocalX(
@@ -1701,13 +1726,19 @@ class _MidiEditorWidgetState extends State<MidiEditorWidget> {
                                                                     .clip
                                                                     .startOffset,
                                                           );
+                                                      final int steps = max(
+                                                        1,
+                                                        (n.length / step).round(),
+                                                      );
                                                       n.length = max(
-                                                        10.0,
-                                                        (n.length / step)
-                                                                .round() *
-                                                            step,
+                                                        2.0,
+                                                        steps * step,
                                                       );
                                                     }
+                                                  }
+                                                  if (targets.isNotEmpty) {
+                                                    _lastNoteLength =
+                                                        targets.last.length;
                                                   }
                                                   widget.onNotesChanged();
                                                 }),

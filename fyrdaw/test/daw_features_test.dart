@@ -24,6 +24,7 @@ import 'package:fyrdaw/ui/meters.dart';
 import 'package:fyrdaw/ui/midi_editor.dart';
 import 'package:fyrdaw/ui/mixer_console.dart';
 import 'package:fyrdaw/ui/musical_keyboard_bar.dart';
+import 'package:fyrdaw/ui/painters.dart';
 import 'package:fyrdaw/ui/parametric_eq_widget.dart';
 import 'package:fyrdaw/ui/sample_browser_drawer.dart';
 import 'package:fyrdaw/ui/sampler_editor.dart';
@@ -1072,7 +1073,7 @@ void main() {
   });
 
   group('Expanded Virtual Instruments & Realistic Drum Kits', () {
-    test('All 31 kInstrumentPresets and 3 kDrumKits reference valid stereo WAV assets', () async {
+    test('All 31 kInstrumentPresets and 8 kDrumKits reference valid stereo WAV assets', () async {
       expect(kInstrumentPresets.length, 31);
       for (int i = 0; i < kInstrumentPresets.length; i++) {
         final preset = getInstrumentPreset(i);
@@ -1086,7 +1087,9 @@ void main() {
         expect(wav.frameCount, 220500);
       }
 
-      expect(kDrumKits.length, 3);
+      expect(kDrumKits.length, 8);
+      expect(findDrumKitById('natural_power_toms'), isNotNull);
+      expect(findDrumKitById('christmas_holiday'), isNotNull);
       for (final kit in kDrumKits) {
         expect(kit.pads.isNotEmpty, isTrue);
         for (final spec in kit.pads) {
@@ -1099,6 +1102,63 @@ void main() {
           expect(wav.frameCount, greaterThan(1000));
         }
       }
+    });
+
+    test('Christmas Holiday and Natural Power-Tom kits load cleanly onto 16 pads and render via MixdownRenderer', () async {
+      final dir = await Directory.systemTemp.createTemp('fyr_new_kits_');
+      addTearDown(() => dir.deleteSync(recursive: true));
+
+      final natTrack = Track(id: 'nat', name: 'Natural Toms', type: TrackType.sampler);
+      final natKit = findDrumKitById('natural_power_toms')!;
+      await applyDrumKitToPads(natTrack.samplerPads, natKit);
+      expect(natTrack.samplerPads[5]?.name, '16" Floor Tom');
+      expect(natTrack.samplerPads[7]?.name, '14" Low Tom');
+      expect(natTrack.samplerPads[9]?.name, '12" Mid Tom');
+      expect(natTrack.samplerPads[11]?.name, '10" High Tom');
+      expect(natTrack.samplerPads[14]?.name, '8" Rack Tom');
+
+      final xmasTrack = Track(id: 'xmas', name: 'Holiday', type: TrackType.sampler);
+      final xmasKit = findDrumKitById('christmas_holiday')!;
+      await applyDrumKitToPads(xmasTrack.samplerPads, xmasKit);
+      expect(xmasTrack.samplerPads[4]?.name, 'Sleigh Bells');
+      expect(xmasTrack.samplerPads[12]?.name, 'Chime Tree');
+      expect(xmasTrack.samplerPads[11]?.name, 'Music Box C6');
+
+      final natClip = MidiClip(
+        id: 'nc1',
+        start: 0.0,
+        length: 100.0,
+        color: Colors.brown,
+        notes: [
+          MidiNote(pitch: 41, start: 0.0, length: 25.0, velocity: 120),
+          MidiNote(pitch: 45, start: 50.0, length: 25.0, velocity: 115),
+        ],
+      );
+      final xmasClip = MidiClip(
+        id: 'xc1',
+        start: 0.0,
+        length: 100.0,
+        color: Colors.red,
+        notes: [
+          MidiNote(pitch: 40, start: 0.0, length: 25.0, velocity: 120),
+          MidiNote(pitch: 48, start: 50.0, length: 25.0, velocity: 110),
+        ],
+      );
+
+      final outWav = '${dir.path}/holiday_toms.wav';
+      final ok = await MixdownRenderer.renderToWav(
+        tracks: [natTrack, xmasTrack],
+        trackClips: {
+          'nat': [natClip],
+          'xmas': [xmasClip],
+        },
+        bpm: 120,
+        outWavPath: outWav,
+      );
+      expect(ok, isTrue);
+      final decoded = decodeWavBytes(await File(outWav).readAsBytes());
+      expect(decoded, isNotNull);
+      expect(decoded!.frameCount, greaterThan(44100));
     });
 
     test('MixdownRenderer renders new 808 Boom Sub, Nylon Guitar, and bundled 808 Trap Kit cleanly', () async {
@@ -4162,6 +4222,168 @@ Default Source: alsa_input.usb-Focusrite_Scarlett_Solo_USB_Y7PE74V22E69FD-00.Dir
       } finally {
         await tmpDir.delete(recursive: true);
       }
+    });
+  });
+
+  group('MIDI Note Sizing Persistence & Deep Timeline Zoom-Out', () {
+    testWidgets('Double-clicking adds cell-sized note by default and inherits expanded/collapsed previous note size', (tester) async {
+      final track = Track(id: 'm1', name: 'Synth', type: TrackType.midi);
+      final clip = MidiClip(
+        id: 'mc_len',
+        start: 0.0,
+        length: 400.0,
+        color: Colors.cyan,
+        notes: [],
+      );
+      List<MidiNote> selected = [];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 1100,
+              height: 520,
+              child: StatefulBuilder(
+                builder: (context, setModalState) => MidiEditorWidget(
+                  track: track,
+                  clip: clip,
+                  snapToGrid: true,
+                  snapResolution: 12.5,
+                  zoomX: 1.8, // 50 * 1.8 = 90px/beat -> 1/16 cell = 12.5 units
+                  bpm: 120,
+                  timeSigTop: 4,
+                  selectedMidiNotes: selected,
+                  onSelectionChanged: (s) => setModalState(() => selected = s),
+                  onNotesChanged: () => setModalState(() {}),
+                  onZoomIn: () {},
+                  onZoomOut: () {},
+                  playheadPosition: 0.0,
+                  onPlayheadChanged: (_) {},
+                  midiDevices: const [],
+                  onCopy: () {},
+                  onPaste: () {},
+                  onInstrumentDialogRequested: () {},
+                  onMidiInputDialogRequested: () {},
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Locate visible piano roll area directly below Key('midi_editor_ruler')
+      final rulerFinder = find.byKey(const Key('midi_editor_ruler'));
+      expect(rulerFinder, findsOneWidget);
+      final rulerRect = tester.getRect(rulerFinder);
+
+      // Helper to double-tap a specific visible offset below the MIDI ruler
+      Future<void> doubleTapAt(Offset offsetBelowRuler) async {
+        final global =
+            Offset(rulerRect.left, rulerRect.bottom) + offsetBelowRuler;
+        await tester.tapAt(global);
+        await tester.pump(const Duration(milliseconds: 50));
+        await tester.tapAt(global);
+        await tester.pump(const Duration(milliseconds: 300));
+      }
+
+      // 1. First double-click: default size equals the filled 1/16 cell (12.5 units)
+      await doubleTapAt(const Offset(10, 60));
+      expect(clip.notes.length, 1);
+      expect(clip.notes[0].length, closeTo(12.5, 1e-4));
+
+      // 2. Expand the placed note by dragging its right resize edge right by 90 px
+      final noteFinder = find.byKey(ObjectKey(clip.notes[0]));
+      expect(noteFinder, findsOneWidget);
+      final noteRect = tester.getRect(noteFinder);
+      await tester.dragFrom(
+        Offset(noteRect.right - 5, noteRect.center.dy),
+        const Offset(90.0, 0.0),
+      );
+      await tester.pumpAndSettle();
+      final double expandedLen = clip.notes[0].length;
+      expect(expandedLen, greaterThan(20.0));
+
+      // 3. Second double-click: inherits the expanded previous note size!
+      await doubleTapAt(const Offset(160, 100));
+      expect(clip.notes.length, 2);
+      expect(clip.notes[1].length, closeTo(expandedLen, 1e-4));
+
+      // 4. Collapse note 2 down by dragging its right edge left
+      final note2Finder = find.byKey(ObjectKey(clip.notes[1]));
+      final note2Rect = tester.getRect(note2Finder);
+      await tester.dragFrom(
+        Offset(note2Rect.right - 5, note2Rect.center.dy),
+        const Offset(-67.5, 0.0),
+      );
+      await tester.pumpAndSettle();
+      final double collapsedLen = clip.notes[1].length;
+      expect(collapsedLen, lessThan(expandedLen));
+
+      // 5. Third double-click: inherits the collapsed previous note size!
+      await doubleTapAt(const Offset(300, 80));
+      expect(clip.notes.length, 3);
+      expect(clip.notes[2].length, closeTo(collapsedLen, 1e-4));
+    });
+
+    testWidgets('Timeline zooms out past prior 0.2 limit down to wide overview without ruler/overflow errors', (tester) async {
+      await tester.pumpWidget(const DawApp());
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final zoomOutBtn = find.byTooltip('Zoom Out (Ctrl-)');
+      expect(zoomOutBtn, findsOneWidget);
+
+      // Zoom out 15 steps from 1.0 -> ~0.035 (far below old 0.2 clamp)
+      for (int i = 0; i < 15; i++) {
+        await tester.tap(zoomOutBtn);
+      }
+      await tester.pump();
+
+      final rulerFinder = find.byWidgetPredicate(
+        (w) => w is CustomPaint && w.painter is RulerPainter,
+      );
+      expect(rulerFinder, findsOneWidget);
+      final ruler = tester.widget<CustomPaint>(rulerFinder).painter as RulerPainter;
+      expect(ruler.zoomX, lessThan(0.1));
+      expect(ruler.zoomX, greaterThanOrEqualTo(0.02));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('ClipWaveformPainter renders seamlessly at normal and zoomed-out widths without gaps or overflow', (tester) async {
+      final peaks = List<double>.generate(200, (i) => 0.2 + 0.7 * sin(i * 0.2).abs());
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Column(
+              children: [
+                SizedBox(
+                  width: 900,
+                  height: 70,
+                  child: CustomPaint(
+                    painter: ClipWaveformPainter(
+                      waveformData: peaks,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: 36,
+                  height: 70,
+                  child: CustomPaint(
+                    painter: ClipWaveformPainter(
+                      waveformData: peaks,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.byType(CustomPaint), findsWidgets);
+      expect(tester.takeException(), isNull);
     });
   });
 }

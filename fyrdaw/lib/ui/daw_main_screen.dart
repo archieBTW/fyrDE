@@ -3838,8 +3838,22 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
     }
   }
 
-  void _zoomIn() => setState(() => _zoomX = min(5.0, _zoomX + 0.2));
-  void _zoomOut() => setState(() => _zoomX = max(0.2, _zoomX - 0.2));
+  static const double kMinTimelineZoom = 0.02;
+  static const double kMaxTimelineZoom = 8.0;
+
+  void _zoomIn() => setState(() {
+    _zoomX = min(
+      kMaxTimelineZoom,
+      (_zoomX * 1.25).clamp(kMinTimelineZoom, kMaxTimelineZoom),
+    );
+  });
+
+  void _zoomOut() => setState(() {
+    _zoomX = max(
+      kMinTimelineZoom,
+      (_zoomX / 1.25).clamp(kMinTimelineZoom, kMaxTimelineZoom),
+    );
+  });
 
   void _changeTempo(int newBpm) {
     if (newBpm == bpm) return;
@@ -7912,74 +7926,36 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
             clipBehavior: Clip.none,
             children: [
               if (clip is AudioClip)
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    if (clip.waveformData != null &&
-                        clip.waveformData!.isNotEmpty) {
-                      return ClipRect(
-                        child: Stack(
-                          children: [
-                            Positioned(
-                              left: -clip.startOffset * _zoomX,
-                              width: clip.originalLength * _zoomX,
-                              top: 0,
-                              bottom: 0,
-                              child: Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceEvenly,
-                                crossAxisAlignment: CrossAxisAlignment.center,
-                                children: clip.waveformData!
-                                    .map(
-                                      (amp) => Container(
-                                        width: max(
-                                          1.0,
-                                          (clip.originalLength * _zoomX) /
-                                                  clip.waveformData!.length -
-                                              0.5,
-                                        ),
-                                        height: max(
-                                          2.0,
-                                          amp * constraints.maxHeight,
-                                        ),
-                                        color: textMuted,
-                                      ),
-                                    )
-                                    .toList(),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    }
-                    return ClipRect(
-                      child: Stack(
-                        children: [
-                          Positioned(
-                            left: -clip.startOffset * _zoomX,
-                            width: clip.originalLength * _zoomX,
-                            top: 0,
-                            bottom: 0,
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                              children: List.generate(
-                                ((clip.originalLength * _zoomX) / 6).floor(),
-                                (i) {
-                                  final rnd = Random(
-                                    clip.filePath.hashCode + i,
-                                  ).nextDouble();
-                                  return Container(
-                                    width: 2,
-                                    height: 4.0 + rnd * 24.0,
-                                    color: textMuted,
-                                  );
-                                },
-                              ),
-                            ),
+                ClipRect(
+                  child: Stack(
+                    children: [
+                      Positioned(
+                        left: -clip.startOffset * _zoomX,
+                        width: clip.originalLength * _zoomX,
+                        top: 0,
+                        bottom: 0,
+                        child: CustomPaint(
+                          painter: ClipWaveformPainter(
+                            waveformData: (clip.waveformData != null &&
+                                    clip.waveformData!.isNotEmpty)
+                                ? clip.waveformData!
+                                : List<double>.generate(
+                                    64,
+                                    (i) =>
+                                        0.15 +
+                                        0.55 *
+                                            Random(clip.filePath.hashCode + i)
+                                                .nextDouble(),
+                                  ),
+                            color: (clip.waveformData != null &&
+                                    clip.waveformData!.isNotEmpty)
+                                ? textMain
+                                : textMuted,
                           ),
-                        ],
+                        ),
                       ),
-                    );
-                  },
+                    ],
+                  ),
                 ),
               if (clip is MidiClip)
                 Positioned.fill(
@@ -9393,7 +9369,7 @@ class _DawMainScreenState extends State<DawMainScreen> with WindowListener {
                 ),
                 onZoomOut: () => setState(
                   () => _midiZoomMultiplier = max(
-                    0.2,
+                    0.05,
                     _midiZoomMultiplier / 1.35,
                   ),
                 ),

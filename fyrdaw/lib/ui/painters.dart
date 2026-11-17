@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:fyrdaw/main.dart';
 import 'package:fyrdaw/models/automation_point.dart';
@@ -77,47 +78,73 @@ class RulerPainter extends CustomPainter {
       ..strokeWidth = 1;
     final textPainter = TextPainter(textDirection: TextDirection.ltr);
 
-    double beatW = 100.0 * 60.0 / bpm * zoomX;
-    if (beatW >= 5) {
-      int beatNum = 0;
-      int measure = 1;
-      int beatInMeasure = 0;
-      double posPx = 0.0;
-      while (posPx < size.width) {
-        final double timelinePos = posPx / zoomX;
-        final meter = TempoMarker.effectiveMeterAt(
-          timelinePos,
-          tempoMarkers,
-          timeSigTop,
-          4,
-        );
-        final int activeTop = meter.numerator;
-        final double localBpm = TempoMarker.effectiveBpmAt(
-          timelinePos,
-          tempoMarkers,
-          bpm.toDouble(),
-        );
-        final double localBeatW = (100.0 * 60.0 / localBpm * zoomX).clamp(4.0, 2000.0);
-        final bool isMeasure = beatInMeasure == 0;
-        canvas.drawLine(
-          Offset(posPx, isMeasure ? 24 : 32),
-          Offset(posPx, 40),
-          isMeasure ? thickPaint : thinPaint,
-        );
-        if (isMeasure) {
+    final double beatW = 100.0 * 60.0 / bpm * zoomX;
+    final double measureApproxW = beatW * max(1, timeSigTop);
+    int measureLabelStep = 1;
+    if (measureApproxW < 1.8) {
+      measureLabelStep = 32;
+    } else if (measureApproxW < 3.6) {
+      measureLabelStep = 16;
+    } else if (measureApproxW < 7.2) {
+      measureLabelStep = 8;
+    } else if (measureApproxW < 14.5) {
+      measureLabelStep = 4;
+    } else if (measureApproxW < 28.0) {
+      measureLabelStep = 2;
+    }
+    final int measureTickStep = measureApproxW < 3.5 ? max(1, measureLabelStep ~/ 2) : 1;
+    final bool drawBeatTicks = beatW >= 6.0;
+
+    int beatNum = 0;
+    int measure = 1;
+    int beatInMeasure = 0;
+    double posPx = 0.0;
+    while (posPx < size.width) {
+      final double timelinePos = posPx / zoomX;
+      final meter = TempoMarker.effectiveMeterAt(
+        timelinePos,
+        tempoMarkers,
+        timeSigTop,
+        4,
+      );
+      final int activeTop = max(1, meter.numerator);
+      final double localBpm = TempoMarker.effectiveBpmAt(
+        timelinePos,
+        tempoMarkers,
+        bpm.toDouble(),
+      );
+      final double localBeatW =
+          (100.0 * 60.0 / localBpm * zoomX).clamp(0.4, 2000.0);
+      final bool isMeasure = beatInMeasure == 0;
+      if (isMeasure) {
+        final bool drawTick = ((measure - 1) % measureTickStep) == 0;
+        if (drawTick) {
+          canvas.drawLine(
+            Offset(posPx, 24),
+            Offset(posPx, 40),
+            thickPaint,
+          );
+        }
+        if (((measure - 1) % measureLabelStep) == 0) {
           textPainter.text = TextSpan(
             text: '$measure',
             style: TextStyle(color: textMuted, fontSize: 10),
           );
           textPainter.layout();
           textPainter.paint(canvas, Offset(posPx + 2, 20));
-          measure++;
         }
-        beatNum++;
-        beatInMeasure = (beatInMeasure + 1) % activeTop;
-        posPx += localBeatW;
-        if (beatNum > 5000) break;
+        measure++;
+      } else if (drawBeatTicks) {
+        canvas.drawLine(
+          Offset(posPx, 32),
+          Offset(posPx, 40),
+          thinPaint,
+        );
       }
+      beatNum++;
+      beatInMeasure = (beatInMeasure + 1) % activeTop;
+      posPx += localBeatW;
+      if (beatNum > 25000) break;
     }
 
     for (final m in markers) {
@@ -619,4 +646,100 @@ class LoopNotchesPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant LoopNotchesPainter old) =>
       old.clipLength != clipLength || old.originalLength != originalLength;
+}
+
+/// Renders a continuous, gap-free audio clip waveform across all zoom levels,
+/// switching cleanly between a smooth mirrored envelope path when zoomed in/normal
+/// and peak-binned pixel columns when zoomed far out.
+class ClipWaveformPainter extends CustomPainter {
+  final List<double> waveformData;
+  final Color color;
+
+  ClipWaveformPainter({
+    required this.waveformData,
+    required this.color,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.width <= 0 || size.height <= 0) return;
+    final double midY = size.height * 0.5;
+    final double halfMax = max(1.0, size.height * 0.46);
+
+    final centerPaint = Paint()
+      ..color = color.withValues(alpha: 0.35)
+      ..strokeWidth = 0.8;
+    canvas.drawLine(Offset(0, midY), Offset(size.width, midY), centerPaint);
+
+    if (waveformData.isEmpty) return;
+
+    final int n = waveformData.length;
+    final double stepPx = size.width / n;
+
+    if (stepPx >= 1.5) {
+      // Smooth continuous mirrored waveform envelope at normal & zoomed-in sizes
+      final topPath = Path();
+      final botPoints = <Offset>[];
+      for (int i = 0; i < n; i++) {
+        final double x = n == 1 ? size.width * 0.5 : (i / (n - 1)) * size.width;
+        final double amp = waveformData[i].clamp(0.0, 1.0);
+        final double h = max(1.0, amp * halfMax);
+        final double topY = midY - h;
+        final double botY = midY + h;
+        if (i == 0) {
+          topPath.moveTo(x, topY);
+        } else {
+          topPath.lineTo(x, topY);
+        }
+        botPoints.add(Offset(x, botY));
+      }
+      final fullPath = Path.from(topPath);
+      for (int i = botPoints.length - 1; i >= 0; i--) {
+        fullPath.lineTo(botPoints[i].dx, botPoints[i].dy);
+      }
+      fullPath.close();
+
+      canvas.drawPath(
+        fullPath,
+        Paint()
+          ..color = color.withValues(alpha: 0.58)
+          ..style = PaintingStyle.fill,
+      );
+      final outline = Paint()
+        ..color = color.withValues(alpha: 0.9)
+        ..strokeWidth = 1.0
+        ..style = PaintingStyle.stroke;
+      canvas.drawPath(topPath, outline);
+      final botPath = Path();
+      for (int i = 0; i < botPoints.length; i++) {
+        if (i == 0) {
+          botPath.moveTo(botPoints[i].dx, botPoints[i].dy);
+        } else {
+          botPath.lineTo(botPoints[i].dx, botPoints[i].dy);
+        }
+      }
+      canvas.drawPath(botPath, outline);
+    } else {
+      // Peak-binned pixel columns when zoomed far out (< 1.5 px per sample)
+      final int cols = max(1, size.width.floor());
+      final barPaint = Paint()
+        ..color = color.withValues(alpha: 0.78)
+        ..strokeWidth = 1.1;
+      for (int px = 0; px < cols; px++) {
+        final int start = (px * n / cols).floor();
+        final int end = min(n, max(start + 1, ((px + 1) * n / cols).ceil()));
+        double peak = 0.0;
+        for (int j = start; j < end; j++) {
+          if (waveformData[j] > peak) peak = waveformData[j];
+        }
+        final double h = max(1.0, peak.clamp(0.0, 1.0) * halfMax);
+        final double x = px + 0.5;
+        canvas.drawLine(Offset(x, midY - h), Offset(x, midY + h), barPaint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant ClipWaveformPainter old) =>
+      old.waveformData != waveformData || old.color != color;
 }
