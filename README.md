@@ -59,6 +59,7 @@ The main modifier key (`$mod`) is the **Super/Windows** key.
 | Show Workspaces Overview | `Super + W` |
 | Show Cheatsheet (**fyrHelp**) | `Super + Ctrl` |
 | Open Emoji Picker (**fyrEmoji**) | `Super + .` |
+| Open Task Manager (**fyrMonitor**) | `Ctrl + Shift + Esc` |
 | Open Terminal (**fyrTerm**) | `Super + T` |
 | Open File Manager (**fyrFiles**) | `Super + F` |
 | Toggle Floating Mode | `Super + M` |
@@ -130,6 +131,8 @@ sway
   ![AV](screenshots/av.png)
 - **fyrConnect** (`fyrPhone`): Mobile device manager and integration tool.
   ![Phone](screenshots/phone.png)
+- **Task Manager** (`fyrMonitor`): Windows-style open-apps, processes, and
+  performance monitor (CPU, memory & swap, disk and network charts).
 - **fyr_fetch**: A custom system information tool (like neofetch).
 
 ### Productivity & Media

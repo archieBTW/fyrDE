@@ -174,6 +174,7 @@ class _HelpScreenState extends State<HelpScreen> {
                       _buildShortcut('Super + Tab', 'Open Overview (fyroverview)'),
                       _buildShortcut('Super + Ctrl', 'Show This Cheatsheet (fyrhelp)'),
                       _buildShortcut('Super + .', 'Open Emoji Picker (fyremoji)'),
+                      _buildShortcut('Ctrl + Shift + Esc', 'Open Task Manager (fyrmonitor)'),
                       _buildShortcut('Super + V', 'Split Vertical'),
                       _buildShortcut('Super + H', 'Split Horizontal'),
                       _buildShortcut('Super + 1..0', 'Switch to Workspace 1..10'),

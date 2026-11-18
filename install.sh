@@ -22,7 +22,7 @@ WIDTH=$(echo $RES | cut -d'x' -f1)
 HEIGHT=$(echo $RES | cut -d'x' -f2)
 echo "Detected resolution: ${WIDTH}x${HEIGHT}"
 
-flutter_apps=("fyrdock" "fyroverview" "fyrwindowoverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrstore" "fyrvirt" "fyrtext" "fyrdaw" "fyrphone" "fyrcalculator" "fyrcode" "fyrvideo" "fyrmusic" "fyrphotos" "fyrcamera" "fyrbrowser" "fyrjournal" "fyrcalender" "fyrclock" "fyrtorrent" "fyrapi" "fyrgraphics" "fyremu" "fyrdirector" "fyrdisks")
+flutter_apps=("fyrdock" "fyroverview" "fyrwindowoverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrstore" "fyrvirt" "fyrtext" "fyrdaw" "fyrphone" "fyrcalculator" "fyrcode" "fyrvideo" "fyrmusic" "fyrphotos" "fyrcamera" "fyrbrowser" "fyrjournal" "fyrcalender" "fyrclock" "fyrtorrent" "fyrapi" "fyrgraphics" "fyremu" "fyrdirector" "fyrdisks" "fyrmonitor")
 
 # --- Progress Tracking & Terminal Management ---
 CURRENT_STEP=0
@@ -944,6 +944,25 @@ MimeType=application/x-iso9660-image;application/x-raw-disk-image;inode/blockdev
 Keywords=disk;partition;usb;iso;flash;format;luks;encrypt;drive;
 EOF
             ;;
+        "fyrmonitor")
+            sudo ln -sf /opt/fyrmonitor/fyrmonitor /usr/local/bin/fyrmonitor
+            if [ -f "./fyrmonitor/assets/icons/fyrmonitor.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrmonitor/assets/icons/fyrmonitor.png /usr/share/icons/hicolor/512x512/apps/fyrmonitor.png
+            fi
+            sudo tee /usr/share/applications/fyrmonitor.desktop > /dev/null <<'EOF'
+[Desktop Entry]
+Name=fyrMonitor
+GenericName=Task Manager
+Comment=Monitor open windows, running processes, and system performance
+Exec=/usr/local/bin/fyrmonitor
+Icon=fyrmonitor
+Terminal=false
+Type=Application
+Categories=System;Monitor;Utility;
+Keywords=task manager;processes;monitor;system;cpu;memory;performance;activity;
+EOF
+            ;;
         "fyrdock"|"fyrtaskbar"|"fyroverview"|"fyrwindowoverview"|"fyrsearch"|"fyrhelp"|"fyremoji")
             sudo ln -sf "/opt/$app/$app" "/usr/local/bin/$app"
             ;;
@@ -1318,6 +1337,46 @@ fi
 /opt/fyremoji/fyremoji --show >/dev/null 2>&1 &
 EOF
     chmod +x ~/.config/fyr/emoji_toggle.sh
+
+    # Task Manager (fyrMonitor) Toggle Script
+    cat << 'EOF' > ~/.config/fyr/monitor_toggle.sh
+#!/bin/bash
+# Ctrl+Shift+Esc: focus the existing fyrMonitor window, otherwise launch it.
+#
+# flock keeps a double keypress (or a double binding) from spawning two windows.
+mkdir -p "$HOME/.config/fyr"
+exec 9>"$HOME/.config/fyr/.monitor_toggle.lock"
+flock -n 9 2>/dev/null || exit 0
+
+MONITOR_BIN=""
+for candidate in "/usr/local/bin/fyrmonitor" "/opt/fyrmonitor/fyrmonitor" "$(command -v fyrmonitor 2>/dev/null)"; do
+    if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+        MONITOR_BIN="$candidate"
+        break
+    fi
+done
+
+CON_ID=""
+if command -v swaymsg &> /dev/null && command -v jq &> /dev/null; then
+    CON_ID=$(swaymsg -t get_tree 2>/dev/null | jq -r '
+        .. | objects
+        | select((.app_id? // "") | test("fyrmonitor"))
+        | .id' | head -n 1)
+fi
+
+if [ -n "$CON_ID" ]; then
+    swaymsg "[con_id=$CON_ID] focus" >/dev/null 2>&1
+    exit 0
+fi
+
+if [ -z "$MONITOR_BIN" ]; then
+    notify-send "fyrMonitor" "Not installed. Run ./install.sh -a fyrmonitor" 2>/dev/null || true
+    exit 1
+fi
+
+"$MONITOR_BIN" >/dev/null 2>&1 &
+EOF
+    chmod +x ~/.config/fyr/monitor_toggle.sh
 
     # Help Toggle Script
     cat << 'EOF' > ~/.config/fyr/help_toggle.sh

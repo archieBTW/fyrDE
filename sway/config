@@ -171,10 +171,20 @@ layer_effects "fyremoji" blur enable; corner_radius 16
 bindsym $mod+period exec ~/.config/fyr/emoji_toggle.sh
 
 
+# ==========================================
+# FyrMonitor Sway Configuration
+# ==========================================
+# Task Manager: focus the existing window or launch it (Ctrl + Shift + Esc).
+# Both the keysym and the modifier spelling are bound; monitor_toggle.sh is
+# flock-guarded, so an accidental double match can never open two windows.
+bindsym Control_L+Shift_L+Escape exec ~/.config/fyr/monitor_toggle.sh
+bindsym Ctrl+Shift+Escape exec ~/.config/fyr/monitor_toggle.sh
+
+
 include ~/.config/sway/floating.conf
 # Keep Fyr overlay/panel surfaces borderless and native Flutter CSD apps free of duplicate SSD titlebars
 for_window [app_id="^(fyrtaskbar|fyrdock|fyrdesktop|fyrsearch|launcher|fyroverview|fyrwindowoverview|fyrhelp|fyremoji)$"] border none
-for_window [app_id="^(com\.fyr\.(browser|journal)|(com\.example\.)?(fyrapi|fyrav|fyrbrowser|fyrcalculator|fyrcalender|fyrcamera|fyrclock|fyrcode|fyrdaw|fyrfiles|fyrjournal|fyrmusic|fyrphone|fyrphotos|fyrsettings|fyrstore|fyrterm|fyrtext|fyrtorrent|fyrvideo|fyrvirt))$"] border pixel 4
+for_window [app_id="^(com\.fyr\.(browser|journal)|(com\.example\.)?(fyrapi|fyrav|fyrbrowser|fyrcalculator|fyrcalender|fyrcamera|fyrclock|fyrcode|fyrdaw|fyrfiles|fyrjournal|fyrmonitor|fyrmusic|fyrphone|fyrphotos|fyrsettings|fyrstore|fyrterm|fyrtext|fyrtorrent|fyrvideo|fyrvirt))$"] border pixel 4
 
 # User-managed settings (preserved across updates)
 include ~/.config/sway/conf.d/*.conf

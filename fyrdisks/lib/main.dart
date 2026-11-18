@@ -12,6 +12,7 @@ import 'services/sudo_auth.dart';
 import 'widgets/disk_dialogs.dart';
 import 'widgets/iso_flasher_view.dart';
 import 'widgets/resizable_window.dart';
+import 'widgets/traffic_lights.dart';
 
 String? _initialArgImage;
 String? _initialArgDisk;
@@ -535,6 +536,8 @@ class _DisksShellState extends State<DisksShell> {
         ),
         child: Row(
           children: [
+            const TrafficLights(),
+            const SizedBox(width: 14),
             Icon(Icons.storage_rounded, color: FyrTheme.accentColor, size: 20),
             const SizedBox(width: 10),
             Text(
@@ -550,16 +553,6 @@ class _DisksShellState extends State<DisksShell> {
               tooltip: 'Refresh Drives',
               icon: Icon(Icons.refresh, size: 18, color: FyrTheme.textColorMuted),
               onPressed: _loading || _busy ? null : () => _refreshAll(probeFreeSpace: true),
-            ),
-            IconButton(
-              tooltip: 'Minimize',
-              icon: Icon(Icons.minimize, size: 16, color: FyrTheme.textColorMuted),
-              onPressed: () => windowManager.minimize(),
-            ),
-            IconButton(
-              tooltip: 'Close',
-              icon: Icon(Icons.close, size: 17, color: FyrTheme.textColorMuted),
-              onPressed: () => exit(0),
             ),
           ],
         ),
