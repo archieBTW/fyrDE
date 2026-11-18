@@ -31,12 +31,13 @@ class FyrTitleBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accent = FyrTheme.accentColor;
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onPanStart: (_) => windowManager.startDragging(),
       child: Container(
-        height: 40,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
+        height: 44,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
         decoration: BoxDecoration(
           color: FyrTheme.sidebarColor,
           border: Border(bottom: BorderSide(color: FyrTheme.dividerColor)),
@@ -45,39 +46,68 @@ class FyrTitleBar extends StatelessWidget {
           children: [
             const TrafficLights(),
             const SizedBox(width: 14),
-            Icon(icon, color: FyrTheme.accentColor, size: 17),
-            const SizedBox(width: 8),
+            Container(
+              width: 24,
+              height: 24,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    accent,
+                    accent.withValues(alpha: 0.55),
+                  ],
+                ),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Icon(
+                icon,
+                color: FyrTheme.getContrastingColor(accent),
+                size: 14,
+              ),
+            ),
+            const SizedBox(width: 9),
             Text(
               title,
               style: TextStyle(
                 color: FyrTheme.textColor,
-                fontWeight: FontWeight.bold,
-                fontSize: 13.5,
+                fontWeight: FontWeight.w700,
+                fontSize: 14,
               ),
             ),
             if (subtitle != null) ...[
-              const SizedBox(width: 7),
-              Text(
-                subtitle!,
-                style: TextStyle(
-                  color: FyrTheme.textColorMuted,
-                  fontSize: 10.5,
-                  letterSpacing: 0.2,
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: FyrTheme.cardColor,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: FyrTheme.dividerColor),
+                ),
+                child: Text(
+                  subtitle!,
+                  style: TextStyle(
+                    color: FyrTheme.textColorMuted,
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w500,
+                    letterSpacing: 0.2,
+                  ),
                 ),
               ),
             ],
             if (status != null) ...[
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                 decoration: BoxDecoration(
-                  color: FyrTheme.accentColor.withValues(alpha: 0.12),
+                  color: accent.withValues(alpha: 0.14),
                   borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: accent.withValues(alpha: 0.35)),
                 ),
                 child: Text(
                   status!,
                   style: TextStyle(
-                    color: FyrTheme.accentColor,
+                    color: accent,
                     fontSize: 10.5,
                     fontWeight: FontWeight.w600,
                   ),

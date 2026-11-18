@@ -4,22 +4,66 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:fyrwebsite/main.dart';
 
 void main() {
-  test('fyrApps grid includes fyrGraphics, fyrEmu, and fyrDirector with existing screenshots', () {
-    const grid = AppGrid(category: 'productivity');
-    final apps = grid.getApps();
+  test('fyrTools and fyrApps grids include all DE apps with existing compressed screenshots', () {
+    const coreGrid = AppGrid(category: 'core');
+    const systemGrid = AppGrid(category: 'system');
+    const prodGrid = AppGrid(category: 'productivity');
 
-    final byName = {for (final app in apps) app['name']!: app};
-    expect(byName.containsKey('fyrGraphics'), isTrue);
-    expect(byName.containsKey('fyrEmu'), isTrue);
-    expect(byName.containsKey('fyrDirector'), isTrue);
+    final coreApps = coreGrid.getApps();
+    final systemApps = systemGrid.getApps();
+    final prodApps = prodGrid.getApps();
 
-    expect(byName['fyrGraphics']!['desc'], startsWith('frickin sweet '));
-    expect(byName['fyrEmu']!['desc'], startsWith('frickin sweet '));
-    expect(byName['fyrDirector']!['desc'], startsWith('frickin sweet '));
+    final systemByName = {for (final app in systemApps) app['name']!: app};
+    final prodByName = {for (final app in prodApps) app['name']!: app};
 
-    for (final name in ['fyrGraphics', 'fyrEmu', 'fyrDirector']) {
-      final imgFile = File('assets/screenshots/${byName[name]!['img']}');
+    for (final name in [
+      'Terminal',
+      'fyrFiles',
+      'fyrStore',
+      'Settings',
+      'fyrMonitor',
+      'fyrDisks',
+      'FyrAV',
+      'FyrText',
+      'Calendar',
+      'Clock',
+      'Calculator',
+      'fyrHelp',
+      'fyrEmoji',
+    ]) {
+      expect(systemByName.containsKey(name), isTrue, reason: 'Missing $name in system grid');
+      expect(systemByName[name]!['desc'], startsWith('frickin sweet '));
+    }
+
+    for (final name in [
+      'Goose',
+      'FyrCode',
+      'fyrAPI',
+      'Music',
+      'Sound Booth',
+      'Journal',
+      'fyrConnect',
+      'Photos',
+      'Watchbox',
+      'Camera',
+      'fyrVM',
+      'fyrTorrent',
+      'fyrGraphics',
+      'fyrEmu',
+      'fyrDirector',
+    ]) {
+      expect(prodByName.containsKey(name), isTrue, reason: 'Missing $name in productivity grid');
+      expect(prodByName[name]!['desc'], startsWith('frickin sweet '));
+    }
+
+    for (final app in [...coreApps, ...systemApps, ...prodApps]) {
+      final imgFile = File('assets/screenshots/${app['img']}');
       expect(imgFile.existsSync(), isTrue, reason: 'Missing ${imgFile.path}');
+      expect(
+        imgFile.lengthSync(),
+        lessThan(800 * 1024),
+        reason: 'Expected ${imgFile.path} to be compressed (< 800 KB)',
+      );
     }
   });
 }

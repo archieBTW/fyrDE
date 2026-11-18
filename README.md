@@ -110,7 +110,9 @@ sway
 - **fyrOverview**: Exposé-like window and workspace overview.
   ![Overview](screenshots/overview.png)
 - **fyrHelp**: A quick-access keyboard shortcut cheatsheet.
+  ![Help](screenshots/fyrhelp.png)
 - **fyrEmoji**: An integrated emoji picker.
+  ![Emoji](screenshots/fyremoji.png)
 
 ### Window Management
 ![Tiling](screenshots/tiling.png)
@@ -133,13 +135,18 @@ sway
   ![Phone](screenshots/phone.png)
 - **Task Manager** (`fyrMonitor`): Windows-style open-apps, processes, and
   performance monitor (CPU, memory & swap, disk and network charts).
+  ![Monitor](screenshots/fyrmonitor.png)
+- **fyrDisks**: Disk, partition, LUKS encryption, and USB ISO flasher utility.
+  ![Disks](screenshots/fyrdisks.png)
 - **fyr_fetch**: A custom system information tool (like neofetch).
 
 ### Productivity & Media
 - **Goose** (`fyrBrowser`): A CEF-based web browser designed for fyrDE.
   ![Goose](screenshots/goose.png)
-- **fyrCode**: Advanced code editor and IDE.
+- **fyrCode**: Agentic code editor and IDE with integrated AI agent, inline diffs, and LSP support.
   ![Code](screenshots/code.png)
+- **fyrAPI**: REST & HTTP API client and request builder.
+  ![API](screenshots/fyrapi.png)
 - **fyrText**: Advanced text and document editor.
   ![Text](screenshots/text.png)
 - **Sound Booth** (`fyrDaw`): Digital Audio Workstation.
@@ -152,6 +159,14 @@ sway
   ![Photos](screenshots/fyrphotos.png)
 - **Camera** (`fyrCamera`): Camera and video recording application.
   ![Camera](screenshots/camera.png)
+- **fyrTorrent**: BitTorrent and magnet link client.
+  ![Torrent](screenshots/fyrtorrent.png)
+- **fyrGraphics**: Layered raster & vector image editor.
+  ![Graphics](screenshots/fyrgraphics.png)
+- **fyrEmu**: Multi-platform retro game emulator.
+  ![Emulator](screenshots/fyremu.png)
+- **fyrDirector**: Non-linear video editor.
+  ![Director](screenshots/fyrdirector.png)
 - **Calendar** (`fyrCalendar`): Modern calendar with event management.
   ![Calendar](screenshots/calendar.png)
 - **Clock** (`fyrClock`): Sleek clock with World Clock, Alarm, Stopwatch, and Timer.

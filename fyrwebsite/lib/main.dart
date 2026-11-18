@@ -68,7 +68,7 @@ class LandingPage extends StatelessWidget {
           SliverToBoxAdapter(
             child: SectionHeader(
               title: 'fyrApps',
-              subtitle: 'Purdy apps to go with you purdy shell.',
+              subtitle: 'Purdy apps to go with your purdy shell.',
               id: 'productivity',
             ),
           ),
@@ -188,6 +188,8 @@ class HeroSection extends StatelessWidget {
                   child: Image.asset(
                     'assets/screenshots/desktop.png',
                     fit: BoxFit.cover,
+                    cacheWidth: 1280,
+                    filterQuality: FilterQuality.medium,
                   ),
                 ),
               )
@@ -317,6 +319,16 @@ class AppGrid extends StatelessWidget {
           'desc': 'frickin sweet settings',
           'img': 'settings.png',
         },
+        {
+          'name': 'fyrMonitor',
+          'desc': 'frickin sweet task manager',
+          'img': 'fyrmonitor.png',
+        },
+        {
+          'name': 'fyrDisks',
+          'desc': 'frickin sweet disk manager',
+          'img': 'fyrdisks.png',
+        },
         {'name': 'FyrAV', 'desc': 'frickin sweet antivirus', 'img': 'av.png'},
         {
           'name': 'FyrText',
@@ -329,9 +341,24 @@ class AppGrid extends StatelessWidget {
           'img': 'calendar.png',
         },
         {
+          'name': 'Clock',
+          'desc': 'frickin sweet clock',
+          'img': 'clock.png',
+        },
+        {
           'name': 'Calculator',
           'desc': 'frickin sweet calculator',
           'img': 'calc.png',
+        },
+        {
+          'name': 'fyrHelp',
+          'desc': 'frickin sweet shortcut cheatsheet',
+          'img': 'fyrhelp.png',
+        },
+        {
+          'name': 'fyrEmoji',
+          'desc': 'frickin sweet emoji picker',
+          'img': 'fyremoji.png',
         },
       ];
     } else {
@@ -341,6 +368,11 @@ class AppGrid extends StatelessWidget {
           'name': 'FyrCode',
           'desc': 'frickin sweet code editor',
           'img': 'code.png',
+        },
+        {
+          'name': 'fyrAPI',
+          'desc': 'frickin sweet API client',
+          'img': 'fyrapi.png',
         },
         {
           'name': 'Music',
@@ -373,6 +405,11 @@ class AppGrid extends StatelessWidget {
           'name': 'fyrVM',
           'desc': 'frickin sweet VM manager',
           'img': 'fyrvirt.png',
+        },
+        {
+          'name': 'fyrTorrent',
+          'desc': 'frickin sweet torrent client',
+          'img': 'fyrtorrent.png',
         },
         {
           'name': 'fyrGraphics',
@@ -511,6 +548,9 @@ class _AppCardState extends State<AppCard> {
                             child: Image.asset(
                               'assets/screenshots/${widget.app['img']}',
                               fit: BoxFit.cover,
+                              cacheWidth: 640,
+                              filterQuality: FilterQuality.medium,
+                              gaplessPlayback: true,
                             ),
                           ),
                         )
@@ -520,6 +560,9 @@ class _AppCardState extends State<AppCard> {
                           child: Image.asset(
                             'assets/screenshots/${widget.app['img']}',
                             fit: BoxFit.fitWidth,
+                            cacheWidth: 640,
+                            filterQuality: FilterQuality.medium,
+                            gaplessPlayback: true,
                           ),
                         ),
                       if (widget.showText)

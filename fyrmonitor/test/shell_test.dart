@@ -164,4 +164,34 @@ void main() {
     expect(find.text('not configured'), findsNothing);
     expect(find.text('—'), findsOneWidget);
   });
+
+  testWidgets('performance tab tiles have even sizes in two-column layout',
+      (tester) async {
+    tester.view.physicalSize = const Size(880, 600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      const MaterialApp(home: Scaffold(body: PerformanceTab(active: false))),
+    );
+    await tester.pump();
+
+    final cards = find.byType(
+      // SectionCard is the outer container for CPU, MEMORY, DISK, NETWORK
+      // ignore: invalid_use_of_protected_member
+      tester.widget(find.ancestor(
+        of: find.text('CPU'),
+        matching: find.byWidgetPredicate((w) => w.runtimeType.toString() == 'SectionCard'),
+      )).runtimeType,
+    );
+    expect(cards, findsNWidgets(4));
+
+    final sizes = [
+      for (var i = 0; i < 4; i++) tester.getSize(cards.at(i)),
+    ];
+    for (final size in sizes) {
+      expect(size.width, closeTo(sizes.first.width, 0.5));
+      expect(size.height, closeTo(sizes.first.height, 0.5));
+    }
+  });
 }

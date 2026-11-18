@@ -2,19 +2,21 @@ import 'package:flutter/material.dart';
 
 import '../fyr_theme.dart';
 
-/// Rounded panel used by the Performance tab.
+/// Rounded panel used by the Performance tab, styled to match fyrDE surfaces.
 class SectionCard extends StatelessWidget {
   const SectionCard({
     super.key,
     required this.icon,
     required this.title,
     required this.child,
+    this.subtitle,
     this.trailing,
     this.accent,
   });
 
   final IconData icon;
   final String title;
+  final String? subtitle;
   final Widget child;
   final Widget? trailing;
   final Color? accent;
@@ -22,34 +24,88 @@ class SectionCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = accent ?? FyrTheme.accentColor;
+    final isDark = FyrTheme.isDark;
     return Container(
-      padding: const EdgeInsets.fromLTRB(14, 11, 14, 13),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
       decoration: BoxDecoration(
-        color: FyrTheme.surfaceColor,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: FyrTheme.dividerColor),
+        gradient: isDark
+            ? LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Color.alphaBlend(
+                    color.withValues(alpha: 0.05),
+                    const Color(0xFF141418),
+                  ),
+                  const Color(0xFF0E0E12),
+                ],
+              )
+            : null,
+        color: isDark ? null : FyrTheme.surfaceColor,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isDark
+              ? Color.alphaBlend(
+                  color.withValues(alpha: 0.18),
+                  FyrTheme.dividerColor,
+                )
+              : FyrTheme.dividerColor,
+        ),
+        boxShadow: isDark
+            ? [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.35),
+                  blurRadius: 14,
+                  offset: const Offset(0, 4),
+                ),
+              ]
+            : const [],
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Icon(icon, size: 15, color: color),
-              const SizedBox(width: 7),
-              Text(
-                title,
-                style: TextStyle(
-                  color: FyrTheme.textColor,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.6,
+              Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: color.withValues(alpha: 0.32)),
                 ),
+                child: Icon(icon, size: 15, color: color),
+              ),
+              const SizedBox(width: 10),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      color: FyrTheme.textColor,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.7,
+                    ),
+                  ),
+                  if (subtitle != null)
+                    Text(
+                      subtitle!,
+                      style: TextStyle(
+                        color: FyrTheme.textColorMuted.withValues(alpha: 0.75),
+                        fontSize: 10,
+                      ),
+                    ),
+                ],
               ),
               const Spacer(),
-              if (trailing != null) trailing!,
+              if (trailing != null) Flexible(child: trailing!),
             ],
           ),
-          const SizedBox(height: 9),
+          const SizedBox(height: 10),
           child,
         ],
       ),
@@ -57,7 +113,7 @@ class SectionCard extends StatelessWidget {
   }
 }
 
-/// Big current value shown at the top of a chart card.
+/// Big current value shown at the top-right of a chart card.
 class CardMetric extends StatelessWidget {
   const CardMetric({
     super.key,
@@ -72,28 +128,36 @@ class CardMetric extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return RichText(
-      text: TextSpan(
-        children: [
-          TextSpan(
-            text: value,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          value,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: color ?? FyrTheme.textColor,
+            fontSize: 17,
+            height: 1.1,
+            fontWeight: FontWeight.w800,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+        if (caption != null) ...[
+          const SizedBox(height: 2),
+          Text(
+            caption!,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              color: color ?? FyrTheme.textColor,
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
+              color: FyrTheme.textColorMuted,
+              fontSize: 10,
               fontFeatures: const [FontFeature.tabularFigures()],
             ),
           ),
-          if (caption != null)
-            TextSpan(
-              text: '  $caption',
-              style: TextStyle(
-                color: FyrTheme.textColorMuted,
-                fontSize: 10.5,
-              ),
-            ),
         ],
-      ),
+      ],
     );
   }
 }
@@ -111,14 +175,27 @@ class ChartLegend extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         Container(
-          width: 8,
-          height: 8,
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          width: 7,
+          height: 7,
+          decoration: BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: color.withValues(alpha: 0.45),
+                blurRadius: 4,
+              ),
+            ],
+          ),
         ),
         const SizedBox(width: 5),
         Text(
           label,
-          style: TextStyle(color: FyrTheme.textColorMuted, fontSize: 10.5),
+          style: TextStyle(
+            color: FyrTheme.textColorMuted,
+            fontSize: 10,
+            fontWeight: FontWeight.w500,
+          ),
         ),
       ],
     );

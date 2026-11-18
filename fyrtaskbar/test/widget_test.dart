@@ -64,10 +64,8 @@ void main() {
           home: Scaffold(body: StartMenuPopup(onClose: () {})),
         ),
       );
-      for (int i = 0; i < 20 && find.text('Alpha App').evaluate().isEmpty; i++) {
-        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
-        await tester.pump(const Duration(milliseconds: 50));
-      }
+      // Should be loaded synchronously before the first frame without a loading spinner.
+      expect(find.byType(CircularProgressIndicator), findsNothing);
       expect(find.text('Alpha App'), findsOneWidget);
       expect(find.text('Gamma App'), findsNothing);
 

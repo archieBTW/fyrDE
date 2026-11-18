@@ -234,12 +234,13 @@ void main(List<String> args) async {
     SystemState.init();
     await OsdService.init();
 
-    FyrTheme.accentColorNotifier.addListener(() {
-      AppService.cachedApps = null;
-      AppService.getInstalledApps();
-    });
+    void refreshThemeApps() {
+      AppService.getInstalledAppsSync(forceRefresh: true);
+    }
+    FyrTheme.accentColorNotifier.addListener(refreshThemeApps);
+    FyrTheme.themeModeNotifier.addListener(refreshThemeApps);
 
-    await AppService.getInstalledApps();
+    AppService.getInstalledAppsSync();
   }
 
   int screenWidth = 1920;

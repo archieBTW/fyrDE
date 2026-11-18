@@ -11,7 +11,12 @@ import 'package:fyrtaskbar/ui/power_button.dart';
 
 class StartMenuPopup extends StatefulWidget {
   final VoidCallback onClose;
-  const StartMenuPopup({super.key, required this.onClose});
+  final bool isOpen;
+  const StartMenuPopup({
+    super.key,
+    required this.onClose,
+    this.isOpen = true,
+  });
 
   @override
   State<StartMenuPopup> createState() => _StartMenuPopupState();
@@ -19,7 +24,7 @@ class StartMenuPopup extends StatefulWidget {
 
 class _StartMenuPopupState extends State<StartMenuPopup>
     with SingleTickerProviderStateMixin {
-  List<DesktopApp> _apps = AppService.cachedApps ?? [];
+  late List<DesktopApp> _apps;
   late List<DesktopApp> _filteredApps;
   final TextEditingController _searchController = TextEditingController();
   late AnimationController _animationController;
@@ -29,6 +34,9 @@ class _StartMenuPopupState extends State<StartMenuPopup>
   @override
   void initState() {
     super.initState();
+    _apps = AppService.cachedApps ?? AppService.getInstalledAppsSync();
+    _filteredApps = _apps;
+
     _animationController = AnimationController(
       duration: const Duration(milliseconds: 150),
       vsync: this,
@@ -40,14 +48,29 @@ class _StartMenuPopupState extends State<StartMenuPopup>
             curve: Curves.easeOutQuart,
           ),
         );
-    _animationController.forward();
+    if (widget.isOpen) {
+      _animationController.forward();
+    }
 
-    _filteredApps = _apps;
-    _loadApps();
     _appsChangedSub = AppService.onAppsChanged.listen((_) {
-      _loadApps();
+      _syncAppsFromCache();
     });
     _searchController.addListener(_filterApps);
+
+    // Ensure any external filesystem modifications that happened while no
+    // watcher was active are picked up immediately without clearing _apps.
+    _loadApps();
+  }
+
+  @override
+  void didUpdateWidget(covariant StartMenuPopup oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isOpen && !oldWidget.isOpen) {
+      _syncAppsFromCache();
+      _animationController.forward(from: 0.0);
+    } else if (!widget.isOpen && oldWidget.isOpen) {
+      _animationController.reset();
+    }
   }
 
   @override
@@ -56,6 +79,16 @@ class _StartMenuPopupState extends State<StartMenuPopup>
     _animationController.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _syncAppsFromCache() {
+    final apps = AppService.cachedApps ?? AppService.getInstalledAppsSync();
+    if (mounted) {
+      setState(() {
+        _apps = apps;
+      });
+      _filterApps();
+    }
   }
 
   Future<void> _loadApps() async {
@@ -78,16 +111,19 @@ class _StartMenuPopupState extends State<StartMenuPopup>
           final name = app.name.toLowerCase();
           final exec = app.exec.toLowerCase();
           final path = app.path.toLowerCase();
-          return name.contains(query) || exec.contains(query) || path.contains(query);
-        }).toList()..sort((a, b) {
-          final aName = a.name.toLowerCase();
-          final bName = b.name.toLowerCase();
-          bool aStarts = aName.startsWith(query);
-          bool bStarts = bName.startsWith(query);
-          if (aStarts && !bStarts) return -1;
-          if (!aStarts && bStarts) return 1;
-          return aName.compareTo(bName);
-        });
+          return name.contains(query) ||
+              exec.contains(query) ||
+              path.contains(query);
+        }).toList()
+          ..sort((a, b) {
+            final aName = a.name.toLowerCase();
+            final bName = b.name.toLowerCase();
+            bool aStarts = aName.startsWith(query);
+            bool bStarts = bName.startsWith(query);
+            if (aStarts && !bStarts) return -1;
+            if (!aStarts && bStarts) return 1;
+            return aName.compareTo(bName);
+          });
       }
     });
   }
@@ -101,7 +137,7 @@ class _StartMenuPopupState extends State<StartMenuPopup>
         mode: ProcessStartMode.detached,
       );
     } catch (e) {
-      print('Failed to launch: \$e');
+      debugPrint('Failed to launch: $e');
     }
   }
 
@@ -380,121 +416,119 @@ class _StartMenuPopupState extends State<StartMenuPopup>
           children: [
             SizedBox(height: 24),
             Expanded(
-              child: _apps.isEmpty
-                  ? Center(child: CircularProgressIndicator())
-                  : ListView.builder(
-                      padding: EdgeInsets.symmetric(horizontal: 8),
-                      itemCount: _filteredApps.length,
-                      itemBuilder: (context, index) {
-                        final app = _filteredApps[index];
-                        return GestureDetector(
-                          onSecondaryTapDown: (details) {
-                            showMenu(
-                              context: context,
-                              position: RelativeRect.fromLTRB(
-                                details.globalPosition.dx,
-                                details.globalPosition.dy,
-                                details.globalPosition.dx,
-                                details.globalPosition.dy,
+              child: ListView.builder(
+                padding: EdgeInsets.symmetric(horizontal: 8),
+                itemCount: _filteredApps.length,
+                itemBuilder: (context, index) {
+                  final app = _filteredApps[index];
+                  return GestureDetector(
+                    onSecondaryTapDown: (details) {
+                      showMenu(
+                        context: context,
+                        position: RelativeRect.fromLTRB(
+                          details.globalPosition.dx,
+                          details.globalPosition.dy,
+                          details.globalPosition.dx,
+                          details.globalPosition.dy,
+                        ),
+                        items: [
+                          PopupMenuItem(
+                            value: 'pin',
+                            child: Text('Toggle Pin to Dock'),
+                            onTap: () => _pinApp(app),
+                          ),
+                          PopupMenuItem(
+                            value: 'rename',
+                            child: Text('Rename App'),
+                            onTap: () => _renameApp(app),
+                          ),
+                          PopupMenuItem(
+                            value: 'remove',
+                            child: Text(
+                              'Remove App',
+                              style: TextStyle(color: Colors.redAccent),
+                            ),
+                            onTap: () => _removeApp(app),
+                          ),
+                        ],
+                      );
+                    },
+                    child: InkWell(
+                      onTap: () => _launchApp(app.exec),
+                      borderRadius: BorderRadius.circular(12),
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 8,
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 40,
+                              height: 40,
+                              decoration: BoxDecoration(
+                                color: FyrTheme.cardColor,
+                                borderRadius: BorderRadius.circular(10),
                               ),
-                              items: [
-                                PopupMenuItem(
-                                  value: 'pin',
-                                  child: Text('Toggle Pin to Dock'),
-                                  onTap: () => _pinApp(app),
-                                ),
-                                PopupMenuItem(
-                                  value: 'rename',
-                                  child: Text('Rename App'),
-                                  onTap: () => _renameApp(app),
-                                ),
-                                PopupMenuItem(
-                                  value: 'remove',
-                                  child: Text(
-                                    'Remove App',
-                                    style: TextStyle(color: Colors.redAccent),
-                                  ),
-                                  onTap: () => _removeApp(app),
-                                ),
-                              ],
-                            );
-                          },
-                          child: InkWell(
-                            onTap: () => _launchApp(app.exec),
-                            borderRadius: BorderRadius.circular(12),
-                            child: Padding(
-                              padding: EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 8,
-                              ),
-                              child: Row(
-                                children: [
-                                  Container(
-                                    width: 40,
-                                    height: 40,
-                                    decoration: BoxDecoration(
-                                      color: FyrTheme.cardColor,
+                              child: app.icon.startsWith('/')
+                                  ? ClipRRect(
                                       borderRadius: BorderRadius.circular(10),
-                                    ),
-                                    child: app.icon.startsWith('/')
-                                        ? ClipRRect(
-                                            borderRadius: BorderRadius.circular(
-                                              10,
-                                            ),
-                                            child:
-                                                app.icon.toLowerCase().endsWith(
-                                                  '.svg',
-                                                )
-                                                ? SvgPicture.file(
-                                                    File(app.icon),
-                                                    width: 24,
-                                                    height: 24,
-                                                    fit: BoxFit.contain,
-                                                  )
-                                                : Image.file(
-                                                    File(app.icon),
-                                                    width: 24,
-                                                    height: 24,
-                                                    errorBuilder:
-                                                        (
-                                                          context,
-                                                          error,
-                                                          stackTrace,
-                                                        ) => Icon(
-                                                          Icons.widgets,
-                                                          color: FyrTheme
-                                                              .textColor
-                                                              .withOpacity(0.8),
-                                                          size: 20,
-                                                        ),
+                                      child: app.icon.toLowerCase().endsWith(
+                                        '.svg',
+                                      )
+                                          ? SvgPicture.file(
+                                              File(app.icon),
+                                              width: 24,
+                                              height: 24,
+                                              fit: BoxFit.contain,
+                                            )
+                                          : Image.file(
+                                              File(app.icon),
+                                              width: 24,
+                                              height: 24,
+                                              cacheWidth: 48,
+                                              cacheHeight: 48,
+                                              gaplessPlayback: true,
+                                              errorBuilder:
+                                                  (
+                                                    context,
+                                                    error,
+                                                    stackTrace,
+                                                  ) => Icon(
+                                                    Icons.widgets,
+                                                    color: FyrTheme.textColor
+                                                        .withOpacity(0.8),
+                                                    size: 20,
                                                   ),
-                                          )
-                                        : Icon(
-                                            Icons.widgets,
-                                            color: FyrTheme.textColor
-                                                .withOpacity(0.8),
-                                            size: 20,
-                                          ),
-                                  ),
-                                  SizedBox(width: 16),
-                                  Expanded(
-                                    child: Text(
-                                      app.name,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w500,
+                                            ),
+                                    )
+                                  : Icon(
+                                      Icons.widgets,
+                                      color: FyrTheme.textColor.withOpacity(
+                                        0.8,
                                       ),
+                                      size: 20,
                                     ),
-                                  ),
-                                ],
+                            ),
+                            SizedBox(width: 16),
+                            Expanded(
+                              child: Text(
+                                app.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w500,
+                                ),
                               ),
                             ),
-                          ),
-                        );
-                      },
+                          ],
+                        ),
+                      ),
                     ),
+                  );
+                },
+              ),
             ),
             Container(
               padding: EdgeInsets.all(16),

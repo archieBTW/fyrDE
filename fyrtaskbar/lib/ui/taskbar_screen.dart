@@ -1,10 +1,13 @@
+import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:fyrtaskbar/calendar_weather.dart';
 import 'package:fyrtaskbar/fyr_theme.dart';
 import 'package:fyrtaskbar/phone_service.dart';
+import 'package:fyrtaskbar/services/app_service.dart';
 import 'package:fyrtaskbar/state/system_state.dart';
 import 'package:fyrtaskbar/ui/clock_widget.dart';
 import 'package:fyrtaskbar/ui/notification_popup_overlay.dart';
@@ -22,14 +25,44 @@ class TaskbarScreen extends StatefulWidget {
 }
 
 class _TaskbarScreenState extends State<TaskbarScreen> {
+  StreamSubscription<void>? _appsSub;
+
   @override
   void initState() {
     super.initState();
+    AppService.getInstalledAppsSync();
     SystemState.activePopups.addListener(_onPopupsChanged);
+    _appsSub = AppService.onAppsChanged.listen((_) {
+      if (mounted) _precacheStartMenuIcons();
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _precacheStartMenuIcons();
+  }
+
+  void _precacheStartMenuIcons() {
+    final apps = AppService.cachedApps ?? AppService.getInstalledAppsSync();
+    for (final app in apps) {
+      if (app.icon.startsWith('/') &&
+          !app.icon.toLowerCase().endsWith('.svg')) {
+        final file = File(app.icon);
+        if (file.existsSync()) {
+          precacheImage(
+            ResizeImage(FileImage(file), width: 48, height: 48),
+            context,
+            onError: (_, __) {},
+          );
+        }
+      }
+    }
   }
 
   @override
   void dispose() {
+    _appsSub?.cancel();
     SystemState.activePopups.removeListener(_onPopupsChanged);
     super.dispose();
   }
@@ -483,19 +516,28 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                 child: ClipRect(
                   child: Stack(
                     children: [
-                      if (_isStartMenuOpen)
-                        Positioned(
-                          top: 0,
-                          left: 0,
-                          bottom: 0,
+                      Positioned(
+                        top: 0,
+                        left: 0,
+                        height: _isStartMenuOpen
+                            ? null
+                            : math.max(
+                                400.0,
+                                SystemState.screenHeight.toDouble() - 56.0,
+                              ),
+                        bottom: _isStartMenuOpen ? 0 : null,
+                        child: Offstage(
+                          offstage: !_isStartMenuOpen,
                           child: GestureDetector(
                             onTap: () {},
                             child: StartMenuPopup(
                               key: ValueKey(FyrTheme.iconThemeName),
+                              isOpen: _isStartMenuOpen,
                               onClose: _toggleStartMenu,
                             ),
                           ),
                         ),
+                      ),
                       if (_isCalendarOpen)
                         Positioned(
                           top: 0,
