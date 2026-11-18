@@ -1170,6 +1170,64 @@ exit 0
 EOF
     chmod +x ~/.config/fyr/toggle_floating.sh
 
+    # Close Window Script (Super + Q)
+    cat << 'EOF' > ~/.config/fyr/close_window.sh
+#!/bin/bash
+# Super + Q - close the focused window.
+#
+# Sends the regular Wayland/X11 close request ("kill") so applications can
+# save state or ask for confirmation before exiting. Two guard rails keep the
+# shortcut from breaking the session:
+#   * shell panels (taskbar, dock, overviews) are never closed;
+#   * scratchpad overlays (fyrHelp, fyrEmoji) are hidden instead of killed,
+#     because they are launched once per session and toggled from there.
+
+set -u
+
+HIDE_APPS='^(fyrhelp|fyremoji)$'
+PANEL_APPS='^(fyrtaskbar|fyrdock|fyrdesktop|fyrsearch|launcher|fyroverview|fyrwindowoverview)$'
+
+command -v swaymsg >/dev/null 2>&1 || exit 0
+
+# Without jq we cannot tell panels and overlays apart; fall back to sway's own
+# focused-window handling.
+if ! command -v jq >/dev/null 2>&1; then
+    swaymsg kill >/dev/null 2>&1 || true
+    exit 0
+fi
+
+# Pick the focused window: a leaf view with a client process, which skips
+# sway's internal containers, empty workspaces and layer surfaces.
+node=$(swaymsg -t get_tree 2>/dev/null | jq -c '
+    [ .. | objects
+      | select(.focused == true)
+      | select(.type == "con" or .type == "floating_con")
+      | select((.pid // -1) > 0)
+      | select(((.app_id // "") | length) > 0 or ((.window_properties? // {}) | length) > 0)
+    ] | first // empty')
+
+[ -n "$node" ] || exit 0
+
+app_id=$(jq -r '.app_id // ""' <<<"$node")
+con_id=$(jq -r '.id // ""' <<<"$node")
+[ -n "$con_id" ] || exit 0
+
+# Note: these patterns are EREs ([[ =~ ]]), not case globs.
+if [[ "$app_id" =~ $PANEL_APPS ]]; then
+    # Shell surface: there is no application window to close.
+    exit 0
+fi
+
+if [[ "$app_id" =~ $HIDE_APPS ]]; then
+    swaymsg "[con_id=$con_id]" move scratchpad >/dev/null 2>&1 || true
+    exit 0
+fi
+
+swaymsg "[con_id=$con_id]" kill >/dev/null 2>&1 || swaymsg kill >/dev/null 2>&1
+exit 0
+EOF
+    chmod +x ~/.config/fyr/close_window.sh
+
     setup_fetch
 
 
