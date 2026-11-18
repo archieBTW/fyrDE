@@ -183,10 +183,13 @@ install_flutter() {
         echo "Installing/Updating Flutter to 3.41.9..."
         sudo rm -rf /opt/flutter
         sudo git clone --depth 1 --branch 3.41.9 https://github.com/flutter/flutter.git /opt/flutter
-        sudo chown -R $USER:$USER /opt/flutter
     fi
-    
-    export PATH="$PATH:/opt/flutter/bin"
+
+    if [ ! -w "/opt/flutter" ] || [ ! -w "/opt/flutter/bin" ]; then
+        sudo chown -R "$(id -u):$(id -g)" /opt/flutter
+    fi
+
+    export PATH="/opt/flutter/bin:$PATH"
     git config --global --add safe.directory /opt/flutter || true
     
     # Only run flutter doctor and config if needed or if first install
