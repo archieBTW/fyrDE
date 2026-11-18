@@ -167,6 +167,16 @@ sway
   ![Emulator](screenshots/fyremu.png)
 - **fyrDirector**: Non-linear video editor.
   ![Director](screenshots/fyrdirector.png)
+- **fyrDocs** (`fyrOffice`): OpenDocument (`.odt`) and Word (`.docx`) rich word processor.
+  ![Docs](screenshots/fyrdocs.png)
+- **fyrSheets** (`fyrOffice`): OpenDocument (`.ods`), Excel (`.xlsx`), and CSV spreadsheet studio.
+  ![Sheets](screenshots/fyrsheets.png)
+- **fyrSlides** (`fyrOffice`): OpenDocument (`.odp`) and PowerPoint (`.pptx`) presentation studio.
+  ![Slides](screenshots/fyrslides.png)
+- **fyrDB**: Universal database manager, SQL IDE, and ER diagram studio (DBeaver clone).
+  ![DB](screenshots/fyrdb.png)
+- **fyrPods**: Container, pod, image, and compose stack manager (Podman / Docker).
+  ![Pods](screenshots/fyrpods.png)
 - **Calendar** (`fyrCalendar`): Modern calendar with event management.
   ![Calendar](screenshots/calendar.png)
 - **Clock** (`fyrClock`): Sleek clock with World Clock, Alarm, Stopwatch, and Timer.

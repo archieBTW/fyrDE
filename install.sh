@@ -22,7 +22,7 @@ WIDTH=$(echo $RES | cut -d'x' -f1)
 HEIGHT=$(echo $RES | cut -d'x' -f2)
 echo "Detected resolution: ${WIDTH}x${HEIGHT}"
 
-flutter_apps=("fyrdock" "fyroverview" "fyrwindowoverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrstore" "fyrvirt" "fyrtext" "fyrdaw" "fyrphone" "fyrcalculator" "fyrcode" "fyrvideo" "fyrmusic" "fyrphotos" "fyrcamera" "fyrbrowser" "fyrjournal" "fyrcalender" "fyrclock" "fyrtorrent" "fyrapi" "fyrgraphics" "fyremu" "fyrdirector" "fyrdisks" "fyrmonitor")
+flutter_apps=("fyrdock" "fyroverview" "fyrwindowoverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrstore" "fyrvirt" "fyrtext" "fyrdaw" "fyrphone" "fyrcalculator" "fyrcode" "fyrvideo" "fyrmusic" "fyrphotos" "fyrcamera" "fyrbrowser" "fyrjournal" "fyrcalender" "fyrclock" "fyrtorrent" "fyrapi" "fyrgraphics" "fyremu" "fyrdirector" "fyrdisks" "fyrmonitor" "fyrdocs" "fyrsheets" "fyrslides" "fyrdb" "fyrpods")
 
 # --- Progress Tracking & Terminal Management ---
 CURRENT_STEP=0
@@ -962,6 +962,49 @@ Type=Application
 Categories=System;Monitor;Utility;
 Keywords=task manager;processes;monitor;system;cpu;memory;performance;activity;
 EOF
+            ;;
+        "fyrdocs")
+            sudo ln -sf /opt/fyrdocs/fyrdocs /usr/local/bin/fyrdocs
+            if [ -f "./fyrdocs/assets/icons/fyrdocs.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrdocs/assets/icons/fyrdocs.png /usr/share/icons/hicolor/512x512/apps/fyrdocs.png
+            fi
+            sudo cp ./fyrdocs/fyrdocs.desktop /usr/share/applications/fyrdocs.desktop
+            xdg-mime default fyrdocs.desktop application/vnd.oasis.opendocument.text application/vnd.openxmlformats-officedocument.wordprocessingml.document || true
+            ;;
+        "fyrsheets")
+            sudo ln -sf /opt/fyrsheets/fyrsheets /usr/local/bin/fyrsheets
+            if [ -f "./fyrsheets/assets/icons/fyrsheets.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrsheets/assets/icons/fyrsheets.png /usr/share/icons/hicolor/512x512/apps/fyrsheets.png
+            fi
+            sudo cp ./fyrsheets/fyrsheets.desktop /usr/share/applications/fyrsheets.desktop
+            xdg-mime default fyrsheets.desktop application/vnd.oasis.opendocument.spreadsheet application/vnd.openxmlformats-officedocument.spreadsheetml.sheet text/csv || true
+            ;;
+        "fyrslides")
+            sudo ln -sf /opt/fyrslides/fyrslides /usr/local/bin/fyrslides
+            if [ -f "./fyrslides/assets/icons/fyrslides.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrslides/assets/icons/fyrslides.png /usr/share/icons/hicolor/512x512/apps/fyrslides.png
+            fi
+            sudo cp ./fyrslides/fyrslides.desktop /usr/share/applications/fyrslides.desktop
+            xdg-mime default fyrslides.desktop application/vnd.oasis.opendocument.presentation application/vnd.openxmlformats-officedocument.presentationml.presentation || true
+            ;;
+        "fyrdb")
+            sudo ln -sf /opt/fyrdb/fyrdb /usr/local/bin/fyrdb
+            if [ -f "./fyrdb/assets/icons/fyrdb.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrdb/assets/icons/fyrdb.png /usr/share/icons/hicolor/512x512/apps/fyrdb.png
+            fi
+            sudo cp ./fyrdb/fyrdb.desktop /usr/share/applications/fyrdb.desktop
+            ;;
+        "fyrpods")
+            sudo ln -sf /opt/fyrpods/fyrpods /usr/local/bin/fyrpods
+            if [ -f "./fyrpods/assets/icons/fyrpods.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrpods/assets/icons/fyrpods.png /usr/share/icons/hicolor/512x512/apps/fyrpods.png
+            fi
+            sudo cp ./fyrpods/fyrpods.desktop /usr/share/applications/fyrpods.desktop
             ;;
         "fyrdock"|"fyrtaskbar"|"fyroverview"|"fyrwindowoverview"|"fyrsearch"|"fyrhelp"|"fyremoji")
             sudo ln -sf "/opt/$app/$app" "/usr/local/bin/$app"

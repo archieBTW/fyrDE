@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=fyrDocs
+GenericName=Word Processor
+Comment=fyrDocs — OpenDocument (.odt) & Word (.docx) Rich Document Processor for FyrDE (fyrOffice).
+Exec=/usr/local/bin/fyrdocs %f
+Icon=fyrdocs
+Terminal=false
+Type=Application
+Categories=Office;WordProcessor;
+MimeType=application/vnd.oasis.opendocument.text;application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/msword;application/rtf;text/markdown;text/html;text/plain;
+Keywords=office;fyrdocs;fyroffice;word;writer;odt;docx;document;editor;

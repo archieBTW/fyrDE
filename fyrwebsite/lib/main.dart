@@ -426,6 +426,31 @@ class AppGrid extends StatelessWidget {
           'desc': 'frickin sweet video editor',
           'img': 'fyrdirector.png',
         },
+        {
+          'name': 'fyrDocs',
+          'desc': 'frickin sweet word processor',
+          'img': 'fyrdocs.png',
+        },
+        {
+          'name': 'fyrSheets',
+          'desc': 'frickin sweet spreadsheets',
+          'img': 'fyrsheets.png',
+        },
+        {
+          'name': 'fyrSlides',
+          'desc': 'frickin sweet presentations',
+          'img': 'fyrslides.png',
+        },
+        {
+          'name': 'fyrDB',
+          'desc': 'frickin sweet database manager',
+          'img': 'fyrdb.png',
+        },
+        {
+          'name': 'fyrPods',
+          'desc': 'frickin sweet container manager',
+          'img': 'fyrpods.png',
+        },
       ];
     }
   }

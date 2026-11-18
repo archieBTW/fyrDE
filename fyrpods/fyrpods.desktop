@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=fyrPods
+GenericName=Container & Pod Manager
+Comment=fyrPods — Container, Pod, Image, Volume & Compose Stack Manager (Podman / Docker) for FyrDE.
+Exec=/usr/local/bin/fyrpods %f
+Icon=fyrpods
+Terminal=false
+Type=Application
+Categories=System;Development;Virtualization;
+MimeType=application/x-yaml;
+Keywords=containers;podman;docker;pods;kubernetes;images;volumes;compose;fyrpods;

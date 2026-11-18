@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=fyrSlides
+GenericName=Presentation Studio
+Comment=fyrSlides — OpenDocument (.odp) & PowerPoint (.pptx) Presentation Studio for FyrDE (fyrOffice).
+Exec=/usr/local/bin/fyrslides %f
+Icon=fyrslides
+Terminal=false
+Type=Application
+Categories=Office;Presentation;
+MimeType=application/vnd.oasis.opendocument.presentation;application/vnd.openxmlformats-officedocument.presentationml.presentation;application/vnd.ms-powerpoint;
+Keywords=office;fyrslides;fyroffice;powerpoint;impress;odp;pptx;slides;presentation;deck;

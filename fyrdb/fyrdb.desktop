@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=fyrDB
+GenericName=Database Manager & SQL IDE
+Comment=fyrDB — Universal Database Client, Schema Inspector, ER Diagram & SQL IDE (DBeaver clone) for FyrDE.
+Exec=/usr/local/bin/fyrdb %f
+Icon=fyrdb
+Terminal=false
+Type=Application
+Categories=Development;Database;IDE;
+MimeType=application/x-sqlite3;application/vnd.sqlite3;application/sql;
+Keywords=database;sql;dbeaver;sqlite;postgres;mysql;duckdb;redis;er;schema;query;fyrdb;

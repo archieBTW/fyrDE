@@ -51,6 +51,11 @@ void main() {
       'fyrGraphics',
       'fyrEmu',
       'fyrDirector',
+      'fyrDocs',
+      'fyrSheets',
+      'fyrSlides',
+      'fyrDB',
+      'fyrPods',
     ]) {
       expect(prodByName.containsKey(name), isTrue, reason: 'Missing $name in productivity grid');
       expect(prodByName[name]!['desc'], startsWith('frickin sweet '));
