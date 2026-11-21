@@ -22,7 +22,7 @@ WIDTH=$(echo $RES | cut -d'x' -f1)
 HEIGHT=$(echo $RES | cut -d'x' -f2)
 echo "Detected resolution: ${WIDTH}x${HEIGHT}"
 
-flutter_apps=("fyrdock" "fyroverview" "fyrwindowoverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrstore" "fyrvirt" "fyrtext" "fyrdaw" "fyrphone" "fyrcalculator" "fyrcode" "fyrvideo" "fyrmusic" "fyrphotos" "fyrcamera" "fyrbrowser" "fyrjournal" "fyrcalender" "fyrclock" "fyrtorrent" "fyrapi" "fyrgraphics" "fyremu" "fyrdirector" "fyrdisks" "fyrmonitor" "fyrdocs" "fyrsheets" "fyrslides" "fyrdb" "fyrpods")
+flutter_apps=("fyrdock" "fyroverview" "fyrwindowoverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrstore" "fyrvirt" "fyrav" "fyrtext" "fyrdaw" "fyrphone" "fyrcalculator" "fyrcode" "fyrvideo" "fyrmusic" "fyrphotos" "fyrcamera" "fyrbrowser" "fyrjournal" "fyrcalender" "fyrclock" "fyrtorrent" "fyrapi" "fyrgraphics" "fyremu" "fyrdirector" "fyrdisks" "fyrmonitor" "fyrdocs" "fyrsheets" "fyrslides" "fyrdb" "fyrpods")
 
 # --- Progress Tracking & Terminal Management ---
 CURRENT_STEP=0
@@ -1323,16 +1323,17 @@ if __name__ == "__main__": main()
 EOF
     chmod +x ~/.config/fyr/retile.py
 
-    # Alt-Tab Script
+    # Alt-Tab Script (supports --prev for Alt+Shift+Tab)
     cat << 'EOF' > ~/.config/fyr/alttab.py
 #!/usr/bin/env python3
-import subprocess, json
+import subprocess, json, sys
 def run(cmd): return subprocess.check_output(cmd, shell=True).decode('utf-8')
 def get_windows(node, windows):
     if node.get('type') in ['con', 'floating_con'] and (node.get('app_id') or node.get('window_properties')) and not node.get('nodes'):
         windows.append(node); return
     for child in node.get('nodes', []) + node.get('floating_nodes', []): get_windows(child, windows)
 def main():
+    reverse = any(arg in ('--prev', '-p', 'prev') for arg in sys.argv[1:])
     tree, workspaces = json.loads(run('swaymsg -t get_tree')), json.loads(run('swaymsg -t get_workspaces'))
     focused_ws = next((ws['name'] for ws in workspaces if ws['focused']), None)
     if not focused_ws: return
@@ -1349,16 +1350,104 @@ def main():
     def find_focused(node):
         if node.get('focused'): return node.get('id')
         for c in node.get('nodes', []) + node.get('floating_nodes', []):
-            res = find_focused(c); 
+            res = find_focused(c);
             if res: return res
         return None
     fid = find_focused(tree)
     fidx = next((i for i, w in enumerate(windows) if w.get('id') == fid), -1)
-    nid = windows[(fidx + 1) % len(windows)]['id']
+    if fidx == -1:
+        target_idx = len(windows) - 1 if reverse else 0
+    else:
+        target_idx = (fidx - 1 if reverse else fidx + 1) % len(windows)
+    nid = windows[target_idx]['id']
     subprocess.run(['swaymsg', f'[con_id={nid}] focus'])
 if __name__ == "__main__": main()
 EOF
     chmod +x ~/.config/fyr/alttab.py
+
+    # Interactive Screenshot Script (full / region / window)
+    cat << 'EOF' > ~/.config/fyr/screenshot.sh
+#!/bin/bash
+set -euo pipefail
+
+MODE="${1:-full}"
+OUT_DIR="$HOME/Pictures/screenshots"
+mkdir -p "$OUT_DIR"
+OUT_FILE="$OUT_DIR/$(date +'%Y-%m-%d_%H-%M-%S').png"
+
+case "$MODE" in
+    region)
+        GEOM=$(slurp 2>/dev/null || true)
+        [ -n "$GEOM" ] || exit 0
+        grim -g "$GEOM" "$OUT_FILE"
+        LABEL="Region screenshot"
+        ;;
+    window)
+        GEOM=$(swaymsg -t get_tree 2>/dev/null | jq -r '
+            [ .. | objects
+              | select(.focused == true)
+              | select(.type == "con" or .type == "floating_con")
+              | .rect
+            ] | first // empty
+            | "\(.x),\(.y) \(.width)x\(.height)"' || true)
+        if [ -n "$GEOM" ] && [ "$GEOM" != "null,null nullxnull" ]; then
+            grim -g "$GEOM" "$OUT_FILE"
+            LABEL="Window screenshot"
+        else
+            grim "$OUT_FILE"
+            LABEL="Full screenshot"
+        fi
+        ;;
+    full|*)
+        grim "$OUT_FILE"
+        LABEL="Full screenshot"
+        ;;
+esac
+
+if command -v wl-copy &> /dev/null; then
+    wl-copy -t image/png < "$OUT_FILE"
+fi
+if command -v notify-send &> /dev/null; then
+    notify-send -i "$OUT_FILE" "$LABEL saved" "Copied to clipboard & saved to ~/Pictures/screenshots/$(basename "$OUT_FILE")" || true
+fi
+EOF
+    chmod +x ~/.config/fyr/screenshot.sh
+
+    # Screen Lock Script (swaylock with Fyr theme, falling back to SDDM greeter)
+    cat << 'EOF' > ~/.config/fyr/lock.sh
+#!/bin/bash
+set -euo pipefail
+
+if command -v swaylock &> /dev/null; then
+    if pgrep -x swaylock >/dev/null 2>&1; then
+        exit 0
+    fi
+    BG_ARGS=(--color 0b0a10)
+    if [ -s "$HOME/.config/fyr/lockscreen.jpg" ]; then
+        BG_ARGS=(--image "$HOME/.config/fyr/lockscreen.jpg" --scaling fill)
+    elif [ -s "$HOME/.config/fyr/space.jpg" ]; then
+        BG_ARGS=(--image "$HOME/.config/fyr/space.jpg" --scaling fill)
+    fi
+    exec swaylock -f "${BG_ARGS[@]}" \
+        --inside-color 14121acc \
+        --ring-color 9c27b0ff \
+        --ring-ver-color ba68c8ff \
+        --ring-wrong-color e53935ff \
+        --key-hl-color e040fbff \
+        --bs-hl-color ff5252ff \
+        --text-color ffffffff \
+        --line-color 00000000 \
+        --separator-color 00000000 \
+        --indicator-radius 95 \
+        --indicator-thickness 7
+elif command -v dbus-send &> /dev/null; then
+    dbus-send --system --type=method_call \
+        --dest=org.freedesktop.DisplayManager \
+        /org/freedesktop/DisplayManager/Seat0 \
+        org.freedesktop.DisplayManager.Seat.SwitchToGreeter
+fi
+EOF
+    chmod +x ~/.config/fyr/lock.sh
 
     # Recording Script
     cat << 'EOF' > ~/.config/fyr/toggle_recording.sh

@@ -454,6 +454,8 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
   final ScrollController _scrollController = ScrollController();
   String? previewImagePath;
   final FocusNode _mainFocusNode = FocusNode();
+  final List<Directory> _backHistory = [];
+  final List<Directory> _forwardHistory = [];
   late final TextEditingController _saveFileNameController = TextEditingController(
     text: initialSelectedPath != null
         ? p.basename(initialSelectedPath!)
@@ -1127,8 +1129,16 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
     }
   }
 
-  void openDirectory(Directory directory) {
+  void openDirectory(Directory directory, {bool recordHistory = true}) {
+    final previousDir = currentDir;
     setState(() {
+      if (recordHistory && previousDir.path != directory.path) {
+        _backHistory.add(previousDir);
+        if (_backHistory.length > 50) {
+          _backHistory.removeAt(0);
+        }
+        _forwardHistory.clear();
+      }
       selectedTag = null;
       currentDir = directory;
       files = directory.listSync().where((file) {
@@ -1141,6 +1151,309 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
       _activeSelectedIndex = null;
     });
     _mainFocusNode.requestFocus();
+  }
+
+  void _goBack() {
+    if (selectedTag != null) {
+      setState(() {
+        selectedTag = null;
+      });
+      return;
+    }
+    while (_backHistory.isNotEmpty) {
+      final prev = _backHistory.removeLast();
+      if (prev.existsSync() && prev.path != currentDir.path) {
+        _forwardHistory.add(currentDir);
+        openDirectory(prev, recordHistory: false);
+        return;
+      }
+    }
+  }
+
+  void _goForward() {
+    while (_forwardHistory.isNotEmpty) {
+      final next = _forwardHistory.removeLast();
+      if (next.existsSync() && next.path != currentDir.path) {
+        _backHistory.add(currentDir);
+        openDirectory(next, recordHistory: false);
+        return;
+      }
+    }
+  }
+
+  Future<void> _showSearchDialog(BuildContext context) async {
+    final searchController = TextEditingController();
+    final rootDir = currentDir;
+    bool recursive = true;
+    bool isSearching = false;
+    int searchGeneration = 0;
+    List<FileSystemEntity> results = [];
+
+    Future<List<FileSystemEntity>> runSearch(
+      String query,
+      bool includeSubfolders,
+    ) async {
+      final q = query.trim().toLowerCase();
+      if (q.isEmpty) return [];
+
+      const int maxScanned = 5000;
+      const int maxResults = 200;
+      int scanned = 0;
+      final matches = <FileSystemEntity>[];
+      final queue = <Directory>[rootDir];
+
+      while (queue.isNotEmpty &&
+          scanned < maxScanned &&
+          matches.length < maxResults) {
+        final dir = queue.removeAt(0);
+        List<FileSystemEntity> entries;
+        try {
+          entries = dir.listSync(followLinks: false);
+        } catch (_) {
+          continue;
+        }
+        for (final entity in entries) {
+          scanned++;
+          final name = p.basename(entity.path);
+          if (!showHiddenFiles && name.startsWith('.')) {
+            continue;
+          }
+          if (name.toLowerCase().contains(q)) {
+            matches.add(entity);
+            if (matches.length >= maxResults) break;
+          }
+          if (includeSubfolders && entity is Directory) {
+            queue.add(entity);
+          }
+          if (scanned >= maxScanned) break;
+        }
+        // Yield periodically so typing remains smooth on large trees
+        if (scanned % 250 == 0) {
+          await Future<void>.delayed(Duration.zero);
+        }
+      }
+      return matches;
+    }
+
+    await showDialog(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setModalState) {
+          Future<void> triggerSearch(String value, bool rec) async {
+            final gen = ++searchGeneration;
+            if (value.trim().isEmpty) {
+              setModalState(() {
+                results = [];
+                isSearching = false;
+              });
+              return;
+            }
+            setModalState(() {
+              isSearching = true;
+            });
+            final found = await runSearch(value, rec);
+            if (gen != searchGeneration || !dialogContext.mounted) return;
+            setModalState(() {
+              results = found;
+              isSearching = false;
+            });
+          }
+
+          void revealEntity(FileSystemEntity entity, {bool openItem = false}) {
+            Navigator.pop(dialogContext);
+            if (entity is Directory) {
+              openDirectory(entity);
+            } else {
+              final parent = Directory(p.dirname(entity.path));
+              if (parent.path != currentDir.path) {
+                openDirectory(parent);
+              }
+              setState(() {
+                selectedPaths = {entity.path};
+                final idx = files.indexWhere((f) => f.path == entity.path);
+                if (idx >= 0) {
+                  _lastSelectedIndex = idx;
+                  _activeSelectedIndex = idx;
+                }
+              });
+              if (openItem) {
+                _activateEntity(entity);
+              }
+            }
+          }
+
+          return AlertDialog(
+            backgroundColor: FyrTheme.surfaceColor,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+              side: BorderSide(color: FyrTheme.dividerColor),
+            ),
+            title: Row(
+              children: [
+                Icon(Icons.search, color: FyrTheme.accentColor),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Search in ${p.basename(rootDir.path).isEmpty ? '/' : p.basename(rootDir.path)}',
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: FyrTheme.textColor, fontSize: 16),
+                  ),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: 520,
+              height: 400,
+              child: Column(
+                children: [
+                  TextField(
+                    controller: searchController,
+                    autofocus: true,
+                    style: TextStyle(color: FyrTheme.textColor),
+                    decoration: InputDecoration(
+                      hintText: 'Type file or folder name...',
+                      hintStyle: TextStyle(color: FyrTheme.textColorMuted),
+                      prefixIcon: Icon(Icons.search, color: FyrTheme.accentColor),
+                      suffixIcon: searchController.text.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear, size: 18),
+                              onPressed: () {
+                                searchController.clear();
+                                triggerSearch('', recursive);
+                              },
+                            )
+                          : null,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                    ),
+                    onChanged: (val) => triggerSearch(val, recursive),
+                    onSubmitted: (_) {
+                      if (results.isNotEmpty) {
+                        revealEntity(results.first, openItem: true);
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Checkbox(
+                        value: recursive,
+                        activeColor: FyrTheme.accentColor,
+                        onChanged: (val) {
+                          final next = val ?? true;
+                          setModalState(() => recursive = next);
+                          triggerSearch(searchController.text, next);
+                        },
+                      ),
+                      Text(
+                        'Include subfolders',
+                        style: TextStyle(color: FyrTheme.textColor, fontSize: 13),
+                      ),
+                      const Spacer(),
+                      if (isSearching)
+                        const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      else if (searchController.text.trim().isNotEmpty)
+                        Text(
+                          '${results.length} match${results.length == 1 ? '' : 'es'}',
+                          style: TextStyle(
+                            color: FyrTheme.textColorMuted,
+                            fontSize: 12,
+                          ),
+                        ),
+                    ],
+                  ),
+                  const Divider(height: 12),
+                  Expanded(
+                    child: searchController.text.trim().isEmpty
+                        ? Center(
+                            child: Text(
+                              'Start typing to search files and folders',
+                              style: TextStyle(color: FyrTheme.textColorMuted),
+                            ),
+                          )
+                        : results.isEmpty && !isSearching
+                            ? Center(
+                                child: Text(
+                                  'No matching files or folders',
+                                  style: TextStyle(color: FyrTheme.textColorMuted),
+                                ),
+                              )
+                            : ListView.builder(
+                                itemCount: results.length,
+                                itemBuilder: (context, index) {
+                                  final entity = results[index];
+                                  final isDir = entity is Directory;
+                                  final relPath = p.relative(
+                                    entity.path,
+                                    from: rootDir.path,
+                                  );
+                                  return ListTile(
+                                    dense: true,
+                                    leading: Icon(
+                                      isDir
+                                          ? Icons.folder
+                                          : Icons.insert_drive_file_outlined,
+                                      color: isDir
+                                          ? FyrTheme.accentColor
+                                          : FyrTheme.textColorMuted,
+                                    ),
+                                    title: Text(
+                                      p.basename(entity.path),
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(color: FyrTheme.textColor),
+                                    ),
+                                    subtitle: Text(
+                                      relPath,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: FyrTheme.textColorMuted,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                    trailing: !isDir
+                                        ? IconButton(
+                                            tooltip: 'Reveal in folder',
+                                            icon: Icon(
+                                              Icons.folder_open,
+                                              size: 18,
+                                              color: FyrTheme.textColorMuted,
+                                            ),
+                                            onPressed: () => revealEntity(
+                                              entity,
+                                              openItem: false,
+                                            ),
+                                          )
+                                        : null,
+                                    onTap: () => revealEntity(
+                                      entity,
+                                      openItem: true,
+                                    ),
+                                  );
+                                },
+                              ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Close'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   bool hasChildDirectories(Directory directory) {
@@ -2499,6 +2812,7 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
         }
 
         final isControlPressed = HardwareKeyboard.instance.isControlPressed;
+        final isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
         final isAltPressed = HardwareKeyboard.instance.isAltPressed;
         final isMetaPressed = HardwareKeyboard.instance.isMetaPressed;
         final key = event.logicalKey;
@@ -2516,6 +2830,58 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
 
         if (event is! KeyDownEvent) {
           return KeyEventResult.ignored;
+        }
+
+        if (isAltPressed && !isControlPressed && !isMetaPressed) {
+          if (key == LogicalKeyboardKey.arrowLeft) {
+            _goBack();
+            return KeyEventResult.handled;
+          } else if (key == LogicalKeyboardKey.arrowRight) {
+            _goForward();
+            return KeyEventResult.handled;
+          } else if (key == LogicalKeyboardKey.arrowUp &&
+              currentDir.path != currentDir.parent.path) {
+            openDirectory(currentDir.parent);
+            return KeyEventResult.handled;
+          }
+        }
+
+        if (key == LogicalKeyboardKey.f2 &&
+            !isControlPressed &&
+            !isAltPressed &&
+            !isMetaPressed) {
+          FileSystemEntity? target;
+          if (selectedPaths.length == 1) {
+            final sp = selectedPaths.first;
+            target = files.where((f) => f.path == sp).firstOrNull;
+          } else {
+            final idx = _currentSelectionIndex();
+            if (idx != null && idx >= 0 && idx < files.length) {
+              target = files[idx];
+            }
+          }
+          if (target != null) {
+            _showRenameDialog(context, target);
+            return KeyEventResult.handled;
+          }
+        }
+
+        if (key == LogicalKeyboardKey.keyF &&
+            isControlPressed &&
+            !isAltPressed &&
+            !isMetaPressed) {
+          _showSearchDialog(context);
+          return KeyEventResult.handled;
+        } else if (key == LogicalKeyboardKey.keyN &&
+            isControlPressed &&
+            !isAltPressed &&
+            !isMetaPressed) {
+          if (isShiftPressed) {
+            _showCreateDirectoryDialog(context);
+          } else {
+            _showCreateFileDialog(context);
+          }
+          return KeyEventResult.handled;
         }
 
         if (key == LogicalKeyboardKey.controlLeft ||
@@ -2627,26 +2993,35 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        InkWell(
-                          onTap: () => windowManager.close(),
-                          child: Icon(Icons.circle, color: Colors.red.shade300, size: 16),
+                        FyrWindowControls(
+                          onClose: () => windowManager.close(),
+                          onMaximize: _toggleMaximize,
                         ),
-                        const SizedBox(width: 8),
-                        InkWell(
-                          onTap: () {
-                            Process.run('swaymsg', ['[pid="$pid"] move scratchpad']);
-                          },
-                          child: Icon(Icons.circle, color: Colors.amber.shade300, size: 16),
+                        const SizedBox(width: 20),
+                        IconButton(
+                          tooltip: 'Back (Alt+Left)',
+                          icon: const Icon(Icons.arrow_back),
+                          onPressed: _backHistory.isNotEmpty || selectedTag != null
+                              ? _goBack
+                              : null,
+                          iconSize: 20.0,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
                         ),
-                        const SizedBox(width: 8),
-                        InkWell(
-                          onTap: _toggleMaximize,
-                          child: Icon(Icons.circle, color: Colors.green.shade300, size: 16),
+                        const SizedBox(width: 10),
+                        IconButton(
+                          tooltip: 'Forward (Alt+Right)',
+                          icon: const Icon(Icons.arrow_forward),
+                          onPressed: _forwardHistory.isNotEmpty ? _goForward : null,
+                          iconSize: 20.0,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
                         ),
-                        const SizedBox(width: 24),
+                        const SizedBox(width: 10),
                         if (currentDir.path != currentDir.parent.path)
                           IconButton(
-                            icon: const Icon(Icons.arrow_back),
+                            tooltip: 'Up (Alt+Up)',
+                            icon: const Icon(Icons.arrow_upward),
                             onPressed: () {
                               if (selectedTag != null) {
                                 setState(() {
@@ -2656,12 +3031,11 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
                                 openDirectory(currentDir.parent);
                               }
                             },
-                            iconSize: 24.0,
+                            iconSize: 20.0,
                             padding: EdgeInsets.zero,
                             constraints: const BoxConstraints(),
                           ),
-                        if (currentDir.path != currentDir.parent.path)
-                          const SizedBox(width: 16),
+                        const SizedBox(width: 14),
                         Expanded(
                           child: SingleChildScrollView(
                             scrollDirection: Axis.horizontal,
@@ -2723,24 +3097,9 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
                         ),
                         const SizedBox(width: 8),
                         IconButton(
+                          tooltip: 'Search (Ctrl+F)',
                           icon: const Icon(Icons.search, size: 20),
-                          onPressed: () {
-                            showDialog(
-                              context: context,
-                              builder: (context) => AlertDialog(
-                                title: const Text('Search'),
-                                content: const TextField(
-                                  decoration: InputDecoration(hintText: "Search files..."),
-                                ),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () => Navigator.pop(context),
-                                    child: const Text('Close'),
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
+                          onPressed: () => _showSearchDialog(context),
                           padding: EdgeInsets.zero,
                           constraints: const BoxConstraints(),
                         ),
@@ -3556,81 +3915,27 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
   }
 
   Future<void> _showCreateFileDialog(BuildContext context) async {
-    final TextEditingController fileNameController = TextEditingController();
-
-    await showDialog(
+    final fileName = await showFyrInputDialog(
       context: context,
-      builder: (dialogContext) {
-        Future<void> doCreate() async {
-          final fileName = fileNameController.text.trim();
-          if (fileName.isNotEmpty) {
-            await createFile(currentDir, fileName);
-            if (dialogContext.mounted) {
-              Navigator.pop(dialogContext);
-            }
-          }
-        }
-
-        return AlertDialog(
-          title: const Text('Enter File Name'),
-          content: TextField(
-            controller: fileNameController,
-            autofocus: true,
-            onSubmitted: (_) => doCreate(),
-            decoration: const InputDecoration(hintText: "File name"),
-          ),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: doCreate,
-              child: const Text('Create'),
-            ),
-          ],
-        );
-      },
+      title: 'Enter File Name',
+      hintText: 'File name',
+      confirmLabel: 'Create',
     );
+    if (fileName != null && fileName.isNotEmpty) {
+      await createFile(currentDir, fileName);
+    }
   }
 
   Future<void> _showCreateDirectoryDialog(BuildContext context) async {
-    final TextEditingController dirNameController = TextEditingController();
-
-    await showDialog(
+    final dirName = await showFyrInputDialog(
       context: context,
-      builder: (dialogContext) {
-        Future<void> doCreate() async {
-          final dirName = dirNameController.text.trim();
-          if (dirName.isNotEmpty) {
-            await createDir(currentDir, dirName);
-            if (dialogContext.mounted) {
-              Navigator.pop(dialogContext);
-            }
-          }
-        }
-
-        return AlertDialog(
-          title: const Text('Enter Directory Name'),
-          content: TextField(
-            controller: dirNameController,
-            autofocus: true,
-            onSubmitted: (_) => doCreate(),
-            decoration: const InputDecoration(hintText: "Directory name"),
-          ),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: doCreate,
-              child: const Text('Create'),
-            ),
-          ],
-        );
-      },
+      title: 'Enter Directory Name',
+      hintText: 'Directory name',
+      confirmLabel: 'Create',
     );
+    if (dirName != null && dirName.isNotEmpty) {
+      await createDir(currentDir, dirName);
+    }
   }
 
   openBodyContextMenuRightClickTap(BuildContext context, Offset position) async {

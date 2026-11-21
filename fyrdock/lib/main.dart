@@ -806,7 +806,12 @@ class _DockScreenState extends State<DockScreen>
     if (iconName == null || iconName.isEmpty) return null;
     if (iconName.startsWith('/')) return iconName;
 
-    final name = iconName.toLowerCase().replaceAll('com.example.', '').replaceAll('fyr_', 'fyr');
+    final name = iconName
+        .toLowerCase()
+        .replaceAll('dev.fyrde.', '')
+        .replaceAll('com.fyr.', '')
+        .replaceAll('com.example.', '')
+        .replaceAll('fyr_', 'fyr');
     final possibleNames = [iconName, name, name.replaceAll('fyr', '')];
     
     final List<String> possiblePaths = [];
@@ -877,7 +882,11 @@ class _DockScreenState extends State<DockScreen>
   ) {
     final exec = (pinnedApp['exec'] as String).toLowerCase();
     final appId = (window['app_id'] as String).toLowerCase();
-    final strippedId = appId.replaceAll('com.example.', '').replaceAll('fyr_', 'fyr');
+    final strippedId = appId
+        .replaceAll('dev.fyrde.', '')
+        .replaceAll('com.fyr.', '')
+        .replaceAll('com.example.', '')
+        .replaceAll('fyr_', 'fyr');
     final name = (pinnedApp['name'] as String).toLowerCase();
     
     if (exec.contains(appId) || appId.contains(exec.split(' ')[0])) return true;

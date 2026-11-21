@@ -1,10 +1,13 @@
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:fyrdaw/models/midi_note.dart';
 import 'package:fyrdaw/utils/pitch_detector.dart';
 import 'package:fyrdaw/wav_writer.dart';
+
+const int _kWaveformIsolateByteThreshold = 524288;
 
 Future<Uint8List?> _readPathOrAssetBytes(String path) async {
   if (path.startsWith('assets/')) {
@@ -20,9 +23,8 @@ Future<Uint8List?> _readPathOrAssetBytes(String path) async {
   return await file.readAsBytes();
 }
 
-Future<void> reverseWavFile(String inputPath, String outputPath) async {
-  final bytes = await _readPathOrAssetBytes(inputPath);
-  if (bytes == null || bytes.length < 44) return;
+Uint8List? _reverseWavBytesSync(Uint8List bytes) {
+  if (bytes.length < 44) return null;
 
   int fmtOffset = 12;
   while (fmtOffset < bytes.length - 8) {
@@ -62,7 +64,7 @@ Future<void> reverseWavFile(String inputPath, String outputPath) async {
     dataOffset += 8 + chunkSize;
   }
 
-  if (dataOffset >= bytes.length || dataSize == 0) return;
+  if (dataOffset >= bytes.length || dataSize == 0) return null;
   if (dataOffset + dataSize > bytes.length) {
     dataSize = bytes.length - dataOffset;
   }
@@ -81,14 +83,36 @@ Future<void> reverseWavFile(String inputPath, String outputPath) async {
       }
     }
   }
-
-  await File(outputPath).writeAsBytes(newBytes);
+  return newBytes;
 }
 
-Future<List<double>?> extractWavWaveform(String path, int chunks) async {
+Future<void> reverseWavFile(String inputPath, String outputPath) async {
+  if (inputPath.startsWith('assets/')) {
+    final bytes = await _readPathOrAssetBytes(inputPath);
+    if (bytes == null || bytes.length < 44) return;
+    await Isolate.run(() {
+      final reversed = _reverseWavBytesSync(bytes);
+      if (reversed != null) {
+        File(outputPath).writeAsBytesSync(reversed);
+      }
+    });
+    return;
+  }
+  await Isolate.run(() {
+    final file = File(inputPath);
+    if (!file.existsSync()) return;
+    final bytes = file.readAsBytesSync();
+    final reversed = _reverseWavBytesSync(bytes);
+    if (reversed != null) {
+      File(outputPath).writeAsBytesSync(reversed);
+    }
+  });
+}
+
+/// Pure, isolate-safe peak extraction from raw WAV [bytes] into [chunks] bins.
+List<double>? extractWavWaveformFromBytes(Uint8List bytes, int chunks) {
   try {
-    final bytes = await _readPathOrAssetBytes(path);
-    if (bytes == null || bytes.length < 44) return null;
+    if (bytes.length < 44) return null;
 
     int fmtOffset = 12;
     int bytesPerFrame = 2;
@@ -138,7 +162,7 @@ Future<List<double>?> extractWavWaveform(String path, int chunks) async {
 
     int numFrames = dataSize ~/ bytesPerFrame;
     if (numFrames <= 0) return null;
-    
+
     int framesPerChunk = numFrames ~/ chunks;
     if (framesPerChunk <= 0) framesPerChunk = 1;
     int actualChunks = numFrames < chunks ? numFrames : chunks;
@@ -159,6 +183,37 @@ Future<List<double>?> extractWavWaveform(String path, int chunks) async {
       data.add(maxAmp);
     }
     return data;
+  } catch (e) {
+    return null;
+  }
+}
+
+List<double>? _extractWavWaveformFromDiskSync(String path, int chunks) {
+  try {
+    final file = File(path);
+    if (!file.existsSync()) return null;
+    return extractWavWaveformFromBytes(file.readAsBytesSync(), chunks);
+  } catch (_) {
+    return null;
+  }
+}
+
+Future<List<double>?> extractWavWaveform(String path, int chunks) async {
+  try {
+    if (path.startsWith('assets/')) {
+      final bytes = await _readPathOrAssetBytes(path);
+      if (bytes == null || bytes.length < 44) return null;
+      if (bytes.length >= _kWaveformIsolateByteThreshold) {
+        return Isolate.run(() => extractWavWaveformFromBytes(bytes, chunks));
+      }
+      return extractWavWaveformFromBytes(bytes, chunks);
+    }
+    final file = File(path);
+    if (!file.existsSync()) return null;
+    if (file.lengthSync() >= _kWaveformIsolateByteThreshold) {
+      return Isolate.run(() => _extractWavWaveformFromDiskSync(path, chunks));
+    }
+    return _extractWavWaveformFromDiskSync(path, chunks);
   } catch (e) {
     return null;
   }
@@ -279,6 +334,17 @@ DecodedWav? decodeWavBytes(Uint8List bytes) {
   );
 }
 
+DecodedWav? decodeWavFileSync(String path) {
+  try {
+    final f = File(path);
+    if (!f.existsSync()) return null;
+    final bytes = f.readAsBytesSync();
+    return decodeWavBytes(bytes);
+  } catch (_) {
+    return null;
+  }
+}
+
 Future<DecodedWav?> decodeWavFile(String path) async {
   try {
     final f = File(path);
@@ -295,16 +361,18 @@ Future<List<(double, double)>> detectAudioTransients(
   String path, {
   int maxSlices = 16,
   double sensitivity = 0.25,
-}) async {
-  final wav = await decodeWavFile(path);
-  if (wav == null || wav.frameCount == 0) return [];
-  return detectTransientsFromSamples(
-    wav.left,
-    wav.right,
-    wav.sampleRate,
-    maxSlices: maxSlices,
-    sensitivity: sensitivity,
-  );
+}) {
+  return Isolate.run(() {
+    final wav = decodeWavFileSync(path);
+    if (wav == null || wav.frameCount == 0) return <(double, double)>[];
+    return detectTransientsFromSamples(
+      wav.left,
+      wav.right,
+      wav.sampleRate,
+      maxSlices: maxSlices,
+      sensitivity: sensitivity,
+    );
+  });
 }
 
 List<(double, double)> detectTransientsFromSamples(
@@ -377,169 +445,187 @@ List<(double, double)> detectTransientsFromSamples(
 
 /// Writes a peak-normalized copy of [inputPath] scaled to [targetPeak] (default -1 dBFS)
 /// and returns the output path, or null if silent/unreadable.
+/// Executes on a background [Isolate] to avoid blocking the UI thread.
 Future<String?> normalizeWavPeak(
   String inputPath, {
   String? outPath,
   double targetPeak = 0.89,
-}) async {
-  final wav = await decodeWavFile(inputPath);
-  if (wav == null || wav.frameCount == 0) return null;
+}) {
+  return Isolate.run(() {
+    final wav = decodeWavFileSync(inputPath);
+    if (wav == null || wav.frameCount == 0) return null;
 
-  double peak = 0.0;
-  for (int i = 0; i < wav.frameCount; i++) {
-    final al = wav.left[i].abs();
-    final ar = wav.right[i].abs();
-    if (al > peak) peak = al;
-    if (ar > peak) peak = ar;
-  }
-  if (peak <= 1e-6) return null;
+    double peak = 0.0;
+    for (int i = 0; i < wav.frameCount; i++) {
+      final al = wav.left[i].abs();
+      final ar = wav.right[i].abs();
+      if (al > peak) peak = al;
+      if (ar > peak) peak = ar;
+    }
+    if (peak <= 1e-6) return null;
 
-  final gain = targetPeak / peak;
-  final target =
-      outPath ??
-      inputPath.replaceFirst(RegExp(r'\.wav$', caseSensitive: false), '_norm.wav');
-  final writer = WavWriter(target, sampleRate: wav.sampleRate, channels: 2);
-  final outPcm = Int16List(wav.frameCount * 2);
-  for (int i = 0; i < wav.frameCount; i++) {
-    outPcm[i * 2] = (wav.left[i] * gain * 32767.0).round().clamp(-32768, 32767);
-    outPcm[i * 2 + 1] =
-        (wav.right[i] * gain * 32767.0).round().clamp(-32768, 32767);
-  }
-  writer.write(ByteData.view(outPcm.buffer).buffer.asUint8List());
-  writer.close();
-  return target;
+    final gain = targetPeak / peak;
+    final target =
+        outPath ??
+        inputPath.replaceFirst(
+          RegExp(r'\.wav$', caseSensitive: false),
+          '_norm.wav',
+        );
+    final writer = WavWriter(target, sampleRate: wav.sampleRate, channels: 2);
+    final outPcm = Int16List(wav.frameCount * 2);
+    for (int i = 0; i < wav.frameCount; i++) {
+      outPcm[i * 2] =
+          (wav.left[i] * gain * 32767.0).round().clamp(-32768, 32767);
+      outPcm[i * 2 + 1] =
+          (wav.right[i] * gain * 32767.0).round().clamp(-32768, 32767);
+    }
+    writer.write(ByteData.view(outPcm.buffer).buffer.asUint8List());
+    writer.close();
+    return target;
+  });
 }
 
 /// Scans decoded PCM to split non-silent regions (returning normalized 0..1 ranges)
-/// for "Strip Silence" editing.
+/// for "Strip Silence" editing. Executes on a background [Isolate].
 Future<List<(double, double)>> detectAudioNonSilentRanges(
   String inputPath, {
   double threshold = 0.025,
   double minSilenceSec = 0.12,
-}) async {
-  final wav = await decodeWavFile(inputPath);
-  if (wav == null || wav.frameCount == 0) return [];
-  final sr = wav.sampleRate;
-  final total = wav.frameCount;
-  final win = (sr * 0.02).round().clamp(64, 2048);
-  final minSilentWins = max(1, (minSilenceSec / 0.02).round());
+}) {
+  return Isolate.run(() {
+    final wav = decodeWavFileSync(inputPath);
+    if (wav == null || wav.frameCount == 0) return <(double, double)>[];
+    final sr = wav.sampleRate;
+    final total = wav.frameCount;
+    final win = (sr * 0.02).round().clamp(64, 2048);
+    final minSilentWins = max(1, (minSilenceSec / 0.02).round());
 
-  final List<bool> active = [];
-  for (int start = 0; start < total; start += win) {
-    final end = min(total, start + win);
-    double pk = 0.0;
-    for (int i = start; i < end; i++) {
-      final a = max(wav.left[i].abs(), wav.right[i].abs());
-      if (a > pk) pk = a;
-    }
-    active.add(pk >= threshold);
-  }
-
-  // Bridge brief dips shorter than minSilentWins
-  int silentRun = 0;
-  for (int i = 0; i < active.length; i++) {
-    if (!active[i]) {
-      silentRun++;
-    } else {
-      if (silentRun > 0 && silentRun < minSilentWins && i - silentRun > 0) {
-        for (int k = i - silentRun; k < i; k++) {
-          active[k] = true;
-        }
+    final List<bool> active = [];
+    for (int start = 0; start < total; start += win) {
+      final end = min(total, start + win);
+      double pk = 0.0;
+      for (int i = start; i < end; i++) {
+        final a = max(wav.left[i].abs(), wav.right[i].abs());
+        if (a > pk) pk = a;
       }
-      silentRun = 0;
+      active.add(pk >= threshold);
     }
-  }
 
-  final segments = <(double, double)>[];
-  int? segStart;
-  for (int i = 0; i < active.length; i++) {
-    if (active[i] && segStart == null) {
-      segStart = i;
-    } else if (!active[i] && segStart != null) {
-      final sFrac = ((segStart * win) / total).clamp(0.0, 1.0);
-      final eFrac = min(total, i * win) / total;
-      if (eFrac > sFrac + 0.01) segments.add((sFrac, eFrac));
-      segStart = null;
+    // Bridge brief dips shorter than minSilentWins
+    int silentRun = 0;
+    for (int i = 0; i < active.length; i++) {
+      if (!active[i]) {
+        silentRun++;
+      } else {
+        if (silentRun > 0 && silentRun < minSilentWins && i - silentRun > 0) {
+          for (int k = i - silentRun; k < i; k++) {
+            active[k] = true;
+          }
+        }
+        silentRun = 0;
+      }
     }
-  }
-  if (segStart != null) {
-    final sFrac = ((segStart * win) / total).clamp(0.0, 1.0);
-    if (1.0 > sFrac + 0.01) segments.add((sFrac, 1.0));
-  }
-  return segments;
+
+    final segments = <(double, double)>[];
+    int? segStart;
+    for (int i = 0; i < active.length; i++) {
+      if (active[i] && segStart == null) {
+        segStart = i;
+      } else if (!active[i] && segStart != null) {
+        final sFrac = ((segStart * win) / total).clamp(0.0, 1.0);
+        final eFrac = min(total, i * win) / total;
+        if (eFrac > sFrac + 0.01) segments.add((sFrac, eFrac));
+        segStart = null;
+      }
+    }
+    if (segStart != null) {
+      final sFrac = ((segStart * win) / total).clamp(0.0, 1.0);
+      if (1.0 > sFrac + 0.01) segments.add((sFrac, 1.0));
+    }
+    return segments;
+  });
 }
 
-/// Estimates integrated LUFS from a decoded WAV file.
-Future<double> estimateWavIntegratedLufs(String filePath) async {
-  final wav = await decodeWavFile(filePath);
-  if (wav == null || wav.frameCount == 0) return -60.0;
-  double sumSq = 0.0;
-  for (int i = 0; i < wav.frameCount; i++) {
-    final mono = 0.5 * (wav.left[i] + wav.right[i]);
-    sumSq += mono * mono;
-  }
-  final meanSq = sumSq / wav.frameCount;
-  if (meanSq <= 1e-8) return -60.0;
-  return (-0.691 + 10.0 * (log(meanSq) / ln10)).clamp(-60.0, 0.0);
+/// Estimates integrated LUFS from a decoded WAV file on a background [Isolate].
+Future<double> estimateWavIntegratedLufs(String filePath) {
+  return Isolate.run(() {
+    final wav = decodeWavFileSync(filePath);
+    if (wav == null || wav.frameCount == 0) return -60.0;
+    double sumSq = 0.0;
+    for (int i = 0; i < wav.frameCount; i++) {
+      final mono = 0.5 * (wav.left[i] + wav.right[i]);
+      sumSq += mono * mono;
+    }
+    final meanSq = sumSq / wav.frameCount;
+    if (meanSq <= 1e-8) return -60.0;
+    return (-0.691 + 10.0 * (log(meanSq) / ln10)).clamp(-60.0, 0.0);
+  });
 }
 
 /// Transcribes a monophonic audio WAV file into quantized/merged [MidiNote]s using
-/// [detectPitchHz] across sliding analysis windows.
+/// [detectPitchHz] across sliding analysis windows on a background [Isolate].
 Future<List<MidiNote>> extractMelodyMidiNotes(
   String filePath,
   double clipLength, {
   double stepSec = 0.08,
   double windowSec = 0.10,
-}) async {
-  final wav = await decodeWavFile(filePath);
-  if (wav == null || wav.frameCount == 0 || clipLength <= 0) return [];
-  final sr = wav.sampleRate;
-  final stepFrames = max(512, (sr * stepSec).round());
-  final winFrames = max(1024, (sr * windowSec).round());
+}) {
+  if (clipLength <= 0) return Future.value(<MidiNote>[]);
+  return Isolate.run(() {
+    final wav = decodeWavFileSync(filePath);
+    if (wav == null || wav.frameCount == 0) return <MidiNote>[];
+    final sr = wav.sampleRate;
+    final stepFrames = max(512, (sr * stepSec).round());
+    final winFrames = max(1024, (sr * windowSec).round());
 
-  final notes = <MidiNote>[];
-  int? curMidi;
-  double curStart = 0.0;
-  double curRms = 0.0;
-  int curFrames = 0;
+    final notes = <MidiNote>[];
+    int? curMidi;
+    double curStart = 0.0;
+    double curRms = 0.0;
+    int curFrames = 0;
 
-  for (int pos = 0; pos + winFrames <= wav.frameCount; pos += stepFrames) {
-    final buf = Float64List(winFrames);
-    double sumSq = 0.0;
-    for (int i = 0; i < winFrames; i++) {
-      final m = 0.5 * (wav.left[pos + i] + wav.right[pos + i]);
-      buf[i] = m;
-      sumSq += m * m;
-    }
-    final rms = sqrt(sumSq / winFrames);
-    final res = detectPitchHz(buf, sr);
-    final midi = (res != null && res.confidence > 0.55) ? res.midiNote : null;
-    final tFrac = pos / wav.frameCount;
-    final tPos = tFrac * clipLength;
-
-    if (midi != null && midi == curMidi) {
-      curRms += rms;
-      curFrames++;
-    } else {
-      if (curMidi != null) {
-        final len = (tPos - curStart).clamp(4.0, clipLength - curStart);
-        final avgRms = curRms / max(1, curFrames);
-        final vel = (avgRms * 260.0).round().clamp(45, 127);
-        notes.add(MidiNote(pitch: curMidi, start: curStart, length: len, velocity: vel));
+    for (int pos = 0; pos + winFrames <= wav.frameCount; pos += stepFrames) {
+      final buf = Float64List(winFrames);
+      double sumSq = 0.0;
+      for (int i = 0; i < winFrames; i++) {
+        final m = 0.5 * (wav.left[pos + i] + wav.right[pos + i]);
+        buf[i] = m;
+        sumSq += m * m;
       }
-      curMidi = midi;
-      curStart = tPos;
-      curRms = midi != null ? rms : 0.0;
-      curFrames = midi != null ? 1 : 0;
+      final rms = sqrt(sumSq / winFrames);
+      final res = detectPitchHz(buf, sr);
+      final midi = (res != null && res.confidence > 0.55) ? res.midiNote : null;
+      final tFrac = pos / wav.frameCount;
+      final tPos = tFrac * clipLength;
+
+      if (midi != null && midi == curMidi) {
+        curRms += rms;
+        curFrames++;
+      } else {
+        if (curMidi != null) {
+          final len = (tPos - curStart).clamp(4.0, clipLength - curStart);
+          final avgRms = curRms / max(1, curFrames);
+          final vel = (avgRms * 260.0).round().clamp(45, 127);
+          notes.add(
+            MidiNote(pitch: curMidi, start: curStart, length: len, velocity: vel),
+          );
+        }
+        curMidi = midi;
+        curStart = tPos;
+        curRms = midi != null ? rms : 0.0;
+        curFrames = midi != null ? 1 : 0;
+      }
     }
-  }
-  if (curMidi != null) {
-    final len = (clipLength - curStart).clamp(4.0, clipLength);
-    final avgRms = curRms / max(1, curFrames);
-    final vel = (avgRms * 260.0).round().clamp(45, 127);
-    notes.add(MidiNote(pitch: curMidi, start: curStart, length: len, velocity: vel));
-  }
-  return notes;
+    if (curMidi != null) {
+      final len = (clipLength - curStart).clamp(4.0, clipLength);
+      final avgRms = curRms / max(1, curFrames);
+      final vel = (avgRms * 260.0).round().clamp(45, 127);
+      notes.add(
+        MidiNote(pitch: curMidi, start: curStart, length: len, velocity: vel),
+      );
+    }
+    return notes;
+  });
 }
 
 /// Adds subtle organic timing & velocity micro-variation to a MIDI clip's notes.

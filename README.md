@@ -43,6 +43,19 @@ chmod +x install.sh
 
 > **Note:** The script will prompt you for your `sudo` password to install system packages.
 
+#### Standalone Suite Installers & `.deb` Packaging:
+You can also install individual app suites (Creative, Office, or Dev) on Ubuntu/Debian, Arch, or Fedora without installing the full desktop environment:
+
+```bash
+chmod +x install_suite.sh
+./install_suite.sh --suite creative          # Sound Booth (fyrdaw), fyrGraphics, fyrDirector
+./install_suite.sh --suite office            # fyrDocs, fyrSheets, fyrSlides
+./install_suite.sh --suite dev               # FyrCode, FyrApi, fyrDB, fyrPods
+./install_suite.sh --suite creative --deb    # Also package .deb installers into ./dist/deb/
+```
+
+For an Ubuntu-specific Creative Suite installer, `./install_cs_ubuntu.sh` is also available.
+
 ---
 
 ## Keyboard Shortcuts
@@ -63,7 +76,9 @@ The main modifier key (`$mod`) is the **Super/Windows** key.
 | Open Terminal (**fyrTerm**) | `Super + T` |
 | Open File Manager (**fyrFiles**) | `Super + F` |
 | Toggle Floating Mode | `Super + M` |
-| Take a Screenshot | `Print Screen` |
+| Take a Screenshot (Full Screen) | `Print Screen` |
+| Take a Screenshot (Select Region) | `Shift + Print Screen` |
+| Take a Screenshot (Focused Window) | `Alt + Print Screen` |
 | Toggle Screen Recording | `Super + Print Screen` |
 | **Window Management** | |
 | Change Focus | `Super + Arrow Keys` |

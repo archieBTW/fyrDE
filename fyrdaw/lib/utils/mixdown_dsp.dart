@@ -1,5 +1,6 @@
 import 'dart:math';
 import 'dart:typed_data';
+import 'package:fyrdaw/models/automation_point.dart';
 import 'package:fyrdaw/models/daw_effect.dart';
 import 'package:fyrdaw/models/track.dart';
 import 'package:fyrdaw/utils/parametric_eq_dsp.dart';
@@ -683,6 +684,55 @@ class OverdriveAndAmpProcessor {
   }
 }
 
+/// Pure, isolate-safe parameter evaluation querying `${fx.name}_$paramKey`
+/// from [automation] at [posUnits] when present.
+double resolveEffectParamFromAutomation(
+  Map<String, List<AutomationPoint>>? automation,
+  DawEffect fx,
+  String paramKey,
+  double fallback,
+  double? posUnits,
+) {
+  final double baseVal = fx.parameters[paramKey] ?? fallback;
+  if (automation == null || posUnits == null) return baseVal.clamp(0.0, 1.0);
+  final String autoKey = '${fx.name}_$paramKey';
+  final pts = automation[autoKey];
+  if (pts == null || pts.isEmpty) {
+    return baseVal.clamp(0.0, 1.0);
+  }
+  final double av = interpolateAutomationPoints(pts, posUnits);
+  return (av >= 0.0 ? av : baseVal).clamp(0.0, 1.0);
+}
+
+/// Pure, isolate-safe parameter map evaluation for [fx] at [posUnits].
+Map<String, double> resolveEffectParamMapFromAutomation(
+  Map<String, List<AutomationPoint>>? automation,
+  DawEffect fx,
+  double? posUnits,
+) {
+  if (automation == null || posUnits == null) return fx.parameters;
+  bool anyAuto = false;
+  for (final k in fx.parameters.keys) {
+    if (automation['${fx.name}_$k']?.isNotEmpty ?? false) {
+      anyAuto = true;
+      break;
+    }
+  }
+  if (!anyAuto) return fx.parameters;
+  return {
+    for (final e in fx.parameters.entries)
+      e.key: (automation['${fx.name}_${e.key}']?.isNotEmpty ?? false)
+          ? (() {
+              final av = interpolateAutomationPoints(
+                automation['${fx.name}_${e.key}'],
+                posUnits,
+              );
+              return av >= 0.0 ? av : e.value;
+            })()
+          : e.value,
+  };
+}
+
 /// Evaluates effective parameter values for [fx] on optional [track], querying
 /// `${fx.name}_$paramKey` automation at [posUnits] when present.
 double resolveEffectParam(
@@ -691,16 +741,13 @@ double resolveEffectParam(
   String paramKey,
   double fallback,
   double? posUnits,
-) {
-  final double baseVal = fx.parameters[paramKey] ?? fallback;
-  if (track == null || posUnits == null) return baseVal.clamp(0.0, 1.0);
-  final String autoKey = '${fx.name}_$paramKey';
-  if (track.automation[autoKey]?.isEmpty ?? true) {
-    return baseVal.clamp(0.0, 1.0);
-  }
-  final double av = track.getInterpolatedAutomation(autoKey, posUnits);
-  return (av >= 0.0 ? av : baseVal).clamp(0.0, 1.0);
-}
+) => resolveEffectParamFromAutomation(
+  track?.automation,
+  fx,
+  paramKey,
+  fallback,
+  posUnits,
+);
 
 /// Builds a parameter map for [fx] evaluated at [posUnits], preserving raw EQ
 /// parameters when un-automated and applying automation curves where present.
@@ -708,26 +755,4 @@ Map<String, double> resolveEffectParamMap(
   Track? track,
   DawEffect fx,
   double? posUnits,
-) {
-  if (track == null || posUnits == null) return fx.parameters;
-  bool anyAuto = false;
-  for (final k in fx.parameters.keys) {
-    if (track.automation['${fx.name}_$k']?.isNotEmpty ?? false) {
-      anyAuto = true;
-      break;
-    }
-  }
-  if (!anyAuto) return fx.parameters;
-  return {
-    for (final e in fx.parameters.entries)
-      e.key: (track.automation['${fx.name}_${e.key}']?.isNotEmpty ?? false)
-          ? (() {
-              final av = track.getInterpolatedAutomation(
-                '${fx.name}_${e.key}',
-                posUnits,
-              );
-              return av >= 0.0 ? av : e.value;
-            })()
-          : e.value,
-  };
-}
+) => resolveEffectParamMapFromAutomation(track?.automation, fx, posUnits);

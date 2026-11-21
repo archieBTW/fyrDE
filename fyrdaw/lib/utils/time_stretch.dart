@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:fyrdaw/utils/audio_utils.dart';
@@ -197,14 +198,46 @@ class TimeStretchEngine {
   }
 
   /// Processes a WAV file on disk into [outputPath] using [processStereo].
+  /// By default executes on a background [Isolate] so WSOLA stretching never
+  /// stalls the UI frame loop.
   static Future<bool> processWavFile({
     required String inputPath,
     required String outputPath,
     required double stretchFactor,
     required double pitchSemitones,
     bool preservePitch = true,
-  }) async {
-    final decoded = await decodeWavFile(inputPath);
+    bool useIsolate = true,
+  }) {
+    if (useIsolate) {
+      return Isolate.run(
+        () => _processWavFileSync(
+          inputPath: inputPath,
+          outputPath: outputPath,
+          stretchFactor: stretchFactor,
+          pitchSemitones: pitchSemitones,
+          preservePitch: preservePitch,
+        ),
+      );
+    }
+    return Future<bool>.value(
+      _processWavFileSync(
+        inputPath: inputPath,
+        outputPath: outputPath,
+        stretchFactor: stretchFactor,
+        pitchSemitones: pitchSemitones,
+        preservePitch: preservePitch,
+      ),
+    );
+  }
+
+  static bool _processWavFileSync({
+    required String inputPath,
+    required String outputPath,
+    required double stretchFactor,
+    required double pitchSemitones,
+    required bool preservePitch,
+  }) {
+    final decoded = decodeWavFileSync(inputPath);
     if (decoded == null || decoded.frameCount == 0) return false;
 
     final processed = processStereo(
@@ -242,7 +275,7 @@ class TimeStretchEngine {
       out.setInt16(44 + i * 4 + 2, r16, Endian.little);
     }
 
-    await File(outputPath).writeAsBytes(out.buffer.asUint8List(), flush: true);
+    File(outputPath).writeAsBytesSync(out.buffer.asUint8List(), flush: true);
     return true;
   }
 }
