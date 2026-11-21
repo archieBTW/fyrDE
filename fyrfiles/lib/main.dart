@@ -3555,6 +3555,84 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
     );
   }
 
+  Future<void> _showCreateFileDialog(BuildContext context) async {
+    final TextEditingController fileNameController = TextEditingController();
+
+    await showDialog(
+      context: context,
+      builder: (dialogContext) {
+        Future<void> doCreate() async {
+          final fileName = fileNameController.text.trim();
+          if (fileName.isNotEmpty) {
+            await createFile(currentDir, fileName);
+            if (dialogContext.mounted) {
+              Navigator.pop(dialogContext);
+            }
+          }
+        }
+
+        return AlertDialog(
+          title: const Text('Enter File Name'),
+          content: TextField(
+            controller: fileNameController,
+            autofocus: true,
+            onSubmitted: (_) => doCreate(),
+            decoration: const InputDecoration(hintText: "File name"),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: doCreate,
+              child: const Text('Create'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _showCreateDirectoryDialog(BuildContext context) async {
+    final TextEditingController dirNameController = TextEditingController();
+
+    await showDialog(
+      context: context,
+      builder: (dialogContext) {
+        Future<void> doCreate() async {
+          final dirName = dirNameController.text.trim();
+          if (dirName.isNotEmpty) {
+            await createDir(currentDir, dirName);
+            if (dialogContext.mounted) {
+              Navigator.pop(dialogContext);
+            }
+          }
+        }
+
+        return AlertDialog(
+          title: const Text('Enter Directory Name'),
+          content: TextField(
+            controller: dirNameController,
+            autofocus: true,
+            onSubmitted: (_) => doCreate(),
+            decoration: const InputDecoration(hintText: "Directory name"),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: doCreate,
+              child: const Text('Create'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   openBodyContextMenuRightClickTap(BuildContext context, Offset position) async {
     showMenu(
       context: context,
@@ -3569,38 +3647,9 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
           child: ListTile(
             leading: const Icon(Icons.create),
             title: const Text('Create File'),
-            onTap: () {
+            onTap: () async {
               Navigator.pop(context);
-              showDialog(
-                context: context,
-                builder: (context) {
-                  TextEditingController fileNameController =
-                      TextEditingController();
-                  return AlertDialog(
-                    title: const Text('Enter File Name'),
-                    content: TextField(
-                      controller: fileNameController,
-                      decoration: const InputDecoration(hintText: "File name"),
-                    ),
-                    actions: <Widget>[
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('Cancel'),
-                      ),
-                      TextButton(
-                        onPressed: () async {
-                          if (fileNameController.text.isNotEmpty) {
-                            await createFile(
-                                currentDir, fileNameController.text);
-                            Navigator.pop(context);
-                          }
-                        },
-                        child: const Text('Create'),
-                      ),
-                    ],
-                  );
-                },
-              );
+              await _showCreateFileDialog(context);
             },
           ),
         ),
@@ -3608,38 +3657,9 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
           child: ListTile(
             leading: const Icon(Icons.create),
             title: const Text('Create Directory'),
-            onTap: () {
+            onTap: () async {
               Navigator.pop(context);
-              showDialog(
-                context: context,
-                builder: (context) {
-                  TextEditingController dirNameController =
-                      TextEditingController();
-                  return AlertDialog(
-                    title: const Text('Enter Directory Name'),
-                    content: TextField(
-                      controller: dirNameController,
-                      decoration:
-                          const InputDecoration(hintText: "Directory name"),
-                    ),
-                    actions: <Widget>[
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('Cancel'),
-                      ),
-                      TextButton(
-                        onPressed: () async {
-                          if (dirNameController.text.isNotEmpty) {
-                            await createDir(currentDir, dirNameController.text);
-                            Navigator.pop(context);
-                          }
-                        },
-                        child: const Text('Create'),
-                      ),
-                    ],
-                  );
-                },
-              );
+              await _showCreateDirectoryDialog(context);
             },
           ),
         ),
@@ -3705,38 +3725,9 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
           child: ListTile(
             leading: const Icon(Icons.create),
             title: const Text('Create File'),
-            onTap: () {
+            onTap: () async {
               Navigator.pop(context);
-              showDialog(
-                context: context,
-                builder: (context) {
-                  TextEditingController fileNameController =
-                      TextEditingController();
-                  return AlertDialog(
-                    title: const Text('Enter File Name'),
-                    content: TextField(
-                      controller: fileNameController,
-                      decoration: const InputDecoration(hintText: "File name"),
-                    ),
-                    actions: <Widget>[
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('Cancel'),
-                      ),
-                      TextButton(
-                        onPressed: () async {
-                          if (fileNameController.text.isNotEmpty) {
-                            await createFile(
-                                currentDir, fileNameController.text);
-                            Navigator.pop(context);
-                          }
-                        },
-                        child: const Text('Create'),
-                      ),
-                    ],
-                  );
-                },
-              );
+              await _showCreateFileDialog(context);
             },
           ),
         ),
@@ -3744,38 +3735,9 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
           child: ListTile(
             leading: const Icon(Icons.create),
             title: const Text('Create Directory'),
-            onTap: () {
+            onTap: () async {
               Navigator.pop(context);
-              showDialog(
-                context: context,
-                builder: (context) {
-                  TextEditingController dirNameController =
-                      TextEditingController();
-                  return AlertDialog(
-                    title: const Text('Enter Directory Name'),
-                    content: TextField(
-                      controller: dirNameController,
-                      decoration:
-                          const InputDecoration(hintText: "Directory name"),
-                    ),
-                    actions: <Widget>[
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('Cancel'),
-                      ),
-                      TextButton(
-                        onPressed: () async {
-                          if (dirNameController.text.isNotEmpty) {
-                            await createDir(currentDir, dirNameController.text);
-                            Navigator.pop(context);
-                          }
-                        },
-                        child: const Text('Create'),
-                      ),
-                    ],
-                  );
-                },
-              );
+              await _showCreateDirectoryDialog(context);
             },
           ),
         ),
