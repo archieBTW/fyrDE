@@ -169,6 +169,12 @@ static void fyr_method_call_cb(FlMethodChannel* channel, FlMethodCall* method_ca
     g_autoptr(FlValue) result = fl_value_new_bool(bound);
     g_autoptr(FlMethodResponse) response = FL_METHOD_RESPONSE(fl_method_success_response_new(result));
     fl_method_call_respond(method_call, response, nullptr);
+  } else if (strcmp(method, "isLayerSupported") == 0) {
+    g_autoptr(FlValue) result =
+        fl_value_new_bool(gtk_layer_is_supported() ? TRUE : FALSE);
+    g_autoptr(FlMethodResponse) response =
+        FL_METHOD_RESPONSE(fl_method_success_response_new(result));
+    fl_method_call_respond(method_call, response, nullptr);
   } else if (strcmp(method, "setNamespace") == 0) {
     FlValue* args = fl_method_call_get_args(method_call);
     if (args && fl_value_get_type(args) == FL_VALUE_TYPE_STRING &&
@@ -235,7 +241,19 @@ static void my_application_activate(GApplication* application) {
     gtk_window_set_title(window, "fyrdock");
   }
 
-  gtk_window_set_default_size(window, 1280, 720);
+  // Initialize gtk-layer-shell BEFORE gtk_widget_realize so wlroots >= 0.20
+  // always receives valid initial layer surface geometry and anchors.
+  if (gtk_layer_is_supported()) {
+    gtk_layer_init_for_window(window);
+    gtk_layer_set_namespace(window, "fyrdock");
+    gtk_layer_set_layer(window, GTK_LAYER_SHELL_LAYER_TOP);
+    gtk_layer_set_anchor(window, GTK_LAYER_SHELL_EDGE_BOTTOM, TRUE);
+    gtk_layer_set_keyboard_mode(window, GTK_LAYER_SHELL_KEYBOARD_MODE_NONE);
+    gtk_window_set_default_size(window, 800, 200);
+    gtk_widget_set_size_request(GTK_WIDGET(window), 800, 200);
+  } else {
+    gtk_window_set_default_size(window, 1280, 720);
+  }
   gtk_widget_realize(GTK_WIDGET(window));
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();

@@ -136,9 +136,10 @@ install_deps() {
             "bluez" "bluez-utils" "xdg-utils" "slurp" "libnotify" "polkit-gnome" "network-manager-applet" "pavucontrol" "playerctl" "jq" "libcanberra" "psmisc" "pamixer" "sddm" "accountsservice" "qt5-declarative" "qt5-quickcontrols" "qt5-quickcontrols2" "qt5-graphicaleffects" "kdeconnect"
             "ufw" "clamav" "rkhunter" "inotify-tools" "acl" "mpv" "ffmpeg" "noto-fonts-emoji" "zsh" "xorg-server-xvfb" "p7zip" "zip" "tar" "gzip" "bzip2" "nodejs" "npm" "clang" "virglrenderer" "libpulse" "rclone" "fuse3" "udisks2" "cryptsetup" "parted" "gptfdisk" "dosfstools" "exfatprogs" "ntfs-3g" "gnupg"
             "gstreamer" "gst-plugins-base" "gst-plugins-good" "gst-plugins-bad" "gst-plugins-ugly" "gst-libav" "gst-plugin-pipewire" "libcamera" "gst-plugin-libcamera"
+            "wlroots0.20" "scenefx"
         )
         sudo pacman -S --needed --noconfirm "${deps[@]}"
-        yay -S --needed --noconfirm scenefx0.4 wlroots0.19 xdg-desktop-portal-termfilechooser-hunkyburrito-git
+        yay -S --needed --noconfirm xdg-desktop-portal-termfilechooser-hunkyburrito-git
 
     elif [ "$OS" = "ubuntu" ] || [ "$OS" = "debian" ]; then
         echo "Updating system..."
@@ -208,7 +209,7 @@ build_swayfx() {
     echo "Building and installing local swayfx..."
     if [ -d "./swayfx" ]; then
         cd ./swayfx
-        if [ ! -f "build/build.ninja" ]; then
+        if [ ! -f "build/build.ninja" ] || ! grep -q "scenefx-0.5" build/build.ninja 2>/dev/null; then
             rm -rf build
             meson setup build
         fi

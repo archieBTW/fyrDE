@@ -3,8 +3,12 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <strings.h>
+#include <wlr/types/wlr_ext_workspace_v1.h>
+#include "log.h"
 #include "stringop.h"
+#include "sway/desktop/transaction.h"
 #include "sway/input/input-manager.h"
 #include "sway/input/cursor.h"
 #include "sway/input/seat.h"
@@ -17,8 +21,124 @@
 #include "sway/tree/view.h"
 #include "sway/tree/workspace.h"
 #include "list.h"
-#include "log.h"
 #include "util.h"
+
+static const uint32_t WORKSPACE_CAPABILITIES =
+	EXT_WORKSPACE_HANDLE_V1_WORKSPACE_CAPABILITIES_ACTIVATE |
+	EXT_WORKSPACE_HANDLE_V1_WORKSPACE_CAPABILITIES_ASSIGN;
+
+static const uint32_t GROUP_CAPABILITIES =
+	EXT_WORKSPACE_GROUP_HANDLE_V1_GROUP_CAPABILITIES_CREATE_WORKSPACE;
+
+// Helper to find the output associated with a workspace group.
+static struct sway_output *group_to_output(
+		struct wlr_ext_workspace_group_handle_v1 *group) {
+	for (int i = 0; i < root->outputs->length; i++) {
+		struct sway_output *output = root->outputs->items[i];
+		if (output->ext_workspace_group == group) {
+			return output;
+		}
+	}
+	abort(); // unreachable
+}
+
+// Callback for ext-workspace-v1 commit events.
+static void handle_commit(struct wl_listener *listener, void *data) {
+	struct sway_server *server =
+		wl_container_of(listener, server, workspace_manager_v1_commit);
+	struct wlr_ext_workspace_v1_commit_event *event = data;
+
+	struct wlr_ext_workspace_v1_request *req, *tmp;
+	wl_list_for_each_safe(req, tmp, event->requests, link) {
+		switch (req->type) {
+		case WLR_EXT_WORKSPACE_V1_REQUEST_ACTIVATE:
+			if (req->activate.workspace) {
+				workspace_switch(req->activate.workspace->data);
+			}
+			break;
+		case WLR_EXT_WORKSPACE_V1_REQUEST_CREATE_WORKSPACE:;
+			struct sway_output *output = group_to_output(req->create_workspace.group);
+			sway_assert(output, "NULL output given to create_workspace");
+
+			char *name;
+			if (req->create_workspace.name) {
+				if (workspace_by_name(req->create_workspace.name)) {
+					sway_log(SWAY_ERROR, "Refusing to create workspace with duplicate name.");
+					break; // Already exists.
+				}
+				name = strdup(req->create_workspace.name);
+			} else {
+				name = workspace_next_name(output->wlr_output->name);
+			}
+
+			struct sway_workspace *new_ws = workspace_create(output, name);
+			if (new_ws) {
+				workspace_switch(new_ws);
+			}
+			free(name);
+			break;
+		case WLR_EXT_WORKSPACE_V1_REQUEST_ASSIGN:;
+			if (!req->assign.workspace || !req->assign.group) break;
+
+			struct sway_workspace *ws = req->assign.workspace->data;
+			struct sway_output *new_output = group_to_output(req->assign.group);
+			struct sway_output *old_output = ws->output;
+			workspace_move_to_output(ws, new_output);
+			arrange_output(old_output);
+			arrange_output(new_output);
+			break;
+		case WLR_EXT_WORKSPACE_V1_REQUEST_DEACTIVATE:
+		case WLR_EXT_WORKSPACE_V1_REQUEST_REMOVE:
+			break; // No-op.
+		}
+	}
+
+	transaction_commit_dirty();
+}
+
+// Initialize ext-workspace. Must be called once at startup.
+bool sway_ext_workspace_init(void) {
+	server.workspace_manager_v1 =
+		wlr_ext_workspace_manager_v1_create(server.wl_display, 1);
+	if (!server.workspace_manager_v1) {
+		sway_log(SWAY_ERROR, "Failed to create ext_workspace_manager_v1");
+		return false;
+	}
+
+	server.workspace_manager_v1_commit.notify = handle_commit;
+	wl_signal_add(&server.workspace_manager_v1->events.commit,
+		&server.workspace_manager_v1_commit);
+	return true;
+}
+
+// Must be called whenever an output is enabled.
+void sway_ext_workspace_output_enable(struct sway_output *output) {
+	if (!output->wlr_output) {
+		return;
+	}
+
+	output->ext_workspace_group =
+		wlr_ext_workspace_group_handle_v1_create(
+			server.workspace_manager_v1, GROUP_CAPABILITIES);
+	if (!output->ext_workspace_group) {
+		sway_log(SWAY_ERROR, "Failed to create workspace group for output '%s'",
+			output->wlr_output->name);
+		return;
+	}
+
+	wlr_ext_workspace_group_handle_v1_output_enter(
+		output->ext_workspace_group, output->wlr_output);
+}
+
+// Must be called whenever an output is disabled.
+void sway_ext_workspace_output_disable(struct sway_output *output) {
+	if (!output->ext_workspace_group) {
+		return;
+	}
+
+	wlr_ext_workspace_group_handle_v1_destroy(output->ext_workspace_group);
+	output->ext_workspace_group = NULL;
+}
 
 struct workspace_config *workspace_find_config(const char *ws_name) {
 	for (int i = 0; i < config->workspace_configs->length; ++i) {
@@ -70,6 +190,16 @@ struct sway_workspace *workspace_create(struct sway_output *output,
 		sway_log(SWAY_ERROR, "Unable to allocate sway_workspace");
 		return NULL;
 	}
+
+	ws->ext_workspace = wlr_ext_workspace_handle_v1_create(
+		server.workspace_manager_v1, NULL, WORKSPACE_CAPABILITIES);
+	if (!ws->ext_workspace) {
+		sway_log(SWAY_ERROR, "Failed to create ext_workspace for '%s'", name);
+		free(ws);
+		return NULL;
+	}
+	ws->ext_workspace->data = ws;
+
 	node_init(&ws->node, N_WORKSPACE, ws);
 
 	bool failed = false;
@@ -79,6 +209,7 @@ struct sway_workspace *workspace_create(struct sway_output *output,
 	if (failed) {
 		wlr_scene_node_destroy(&ws->layers.tiling->node);
 		wlr_scene_node_destroy(&ws->layers.fullscreen->node);
+		wlr_ext_workspace_handle_v1_destroy(ws->ext_workspace);
 		free(ws);
 		return NULL;
 	}
@@ -90,8 +221,9 @@ struct sway_workspace *workspace_create(struct sway_output *output,
 	ws->tiling = create_list();
 	ws->output_priority = create_list();
 
-	ws->animation_state.animation = malloc(sizeof(struct animation));
-	*ws->animation_state.animation = init_animation();
+	ws->animation_state.animation = init_animation(ws);
+	ws->animation_state.from_alpha = 1.0f;
+	ws->animation_state.to_alpha = 1.0f;
 
 	ws->gaps_outer = config->gaps_outer;
 	ws->gaps_inner = config->gaps_inner;
@@ -130,6 +262,13 @@ struct sway_workspace *workspace_create(struct sway_output *output,
 	output_add_workspace(output, ws);
 	output_sort_workspaces(output);
 
+	wlr_ext_workspace_handle_v1_set_name(ws->ext_workspace, ws->name);
+	if (ws->output && ws->output->ext_workspace_group) {
+		wlr_ext_workspace_handle_v1_set_group(ws->ext_workspace,
+			ws->output->ext_workspace_group);
+	}
+	wlr_ext_workspace_handle_v1_set_active(ws->ext_workspace,
+		workspace_is_visible(ws));
 	ipc_event_workspace(NULL, ws, "init");
 	wl_signal_emit_mutable(&root->events.new_node, &ws->node);
 
@@ -146,6 +285,16 @@ void workspace_destroy(struct sway_workspace *workspace) {
 		return;
 	}
 
+	// An output remembers the workspace it showed last, to fade it out when
+	// it switches. That must not outlive the workspace: arrange_output reads
+	// it on the next arrange.
+	struct sway_output *output;
+	wl_list_for_each(output, &root->all_outputs, link) {
+		if (output->prev_active_workspace == workspace) {
+			output->prev_active_workspace = NULL;
+		}
+	}
+
 	scene_node_disown_children(workspace->layers.tiling);
 	scene_node_disown_children(workspace->layers.fullscreen);
 	wlr_scene_node_destroy(&workspace->layers.tiling->node);
@@ -153,15 +302,14 @@ void workspace_destroy(struct sway_workspace *workspace) {
 
 	free(workspace->name);
 	free(workspace->representation);
-	if (workspace->animation_state.animation->initialized) {
-		wl_list_remove(&workspace->animation_state.animation->link);
-	}
-	free(workspace->animation_state.animation);
 	list_free_items_and_destroy(workspace->output_priority);
 	list_free(workspace->floating);
 	list_free(workspace->tiling);
 	list_free(workspace->current.floating);
 	list_free(workspace->current.tiling);
+	if (workspace->animation_state.animation.initialized) {
+		finish_animation(&workspace->animation_state.animation);
+	}
 	free(workspace);
 }
 
@@ -170,11 +318,14 @@ void workspace_begin_destroy(struct sway_workspace *workspace) {
 	ipc_event_workspace(NULL, workspace, "empty"); // intentional
 	wl_signal_emit_mutable(&workspace->node.events.destroy, &workspace->node);
 
+	wlr_ext_workspace_handle_v1_destroy(workspace->ext_workspace);
+	workspace->ext_workspace = NULL;
+
 	if (workspace->output) {
 		workspace_detach(workspace);
 	}
-	workspace->node.destroying = true;
 	node_set_dirty(&workspace->node);
+	workspace->node.destroying = true;
 }
 
 void workspace_consider_destroy(struct sway_workspace *ws) {
@@ -186,7 +337,7 @@ void workspace_consider_destroy(struct sway_workspace *ws) {
 		return;
 	}
 
-	if (ws->animation_state.animation && ws->animation_state.animation->initialized) {
+	if (ws->animation_state.animation.initialized) {
 		return;
 	}
 
@@ -213,8 +364,10 @@ static bool workspace_valid_on_output(const char *output_name,
 	}
 
 	for (int i = 0; i < wsc->outputs->length; i++) {
-		if (output_match_name_or_id(output, wsc->outputs->items[i])) {
-			return true;
+		struct sway_output *ws_output =
+			output_by_name_or_id(wsc->outputs->items[i]);
+		if (ws_output) {
+			return ws_output == output;
 		}
 	}
 
@@ -331,10 +484,14 @@ char *workspace_next_name(const char *output_name) {
 		}
 		bool found = false;
 		for (int j = 0; j < wsc->outputs->length; ++j) {
-			if (output_match_name_or_id(output, wsc->outputs->items[j])) {
-				found = true;
-				free(target);
-				target = strdup(wsc->workspace);
+			struct sway_output *ws_output =
+				output_by_name_or_id(wsc->outputs->items[j]);
+			if (ws_output) {
+				if (ws_output == output) {
+					found = true;
+					free(target);
+					target = strdup(wsc->workspace);
+				}
 				break;
 			}
 		}
@@ -692,6 +849,7 @@ void workspace_detect_urgent(struct sway_workspace *workspace) {
 
 	if (workspace->urgent != new_urgent) {
 		workspace->urgent = new_urgent;
+		wlr_ext_workspace_handle_v1_set_urgent(workspace->ext_workspace, workspace->urgent);
 		ipc_event_workspace(NULL, workspace, "urgent");
 	}
 }
@@ -783,7 +941,7 @@ void workspace_unwrap_children(struct sway_workspace *ws,
 	while (wrap->pending.children->length) {
 		struct sway_container *child = wrap->pending.children->items[0];
 		container_detach(child);
-		workspace_add_tiling(ws, child);
+		workspace_insert_tiling_direct(ws, child, ws->tiling->length);
 	}
 }
 
@@ -989,4 +1147,36 @@ void workspace_squash(struct sway_workspace *workspace) {
 		struct sway_container *child = workspace->tiling->items[i];
 		i += container_squash(child);
 	}
+}
+
+void workspace_move_to_output(struct sway_workspace *workspace,
+		struct sway_output *output) {
+	if (workspace->output == output) {
+		return;
+	}
+	struct sway_output *old_output = workspace->output;
+	workspace_detach(workspace);
+	struct sway_workspace *new_output_old_ws =
+		output_get_active_workspace(output);
+	if (!sway_assert(new_output_old_ws, "Expected output to have a workspace")) {
+		return;
+	}
+
+	output_add_workspace(output, workspace);
+
+	// If moving the last workspace from the old output, create a new workspace
+	// on the old output
+	if (old_output->workspaces->length == 0) {
+		char *ws_name = workspace_next_name(old_output->wlr_output->name);
+		struct sway_workspace *ws = workspace_create(old_output, ws_name);
+		free(ws_name);
+		struct sway_seat *seat = input_manager_current_seat();
+		seat_set_raw_focus(seat, &ws->node);
+	}
+
+	workspace_consider_destroy(new_output_old_ws);
+
+	output_sort_workspaces(output);
+	workspace_output_raise_priority(workspace, old_output, output);
+	ipc_event_workspace(NULL, workspace, "move");
 }

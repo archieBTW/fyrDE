@@ -22,6 +22,7 @@
 #include <wlr/util/transform.h>
 #include "config.h"
 #include "log.h"
+#include "sway/animation_manager.h"
 #include "sway/config.h"
 #include "sway/desktop/transaction.h"
 #include "sway/input/input-manager.h"
@@ -36,10 +37,6 @@
 #include "sway/tree/root.h"
 #include "sway/tree/view.h"
 #include "sway/tree/workspace.h"
-
-#if WLR_HAS_XWAYLAND
-#include "sway/xwayland.h"
-#endif
 
 #if WLR_HAS_DRM_BACKEND
 #include <wlr/backend/drm.h>
@@ -103,11 +100,11 @@ struct buffer_timer {
 };
 
 static int handle_buffer_timer(void *data) {
-	struct wlr_scene_buffer *buffer = data;
+	struct wlr_scene_surface *scene_surface = data;
 
 	struct timespec now;
 	clock_gettime(CLOCK_MONOTONIC, &now);
-	wlr_scene_buffer_send_frame_done(buffer, &now);
+	wlr_scene_surface_send_frame_done(scene_surface, &now);
 	return 0;
 }
 
@@ -120,7 +117,9 @@ static void handle_buffer_timer_destroy(struct wl_listener *listener,
 	free(timer);
 }
 
-static struct buffer_timer *buffer_timer_get_or_create(struct wlr_scene_buffer *buffer) {
+static struct buffer_timer *buffer_timer_get_or_create(struct wlr_scene_surface *scene_surface) {
+	struct wlr_scene_buffer *buffer = scene_surface->buffer;
+
 	struct buffer_timer *timer =
 		scene_descriptor_try_get(&buffer->node, SWAY_SCENE_DESC_BUFFER_TIMER);
 	if (timer) {
@@ -133,7 +132,7 @@ static struct buffer_timer *buffer_timer_get_or_create(struct wlr_scene_buffer *
 	}
 
 	timer->frame_done_timer = wl_event_loop_add_timer(server.wl_event_loop,
-		handle_buffer_timer, buffer);
+		handle_buffer_timer, scene_surface);
 	if (!timer->frame_done_timer) {
 		free(timer);
 		return NULL;
@@ -154,6 +153,11 @@ static void send_frame_done_iterator(struct wlr_scene_buffer *buffer,
 	int view_max_render_time = 0;
 
 	if (buffer->primary_output != data->output->scene_output) {
+		return;
+	}
+
+	struct wlr_scene_surface *scene_surface = wlr_scene_surface_try_from_buffer(buffer);
+	if (scene_surface == NULL) {
 		return;
 	}
 
@@ -179,13 +183,13 @@ static void send_frame_done_iterator(struct wlr_scene_buffer *buffer,
 	struct buffer_timer *timer = NULL;
 
 	if (output->max_render_time != 0 && view_max_render_time != 0 && delay > 0) {
-		timer = buffer_timer_get_or_create(buffer);
+		timer = buffer_timer_get_or_create(scene_surface);
 	}
 
 	if (timer) {
 		wl_event_source_timer_update(timer->frame_done_timer, delay);
 	} else {
-		wlr_scene_buffer_send_frame_done(buffer, &data->when);
+		wlr_scene_surface_send_frame_done(scene_surface, &data->when);
 	}
 }
 
@@ -208,8 +212,40 @@ static enum wlr_scale_filter_mode get_scale_filter(struct sway_output *output,
 	}
 }
 
-void output_configure_scene(struct sway_output *output, struct wlr_scene_node *node, float opacity,
-		int corner_radius, bool blur_enabled, bool has_titlebar, struct sway_container *closest_con) {
+static void configure_layer_shell_surface(struct wlr_scene_buffer *buffer,
+		struct sway_layer_surface *layer_surface) {
+	int corner_radius = layer_surface->corner_radius;
+
+	wlr_scene_buffer_set_corner_radii(buffer, corner_radii_all(corner_radius));
+	wlr_scene_shadow_set_blur_sigma(layer_surface->shadow_node, config->shadow_blur_sigma);
+	wlr_scene_shadow_set_corner_radius(layer_surface->shadow_node, corner_radius);
+
+	wlr_scene_node_set_enabled(&layer_surface->blur_node->node, layer_surface->blur_enabled);
+	if (layer_surface->blur_ignore_transparent) {
+		wlr_scene_blur_set_transparency_mask_source(layer_surface->blur_node, buffer);
+	} else {
+		wlr_scene_blur_set_transparency_mask_source(layer_surface->blur_node, NULL);
+	}
+	wlr_scene_blur_set_should_only_blur_bottom_layer(layer_surface->blur_node, layer_surface->blur_xray);
+	wlr_scene_blur_set_corner_radii(layer_surface->blur_node, corner_radii_all(corner_radius));
+	wlr_scene_blur_set_size(layer_surface->blur_node,
+		layer_surface->layer_surface->surface->current.width,
+		layer_surface->layer_surface->surface->current.height
+	);
+}
+
+static bool could_container_overlap(struct sway_container *con) {
+	if (container_is_floating_or_child(con)) {
+		return true;
+	}
+
+	// animations can have tiled containers overlap in flight
+	return con->animation_state.animation.initialized ||
+		(con->current.workspace && con->current.workspace->animation_state.animation.initialized);
+}
+
+void output_configure_scene(struct sway_output *output, struct wlr_scene_node *node,
+		bool has_titlebar, struct sway_container *closest_con) {
 	if (!node->enabled) {
 		return;
 	}
@@ -218,23 +254,45 @@ void output_configure_scene(struct sway_output *output, struct wlr_scene_node *n
 		scene_descriptor_try_get(node, SWAY_SCENE_DESC_CONTAINER);
 	if (con) {
 		closest_con = con;
-		opacity = con->alpha;
-		corner_radius = con->corner_radius;
-		blur_enabled = con->blur_enabled;
 		enum sway_container_layout layout = con->current.layout;
 		has_titlebar |= con->current.border == B_NORMAL || layout == L_STACKED || layout == L_TABBED;
 	}
+
+	if (node->type == WLR_SCENE_NODE_TREE) {
+		struct wlr_scene_tree *tree = wlr_scene_tree_from_node(node);
+		struct wlr_scene_node *child;
+		wl_list_for_each(child, &tree->children, link) {
+			output_configure_scene(output, child, has_titlebar, closest_con);
+		}
+		return;
+	}
+
+	float opacity = closest_con ? get_animated_value(closest_con->animation_state.from_alpha,
+		closest_con->animation_state.to_alpha, &closest_con->animation_state.animation)
+		* closest_con->alpha : 1.0f;
+	if (closest_con && closest_con->current.workspace) {
+		opacity *= get_animated_value(
+			closest_con->current.workspace->animation_state.from_alpha,
+			closest_con->current.workspace->animation_state.to_alpha,
+			&closest_con->current.workspace->animation_state.animation);
+	}
+	int corner_radius = closest_con && container_has_corner_radius(closest_con) ?
+		closest_con->corner_radius : 0;
 
 	if (node->type == WLR_SCENE_NODE_BUFFER) {
 		struct wlr_scene_buffer *buffer = wlr_scene_buffer_from_node(node);
 		struct wlr_scene_surface *surface = wlr_scene_surface_try_from_buffer(buffer);
 
+		struct wlr_layer_surface_v1 *wlr_layer_surface = NULL;
 		if (surface) {
 			const struct wlr_alpha_modifier_surface_v1_state *alpha_modifier_state =
 				wlr_alpha_modifier_v1_get_surface_state(surface->surface);
 			if (alpha_modifier_state != NULL) {
 				opacity *= (float)alpha_modifier_state->multiplier;
 			}
+
+			wlr_layer_surface =
+				wlr_layer_surface_v1_try_from_wlr_surface(surface->surface);
 		}
 
 		// hack: don't call the scene setter because that will damage all outputs
@@ -246,60 +304,41 @@ void output_configure_scene(struct sway_output *output, struct wlr_scene_node *n
 
 		wlr_scene_buffer_set_opacity(buffer, opacity);
 
-		if (!surface || !surface->surface) {
+		if (wlr_layer_surface) {
+			configure_layer_shell_surface(buffer, wlr_layer_surface->data);
 			return;
 		}
 
-		// Other buffers should set their own effects manually, like the
-		// text buffer and saved views
-		struct wlr_layer_surface_v1 *layer_surface = NULL;
-		if (wlr_xdg_surface_try_from_wlr_surface(surface->surface)
-#if WLR_HAS_XWAYLAND
-				|| wlr_xwayland_surface_try_from_wlr_surface(surface->surface)
-#endif
-				) {
-			int buffer_corner_radius = container_has_corner_radius(closest_con) ? corner_radius : 0;
-			wlr_scene_buffer_set_corner_radius(
-				buffer,
-				buffer_corner_radius,
-				has_titlebar ? CORNER_LOCATION_BOTTOM : CORNER_LOCATION_ALL
-			);
-			
-			if (closest_con) {
-				int content_width = closest_con->animation_state.current_content_width;
-				int content_height = closest_con->animation_state.current_content_height;
-				if (content_width > 0 && content_height > 0) {
-					wlr_scene_buffer_set_dest_size(buffer, content_width, content_height);
-				}
-				wlr_scene_buffer_set_backdrop_blur(buffer, closest_con->blur_enabled);
-				bool should_optimize_blur = !container_is_floating_or_child(closest_con) || config->blur_xray;
-				wlr_scene_buffer_set_backdrop_blur_optimized(buffer, should_optimize_blur);
-				wlr_scene_buffer_set_backdrop_blur_ignore_transparent(buffer, false);
-			}
-		} else if (wlr_subsurface_try_from_wlr_surface(surface->surface)) {
-			wlr_scene_buffer_set_corner_radius(
-				buffer,
-				container_has_corner_radius(closest_con) ? corner_radius : 0,
-				CORNER_LOCATION_ALL
-			);
-		} else if ((layer_surface = wlr_layer_surface_v1_try_from_wlr_surface(surface->surface))
-				&& layer_surface->data) {
-			// Layer effects
-			struct sway_layer_surface *surface = layer_surface->data;
-			wlr_scene_buffer_set_corner_radius(buffer, surface->corner_radius, CORNER_LOCATION_ALL);
-			wlr_scene_shadow_set_blur_sigma(surface->shadow_node, config->shadow_blur_sigma);
-			wlr_scene_shadow_set_corner_radius(surface->shadow_node, surface->corner_radius);
-			wlr_scene_buffer_set_backdrop_blur(buffer, surface->blur_enabled);
-			wlr_scene_buffer_set_backdrop_blur_optimized(buffer, surface->blur_xray);
-			wlr_scene_buffer_set_backdrop_blur_ignore_transparent(buffer, surface->blur_ignore_transparent);
-		}
-	} else if (node->type == WLR_SCENE_NODE_TREE) {
-		struct wlr_scene_tree *tree = wlr_scene_tree_from_node(node);
-		struct wlr_scene_node *node;
-		wl_list_for_each(node, &tree->children, link) {
-			output_configure_scene(output, node, opacity, corner_radius, blur_enabled, has_titlebar, closest_con);
+		if (!surface && !scene_descriptor_try_get(&buffer->node, SWAY_SCENE_DESC_SAVED_BUFFER)) {
+			return;
 		}
 
+		if (!closest_con) {
+			// no container (e.g. fullscreen view), clear stale corner radii
+			wlr_scene_buffer_set_corner_radii(buffer, corner_radii_none());
+			return;
+		}
+
+		bool is_subsurface = surface && surface->surface && wlr_subsurface_try_from_wlr_surface(surface->surface);
+		wlr_scene_buffer_set_corner_radii(buffer, has_titlebar && !is_subsurface ?
+			corner_radii_bottom(corner_radius) : corner_radii_all(corner_radius));
+		
+		if (is_subsurface) {
+			return;
+		}
+
+		int content_width = closest_con->animation_state.current_content_width;
+		int content_height = closest_con->animation_state.current_content_height;
+		wlr_scene_buffer_set_dest_size(buffer, MAX(content_width, 0), MAX(content_height, 0));
+	} else if (node->type == WLR_SCENE_NODE_BLUR && closest_con) {
+		struct wlr_scene_blur *blur = wlr_scene_blur_from_node(node);
+
+		bool should_optimize_blur = config->blur_xray || !could_container_overlap(closest_con);
+		wlr_scene_blur_set_should_only_blur_bottom_layer(blur, should_optimize_blur);
+		wlr_scene_blur_set_strength(blur, opacity);
+		wlr_scene_node_set_enabled(node, closest_con->blur_enabled);
+		wlr_scene_blur_set_corner_radii(blur, has_titlebar ?
+			corner_radii_bottom(corner_radius) : corner_radii_all(corner_radius));
 	}
 }
 
@@ -328,8 +367,7 @@ static int output_repaint_timer_handler(void *data) {
 		return 0;
 	}
 
-	output_configure_scene(output, &root->root_scene->tree.node, 1.0f,
-			0, false, false, NULL);
+	output_configure_scene(output, &root->root_scene->tree.node, false, NULL);
 
 	struct wlr_scene_output_state_options opts = {
 		.color_transform = output->color_transform,
@@ -529,7 +567,19 @@ static void handle_present(struct wl_listener *listener, void *data) {
 	}
 
 	output->last_presentation = output_event->when;
-	output->refresh_nsec = output_event->refresh;
+
+	// refresh_nsec is only known once the output actually presents a frame,
+	// which happens after animation_manager_init() has already run (and
+	// therefore already computed tick_time using the 60Hz fallback, since
+	// no output had a valid refresh_nsec yet). Recompute animation timing
+	// whenever the reported refresh rate changes (first present, or a
+	// runtime refresh rate change e.g. VRR) so it doesn't get stuck on the
+	// fallback until the next config reload.
+	uint32_t refresh_nsec = output_event->refresh;
+	if (output->refresh_nsec != refresh_nsec) {
+		output->refresh_nsec = refresh_nsec;
+		refresh_animation_manager_timing();
+	}
 }
 
 static void handle_request_state(struct wl_listener *listener, void *data) {

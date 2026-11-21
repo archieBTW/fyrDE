@@ -29,7 +29,7 @@ const char *node_type_to_str(enum sway_node_type type) {
 }
 
 void node_set_dirty(struct sway_node *node) {
-	if (node->dirty) {
+	if (node->dirty || node->destroying) {
 		return;
 	}
 	node->dirty = true;
@@ -187,7 +187,6 @@ struct wlr_scene_tree *alloc_scene_tree(struct wlr_scene_tree *parent,
 
 	return tree;
 }
-
 struct wlr_scene_shadow *alloc_scene_shadow(struct wlr_scene_tree *parent,
 		int width, int height, int corner_radius, float blur_sigma,
 		const float color [static 4], bool *failed) {
@@ -206,4 +205,20 @@ struct wlr_scene_shadow *alloc_scene_shadow(struct wlr_scene_tree *parent,
 	return shadow;
 }
 
+struct wlr_scene_blur *alloc_scene_blur(struct wlr_scene_tree *parent,
+		int width, int height, bool *failed) {
+	// fallthrough
+	if (*failed) {
+		return NULL;
+	}
+
+	struct wlr_scene_blur *blur = wlr_scene_blur_create(
+			parent, width, height);
+	if (!blur) {
+		sway_log(SWAY_ERROR, "Failed to allocate a scene node");
+		*failed = true;
+	}
+
+	return blur;
+}
 

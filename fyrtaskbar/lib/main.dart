@@ -275,11 +275,16 @@ void main(List<String> args) async {
 
   final waylandLayerShellPlugin = WaylandLayerShell();
   if (isDesktopLayer) {
-    bool isSupported = await waylandLayerShellPlugin.initialize(
-      screenWidth,
-      screenHeight,
-    );
+    // gtk_layer_init_for_window is performed natively in my_application.cc
+    // before gtk_widget_realize so wlroots >= 0.20 never sees an unanchored 0x0
+    // initial configure request.
+    bool isSupported = false;
+    try {
+      isSupported =
+          await _taskbarChannel.invokeMethod<bool>('isLayerSupported') ?? false;
+    } catch (_) {}
     if (isSupported) {
+      await _applyWindowSize(screenWidth, screenHeight);
       try {
         await _taskbarChannel.invokeMethod(
           'setNamespace',
@@ -325,8 +330,13 @@ void main(List<String> args) async {
     return;
   }
 
-  bool isSupported = await waylandLayerShellPlugin.initialize(screenWidth, 56);
+  bool isSupported = false;
+  try {
+    isSupported =
+        await _taskbarChannel.invokeMethod<bool>('isLayerSupported') ?? false;
+  } catch (_) {}
   if (isSupported) {
+    await _applyWindowSize(screenWidth, 56);
     try {
       await _taskbarChannel.invokeMethod(
         'setNamespace',

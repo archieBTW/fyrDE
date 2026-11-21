@@ -23,6 +23,7 @@ For Fedora users, SwayFX is also available in [copr](https://copr.fedorainfraclo
 
 ## New Configuration Options
 
++ Animations: `animation_duration_ms <integer value 0-5000>`
 + Window blur:
     - `blur enable|disable`
     - `blur_xray enable|disable`: this will set floating windows to blur based on the background, not the windows below. You probably want to set this to `disable` :)
@@ -71,10 +72,6 @@ For Fedora users, SwayFX is also available in [copr](https://copr.fedorainfraclo
 + Keep/remove separator border between titlebar and content: `titlebar_separator enable|disable`
 + Treat Scratchpad as minimized: `scratchpad_minimize enable|disable`: **we recommend keeping this setting off, as there are many kinks to iron out here**
 
-## Roadmap
-
-+ fade in / out animations
-+ window movement animations
 
 ## Compiling From Source
 

@@ -15,6 +15,8 @@ import 'package:fyrtaskbar/ui/phone_menu.dart';
 import 'package:fyrtaskbar/ui/quick_settings.dart';
 import 'package:fyrtaskbar/ui/start_menu.dart';
 import 'package:fyrtaskbar/workspace_switcher.dart';
+import 'package:wayland_layer_shell/types.dart';
+import 'package:wayland_layer_shell/wayland_layer_shell.dart';
 import 'package:window_manager/window_manager.dart';
 
 class TaskbarScreen extends StatefulWidget {
@@ -141,13 +143,24 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
     _updateWindowSize();
   }
 
+  bool _isOverlayLayer = false;
+
   void _updateWindowSize() async {
     const channel = MethodChannel('fyrtaskbar/resize');
-    if (_isStartMenuOpen ||
+    final waylandLayerShellPlugin = WaylandLayerShell();
+    final expanded = _isStartMenuOpen ||
         _isQuickSettingsOpen ||
         _isCalendarOpen ||
         _isPhoneMenuOpen ||
-        SystemState.activePopups.value.isNotEmpty) {
+        SystemState.activePopups.value.isNotEmpty;
+
+    if (expanded) {
+      if (!_isOverlayLayer) {
+        _isOverlayLayer = true;
+        try {
+          await waylandLayerShellPlugin.setLayer(ShellLayer.layerOverlay);
+        } catch (_) {}
+      }
       try {
         await channel.invokeMethod('setSize', {
           'width': SystemState.screenWidth,
@@ -168,6 +181,12 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
         });
       } catch (_) {}
       await windowManager.setSize(Size(SystemState.screenWidth.toDouble(), 56));
+      if (_isOverlayLayer) {
+        _isOverlayLayer = false;
+        try {
+          await waylandLayerShellPlugin.setLayer(ShellLayer.layerTop);
+        } catch (_) {}
+      }
     }
   }
 

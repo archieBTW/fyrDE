@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <sys/types.h>
 #include <wlr/types/wlr_compositor.h>
+#include <wlr/types/wlr_scene.h>
 #include "list.h"
 #include "sway/animation_manager.h"
 #include "sway/tree/node.h"
@@ -76,7 +77,8 @@ struct sway_container {
 		struct wlr_scene_tree *tree;
 
 		struct wlr_scene_rect *border;
-		struct wlr_scene_rect *background;
+		struct wlr_scene_rect *background_left;
+		struct wlr_scene_rect *background_right;
 		struct wlr_scene_buffer *buttons_buf;
 
 		struct sway_text_node *title_text;
@@ -92,16 +94,12 @@ struct sway_container {
 		struct wlr_scene_rect *right;
 	} border;
 
-	struct wlr_scene_rect *blur;
+	struct wlr_scene_blur *blur;
 	struct wlr_scene_shadow *shadow;
 
-	struct wlr_scene_tree *content_tree;
 	struct wlr_scene_rect *dim_rect;
-	struct wlr_scene_buffer *output_handler;
 
-	struct wl_listener output_enter;
-	struct wl_listener output_leave;
-	struct wl_listener output_handler_destroy;
+	struct wlr_scene_tree *content_tree;
 
 	struct sway_container_state current;
 	struct sway_container_state pending;
@@ -109,7 +107,7 @@ struct sway_container {
 	char *title;           // The view's title (unformatted)
 	char *formatted_title; // The title displayed in the title bar
 	int title_width;
-	
+
 	char *title_format;
 
 	enum sway_container_layout prev_split_layout;
@@ -157,19 +155,30 @@ struct sway_container {
 	bool shadow_enabled;
 	float dim;
 
-	list_t *marks; // char *
-
 	struct {
-		struct animation *animation;
-		int delta_x;
-		int delta_y;
-		int delta_width;
-		int delta_height;
+		struct animation animation;
+		float from_alpha;
+		float to_alpha;
+		int from_x;
+		int from_y;
+		int to_x;
+		int to_y;
+		int from_width;
+		int to_width;
+		int from_height;
+		int to_height;
+		int current_global_x;
+		int current_global_y;
 		int current_width;
 		int current_height;
 		int current_content_width; // needed for output.c
 		int current_content_height; // needed for output.c
+
+		bool seat_is_resizing;
+		bool seat_is_moving_float;
 	} animation_state;
+
+	list_t *marks; // char *
 
 	struct {
 		struct wl_signal destroy;

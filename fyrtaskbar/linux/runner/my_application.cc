@@ -137,6 +137,12 @@ static void fyr_method_call_cb(FlMethodChannel *channel,
     g_autoptr(FlMethodResponse) response =
         FL_METHOD_RESPONSE(fl_method_success_response_new(result));
     fl_method_call_respond(method_call, response, nullptr);
+  } else if (strcmp(method, "isLayerSupported") == 0) {
+    g_autoptr(FlValue) result =
+        fl_value_new_bool(gtk_layer_is_supported() ? TRUE : FALSE);
+    g_autoptr(FlMethodResponse) response =
+        FL_METHOD_RESPONSE(fl_method_success_response_new(result));
+    fl_method_call_respond(method_call, response, nullptr);
   } else if (strcmp(method, "setNamespace") == 0) {
     FlValue *args = fl_method_call_get_args(method_call);
     if (args && fl_value_get_type(args) == FL_VALUE_TYPE_STRING &&
@@ -183,7 +189,46 @@ static void my_application_activate(GApplication *application) {
     gtk_window_set_title(window, "fyrtaskbar");
   }
 
-  gtk_window_set_default_size(window, 1280, 720);
+  bool is_desktop = false;
+  if (self->dart_entrypoint_arguments) {
+    for (int i = 0; self->dart_entrypoint_arguments[i] != nullptr; ++i) {
+      if (strcmp(self->dart_entrypoint_arguments[i], "--desktop") == 0) {
+        is_desktop = true;
+        break;
+      }
+    }
+  }
+
+  // Initialize gtk-layer-shell BEFORE gtk_widget_realize so wlroots >= 0.20
+  // never receives an unanchored 0x0 initial layer surface configure request.
+  if (gtk_layer_is_supported()) {
+    gtk_layer_init_for_window(window);
+    if (is_desktop) {
+      gtk_layer_set_namespace(window, "fyrdesktop");
+      gtk_layer_set_layer(window, GTK_LAYER_SHELL_LAYER_BOTTOM);
+      gtk_layer_set_anchor(window, GTK_LAYER_SHELL_EDGE_TOP, TRUE);
+      gtk_layer_set_anchor(window, GTK_LAYER_SHELL_EDGE_BOTTOM, TRUE);
+      gtk_layer_set_anchor(window, GTK_LAYER_SHELL_EDGE_LEFT, TRUE);
+      gtk_layer_set_anchor(window, GTK_LAYER_SHELL_EDGE_RIGHT, TRUE);
+      gtk_layer_set_exclusive_zone(window, -1);
+      gtk_layer_set_keyboard_mode(window, GTK_LAYER_SHELL_KEYBOARD_MODE_NONE);
+      gtk_window_set_default_size(window, 1920, 1080);
+      gtk_widget_set_size_request(GTK_WIDGET(window), 1920, 1080);
+    } else {
+      gtk_layer_set_namespace(window, "fyrtaskbar");
+      gtk_layer_set_layer(window, GTK_LAYER_SHELL_LAYER_TOP);
+      gtk_layer_set_anchor(window, GTK_LAYER_SHELL_EDGE_TOP, TRUE);
+      gtk_layer_set_anchor(window, GTK_LAYER_SHELL_EDGE_LEFT, TRUE);
+      gtk_layer_set_anchor(window, GTK_LAYER_SHELL_EDGE_RIGHT, TRUE);
+      gtk_layer_set_exclusive_zone(window, 56);
+      gtk_layer_set_keyboard_mode(window,
+                                  GTK_LAYER_SHELL_KEYBOARD_MODE_ON_DEMAND);
+      gtk_window_set_default_size(window, 1920, 56);
+      gtk_widget_set_size_request(GTK_WIDGET(window), 1920, 56);
+    }
+  } else {
+    gtk_window_set_default_size(window, 1280, 720);
+  }
   gtk_widget_realize(GTK_WIDGET(window));
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();

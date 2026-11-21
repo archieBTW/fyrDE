@@ -108,20 +108,6 @@ static void log_kernel(void) {
 	pclose(f);
 }
 
-static bool detect_suid(void) {
-	if (geteuid() != 0 && getegid() != 0) {
-		return false;
-	}
-
-	if (getuid() == geteuid() && getgid() == getegid()) {
-		return false;
-	}
-
-	sway_log(SWAY_ERROR, "SUID operation is no longer supported, refusing to start. "
-			"This check will be removed in a future release.");
-	return true;
-}
-
 static void restore_nofile_limit(void) {
 	if (original_nofile_rlimit.rlim_cur == 0) {
 		return;
@@ -238,7 +224,7 @@ static const char usage[] =
 	"\n";
 
 int main(int argc, char **argv) {
-	static bool verbose = false, debug = false, validate = false;
+	bool verbose = false, debug = false, validate = false, allow_unsupported_gpu = false;
 
 	char *config_path = NULL;
 
@@ -292,17 +278,18 @@ int main(int argc, char **argv) {
 		}
 	}
 
-	// SUID operation is deprecated, so block it for now.
-	if (detect_suid()) {
-		exit(EXIT_FAILURE);
-	}
-
 	// Since wayland requires XDG_RUNTIME_DIR to be set, abort with just the
 	// clear error message (when not running as an IPC client).
 	if (!getenv("XDG_RUNTIME_DIR") && optind == argc) {
 		fprintf(stderr,
 				"XDG_RUNTIME_DIR is not set in the environment. Aborting.\n");
 		exit(EXIT_FAILURE);
+	}
+
+	char *unsupported_gpu_env = getenv("SWAY_UNSUPPORTED_GPU");
+	// we let the flag override the environment variable
+	if (!allow_unsupported_gpu && unsupported_gpu_env) {
+		allow_unsupported_gpu = parse_boolean(unsupported_gpu_env, false);
 	}
 
 	// As the 'callback' function for wlr_log is equivalent to that for
@@ -350,7 +337,7 @@ int main(int argc, char **argv) {
 	increase_nofile_limit();
 
 	sway_log(SWAY_INFO, "Starting swayfx version " SWAY_VERSION
-			" (based on sway version " SWAY_ORIGINAL_VERSION ")");
+			" (based on sway version " SWAY_ORIGINAL_VERSION);
 
 	if (!server_init(&server)) {
 		return 1;
@@ -394,6 +381,20 @@ int main(int argc, char **argv) {
 		swaynag_show(&config->swaynag_config_errors);
 	}
 
+	struct swaynag_instance nag_gpu = (struct swaynag_instance){
+		.args = "--type error "
+			"--message 'Proprietary GPU drivers are not supported by sway. Do not report issues.' "
+			"--detailed-message",
+		.detailed = true,
+	};
+
+	if (unsupported_gpu_detected && !allow_unsupported_gpu) {
+		swaynag_log(config->swaynag_command, &nag_gpu,
+			"To remove this message, launch sway with --unsupported-gpu "
+			"or set the environment variable SWAY_UNSUPPORTED_GPU=true.");
+		swaynag_show(&nag_gpu);
+	}
+
 	server_run(&server);
 
 shutdown:
@@ -405,6 +406,10 @@ shutdown:
 
 	free(config_path);
 	free_config(config);
+
+	if (nag_gpu.client != NULL) {
+		wl_client_destroy(nag_gpu.client);
+	}
 
 	pango_cairo_font_map_set_default(NULL);
 

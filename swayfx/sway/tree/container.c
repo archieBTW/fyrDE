@@ -19,7 +19,6 @@
 #if WLR_HAS_XWAYLAND
 #include <wlr/xwayland.h>
 #endif
-#include "linux-dmabuf-unstable-v1-protocol.h"
 #include "sway/config.h"
 #include "sway/desktop/transaction.h"
 #include "sway/input/input-manager.h"
@@ -177,9 +176,9 @@ static struct wlr_buffer *fyr_get_buttons_wlr_buffer(int scale) {
 	// Match FyrDE Flutter apps: left 20px, 14x14px circles, 8px spacing, 0.5px black26 border
 	static const double centers_x[3] = { 27.0, 49.0, 71.0 };
 	static const double colors[3][3] = {
-		{ 1.0, 82.0 / 255.0, 82.0 / 255.0 },     // Colors.redAccent (#FF5252)
-		{ 1.0, 171.0 / 255.0, 64.0 / 255.0 },    // Colors.orangeAccent (#FFAB40)
-		{ 105.0 / 255.0, 240.0 / 255.0, 174.0 / 255.0 }, // Colors.greenAccent (#69F0AE)
+		{ 1.0, 82.0 / 255.0, 82.0 / 255.0 },
+		{ 1.0, 171.0 / 255.0, 64.0 / 255.0 },
+		{ 105.0 / 255.0, 240.0 / 255.0, 174.0 / 255.0 },
 	};
 	for (int i = 0; i < 3; i++) {
 		cairo_arc(cr, centers_x[i], 24.0, 7.0, 0.0, 6.28318530717958647692);
@@ -337,43 +336,6 @@ bool container_execute_titlebar_button(struct sway_container *con,
 	}
 }
 
-static void handle_output_enter(
-		struct wl_listener *listener, void *data) {
-	struct sway_container *con = wl_container_of(
-			listener, con, output_enter);
-	struct wlr_scene_output *output = data;
-
-	if (con->view->foreign_toplevel) {
-		wlr_foreign_toplevel_handle_v1_output_enter(
-			con->view->foreign_toplevel, output->output);
-	}
-}
-
-static void handle_output_leave(
-		struct wl_listener *listener, void *data) {
-	struct sway_container *con = wl_container_of(
-			listener, con, output_leave);
-	struct wlr_scene_output *output = data;
-
-	if (con->view->foreign_toplevel) {
-		wlr_foreign_toplevel_handle_v1_output_leave(
-			con->view->foreign_toplevel, output->output);
-	}
-}
-
-static void handle_destroy(
-		struct wl_listener *listener, void *data) {
-	struct sway_container *con = wl_container_of(
-			listener, con, output_handler_destroy);
-
-	container_begin_destroy(con);
-}
-
-static bool handle_point_accepts_input(
-		struct wlr_scene_buffer *buffer, double *x, double *y) {
-	return false;
-}
-
 static struct wlr_scene_rect *alloc_rect_node(struct wlr_scene_tree *parent,
 		bool *failed) {
 	if (*failed) {
@@ -418,7 +380,7 @@ struct sway_container *container_create(struct sway_view *view) {
 	bool failed = false;
 	c->scene_tree = alloc_scene_tree(root->staging, &failed);
 
-	c->blur = wlr_scene_rect_create(c->scene_tree, 0, 0, (float[4]){0.0, 0.0, 0.0, 0.0});
+	c->blur = alloc_scene_blur(c->scene_tree, 0, 0, &failed);
 
 	c->shadow = alloc_scene_shadow(c->scene_tree, 0, 0,
 			0, config->shadow_blur_sigma, config->shadow_color, &failed);
@@ -429,7 +391,8 @@ struct sway_container *container_create(struct sway_view *view) {
 	c->content_tree = alloc_scene_tree(c->border.tree, &failed);
 
 	c->title_bar.border = alloc_rect_node(c->title_bar.tree, &failed);
-	c->title_bar.background = alloc_rect_node(c->title_bar.tree, &failed);
+	c->title_bar.background_left = alloc_rect_node(c->title_bar.tree, &failed);
+	c->title_bar.background_right = alloc_rect_node(c->title_bar.tree, &failed);
 	if (!failed) {
 		c->title_bar.buttons_buf = wlr_scene_buffer_create(c->title_bar.tree, NULL);
 		if (!c->title_bar.buttons_buf) {
@@ -450,25 +413,6 @@ struct sway_container *container_create(struct sway_view *view) {
 		c->dim_rect = alloc_rect_node(c->border.tree, &failed);
 		// Disable rect input
 		c->dim_rect->accepts_input = false;
-
-		c->output_handler = wlr_scene_buffer_create(c->border.tree, NULL);
-		if (!c->output_handler) {
-			sway_log(SWAY_ERROR, "Failed to allocate a scene node");
-			failed = true;
-		}
-
-		if (!failed) {
-			c->output_enter.notify = handle_output_enter;
-			wl_signal_add(&c->output_handler->events.output_enter,
-					&c->output_enter);
-			c->output_leave.notify = handle_output_leave;
-			wl_signal_add(&c->output_handler->events.output_leave,
-					&c->output_leave);
-			c->output_handler_destroy.notify = handle_destroy;
-			wl_signal_add(&c->output_handler->node.events.destroy,
-					&c->output_handler_destroy);
-			c->output_handler->point_accepts_input = handle_point_accepts_input;
-		}
 	}
 
 	if (!failed && !scene_descriptor_assign(&c->scene_tree->node,
@@ -491,21 +435,31 @@ struct sway_container *container_create(struct sway_view *view) {
 	c->view = view;
 	c->alpha = 1.0f;
 	c->marks = create_list();
+
 	c->corner_radius = config->corner_radius;
 	c->blur_enabled = config->blur_enabled;
 	c->shadow_enabled = config->shadow_enabled;
 	c->dim = config->default_dim_inactive;
 
-	c->animation_state.animation = malloc(sizeof(struct animation));
-	*c->animation_state.animation = init_animation();
-	c->animation_state.delta_x = 0;
-	c->animation_state.delta_y = 0;
-	c->animation_state.delta_width = 0;
-	c->animation_state.delta_height = 0;
-	c->animation_state.current_width = -1;
-	c->animation_state.current_height = -1;
+	c->animation_state.animation = init_animation(c);
+	c->animation_state.from_alpha = 0.0f;
+	c->animation_state.to_alpha = 1.0f;
+	c->animation_state.from_x = -1;
+	c->animation_state.from_y = -1;
+	c->animation_state.to_x = 0;
+	c->animation_state.to_y = 0;
+	c->animation_state.from_width = 0;
+	c->animation_state.from_height = 0;
+	c->animation_state.to_width = -1;
+	c->animation_state.to_height = -1;
+	c->animation_state.current_global_x = 0;
+	c->animation_state.current_global_y = 0;
+	c->animation_state.current_width = 0;
+	c->animation_state.current_height = 0;
 	c->animation_state.current_content_width = -1;
 	c->animation_state.current_content_height = -1;
+	c->animation_state.seat_is_resizing = false;
+	c->animation_state.seat_is_moving_float = false;
 
 	wl_signal_init(&c->events.destroy);
 	wl_signal_emit_mutable(&root->events.new_node, &c->node);
@@ -608,7 +562,15 @@ void container_update(struct sway_container *con) {
 	struct border_colors *colors = container_get_current_colors(con);
 	list_t *siblings = NULL;
 	enum sway_container_layout layout = L_NONE;
-	float alpha = con->alpha;
+	float alpha = MIN(1, MAX(0, get_animated_value(con->animation_state.from_alpha,
+		con->animation_state.to_alpha, &con->animation_state.animation))) * con->alpha;
+
+	if (con->current.workspace) {
+		alpha *= get_animated_value(
+			con->current.workspace->animation_state.from_alpha,
+			con->current.workspace->animation_state.to_alpha,
+			&con->current.workspace->animation_state.animation);
+	}
 
 	if (con->current.parent) {
 		siblings = con->current.parent->current.children;
@@ -633,7 +595,8 @@ void container_update(struct sway_container *con) {
 	if (container_has_fyr_titlebar(con)) {
 		float fyr_bg[4], fyr_fg[4];
 		fyr_titlebar_get_colors(fyr_bg, fyr_fg);
-		scene_rect_set_color(con->title_bar.background, fyr_bg, alpha);
+		scene_rect_set_color(con->title_bar.background_left, fyr_bg, alpha);
+		scene_rect_set_color(con->title_bar.background_right, fyr_bg, alpha);
 		scene_rect_set_color(con->title_bar.border, colors->child_border, alpha);
 
 		if (con->view) {
@@ -652,12 +615,13 @@ void container_update(struct sway_container *con) {
 			sway_text_node_set_background(con->title_bar.title_text, fyr_bg);
 		}
 
-	if (con->title_bar.marks_text) {
+		if (con->title_bar.marks_text) {
 			sway_text_node_set_color(con->title_bar.marks_text, fyr_fg);
 			sway_text_node_set_background(con->title_bar.marks_text, fyr_bg);
 		}
 	} else {
-		scene_rect_set_color(con->title_bar.background, colors->background, alpha);
+		scene_rect_set_color(con->title_bar.background_left, colors->background, alpha);
+		scene_rect_set_color(con->title_bar.background_right, colors->background, alpha);
 		scene_rect_set_color(con->title_bar.border, colors->border, alpha);
 
 		if (con->view) {
@@ -676,7 +640,7 @@ void container_update(struct sway_container *con) {
 			sway_text_node_set_background(con->title_bar.title_text, colors->background);
 		}
 
-	if (con->title_bar.marks_text) {
+		if (con->title_bar.marks_text) {
 			sway_text_node_set_color(con->title_bar.marks_text, colors->text);
 			sway_text_node_set_background(con->title_bar.marks_text, colors->background);
 		}
@@ -704,13 +668,69 @@ void container_update_itself_and_parents(struct sway_container *con) {
 	}
 }
 
+static struct fx_corner_radii get_titlebar_corners(struct sway_container *con) {
+	int radius = container_has_corner_radius(con) ? con->corner_radius +
+		con->current.border_thickness - config->titlebar_border_thickness : 0;
+	struct fx_corner_radii corners = corner_radii_top(radius);
+
+	enum sway_container_layout layout;
+	const list_t *siblings;
+	if (con->current.parent) {
+		layout = con->current.parent->current.layout;
+		siblings = con->current.parent->current.children;
+	} else if (con->current.workspace) {
+		layout = con->current.workspace->layout;
+		siblings = con->current.workspace->tiling;
+	} else {
+		return corners;
+	}
+
+	if (layout == L_TABBED && siblings->length > 1) {
+		if (siblings->items[0] == con) {
+			corners.top_right = 0;
+		} else if (siblings->items[siblings->length - 1] == con) {
+			corners.top_left = 0;
+		} else {
+			return corner_radii_none();
+		}
+	} else if (layout == L_STACKED && siblings->items[0] != con) {
+		return corner_radii_none();
+	}
+
+	return corners;
+}
+
+static void arrange_titlebar_bg_rect(struct wlr_scene_rect *rect,
+		int x, int y, int width, int height,
+		struct fx_corner_radii corners, struct wlr_box *cut) {
+	wlr_scene_node_set_position(&rect->node, x, y);
+	wlr_scene_rect_set_size(rect, width, height);
+	wlr_scene_rect_set_corner_radii(rect, corners);
+	wlr_scene_node_set_enabled(&rect->node, width > 0 && height > 0);
+
+	if (cut && cut->width > 0) {
+		wlr_scene_rect_set_clipped_region(rect, (struct clipped_region) {
+			.corners = {0},
+			.area = {
+				.x = cut->x - x,
+				.y = cut->y - y,
+				.width = cut->width,
+				.height = cut->height,
+			},
+		});
+	} else {
+		wlr_scene_rect_set_clipped_region(rect, clipped_region_get_default());
+	}
+}
+
 void container_arrange_title_bar(struct sway_container *con) {
 	enum alignment title_align = config->title_align;
 	int marks_buffer_width = 0;
 	int width = con->title_width;
 	int height = container_titlebar_height();
 
-	struct wlr_box text_box = { 0, 0, 0, 0 };
+	struct wlr_box left_cut = {0};
+	struct wlr_box right_cut = {0};
 
 	if (container_has_fyr_titlebar(con)) {
 		if (width <= 0 || height <= 0) {
@@ -723,8 +743,8 @@ void container_arrange_title_bar(struct sway_container *con) {
 		int bleft = con->current.border_left ? bthick : 0;
 		int bright = con->current.border_right ? bthick : 0;
 		int btop = con->current.border_top ? bthick : 0;
-		int inner_w = MAX(0, (int)width - bleft - bright);
-		int inner_h = MAX(0, (int)height - btop);
+		int inner_w = MAX(0, width - bleft - bright);
+		int inner_h = MAX(0, height - btop);
 
 		if (con->title_bar.buttons_buf) {
 			if (inner_w >= FYR_BUTTONS_WIDTH && inner_h >= FYR_TITLEBAR_INNER_HEIGHT) {
@@ -749,18 +769,20 @@ void container_arrange_title_bar(struct sway_container *con) {
 		if (con->title_bar.marks_text) {
 			struct sway_text_node *mnode = con->title_bar.marks_text;
 			int m_start_min = bleft + 94;
-			int mx = MAX(m_start_min, (int)width - bright - 16 - (int)mnode->width);
-			int m_alloc = MAX(0, MIN((int)mnode->width, (int)width - bright - 16 - mx));
+			int mx = MAX(m_start_min, width - bright - 16 - (int)mnode->width);
+			int m_alloc = MAX(0, MIN((int)mnode->width, width - bright - 16 - mx));
 			sway_text_node_set_max_width(mnode, m_alloc);
 			wlr_scene_node_set_position(mnode->node, mx,
 				btop + MAX(0, (inner_h - (int)mnode->height) >> 1));
 			wlr_scene_node_set_enabled(mnode->node, m_alloc > 0);
 			if (m_alloc > 0) {
 				marks_reserve = m_alloc + 8;
-				text_box.x = mnode->node->x;
-				text_box.y = mnode->node->y;
-				text_box.width = m_alloc;
-				text_box.height = mnode->height;
+				right_cut = (struct wlr_box) {
+					.x = mnode->node->x,
+					.y = mnode->node->y,
+					.width = m_alloc,
+					.height = mnode->height,
+				};
 			}
 		}
 
@@ -768,50 +790,50 @@ void container_arrange_title_bar(struct sway_container *con) {
 			struct sway_text_node *tnode = con->title_bar.title_text;
 			int tx = bleft + 94;
 			int t_alloc = MAX(0, MIN((int)tnode->width,
-				(int)width - bright - 16 - tx - marks_reserve));
+				width - bright - 16 - tx - marks_reserve));
 			sway_text_node_set_max_width(tnode, t_alloc);
 			wlr_scene_node_set_position(tnode->node, tx,
 				btop + MAX(0, (inner_h - (int)tnode->height) >> 1));
 			wlr_scene_node_set_enabled(tnode->node, t_alloc > 0);
 			if (t_alloc > 0) {
-				text_box.x = tnode->node->x;
-				text_box.y = tnode->node->y;
-				text_box.width = MAX(text_box.width, t_alloc);
-				text_box.height = MAX(text_box.height, tnode->height);
+				left_cut = (struct wlr_box) {
+					.x = tnode->node->x,
+					.y = tnode->node->y,
+					.width = t_alloc,
+					.height = tnode->height,
+				};
 			}
 		}
 
 		int bg_corner = container_has_corner_radius(con) ? con->corner_radius : 0;
-		enum corner_location corners = bg_corner > 0 ?
-			CORNER_LOCATION_TOP : CORNER_LOCATION_NONE;
+		struct fx_corner_radii corners = bg_corner > 0 ?
+			corner_radii_top(bg_corner) : corner_radii_none();
 
-		wlr_scene_node_set_position(&con->title_bar.background->node, bleft, btop);
-		wlr_scene_rect_set_size(con->title_bar.background, inner_w, inner_h);
-		wlr_scene_rect_set_corner_radius(con->title_bar.background, bg_corner, corners);
+		int right_x = right_cut.width > 0 ? right_cut.x : bleft + inner_w;
+		right_x = MAX(right_x, bleft);
+		int left_width = MAX(right_x - bleft, 0);
+		int right_width = MAX(bleft + inner_w - right_x, 0);
 
-		if (text_box.width > 0 && text_box.height > 0) {
-			text_box.x = MAX(0, text_box.x - bleft);
-			text_box.y = MAX(0, text_box.y - btop);
-		} else {
-			text_box = (struct wlr_box){0};
-		}
-		wlr_scene_rect_set_clipped_region(con->title_bar.background, (struct clipped_region) {
-				.corners = CORNER_LOCATION_NONE,
-				.area = text_box,
-		});
+		arrange_titlebar_bg_rect(con->title_bar.background_left,
+			bleft, btop, left_width, inner_h,
+			right_width > 0 ? fx_corner_radii_filter(corners, corner_radii_left(1)) : corners,
+			&left_cut);
+		arrange_titlebar_bg_rect(con->title_bar.background_right,
+			right_x, btop, right_width, inner_h,
+			left_width > 0 ? fx_corner_radii_filter(corners, corner_radii_right(1)) : corners,
+			&right_cut);
 
 		wlr_scene_rect_set_size(con->title_bar.border, width, height);
-		wlr_scene_rect_set_corner_radius(con->title_bar.border,
-			bg_corner > 0 ? bg_corner + bthick : 0, corners);
+		wlr_scene_rect_set_corner_radii(con->title_bar.border,
+			bg_corner > 0 ? fx_corner_radii_extend(corners, bthick) : corner_radii_none());
 		wlr_scene_rect_set_clipped_region(con->title_bar.border, (struct clipped_region) {
-				.corners = corners,
-				.corner_radius = bg_corner,
-				.area = {
-					.x = bleft,
-					.y = btop,
-					.width = inner_w,
-					.height = inner_h,
-				},
+			.corners = corners,
+			.area = {
+				.x = bleft,
+				.y = btop,
+				.width = inner_w,
+				.height = inner_h,
+			},
 		});
 
 		container_update(con);
@@ -849,10 +871,13 @@ void container_arrange_title_bar(struct sway_container *con) {
 		wlr_scene_node_set_position(node->node,
 			h_padding, (height - node->height) >> 1);
 
-		text_box.x = node->node->x;
-		text_box.y = node->node->y;
-		text_box.width = alloc_width;
-		text_box.height = node->height;
+		struct wlr_box *slot = title_align == ALIGN_RIGHT ? &left_cut : &right_cut;
+		*slot = (struct wlr_box) {
+			.x = node->node->x,
+			.y = node->node->y,
+			.width = alloc_width,
+			.height = node->height,
+		};
 	}
 
 	if (con->title_bar.title_text) {
@@ -877,70 +902,51 @@ void container_arrange_title_bar(struct sway_container *con) {
 		wlr_scene_node_set_position(node->node,
 			h_padding, (height - node->height) >> 1);
 
-		text_box.x = MAX(text_box.x, node->node->x);
-		text_box.y = MAX(text_box.y, node->node->y);
-		text_box.width = MAX(text_box.width, alloc_width);
-		text_box.height = MAX(text_box.height, node->height);
+		struct wlr_box *slot = title_align == ALIGN_RIGHT ? &right_cut : &left_cut;
+		*slot = (struct wlr_box) {
+			.x = node->node->x,
+			.y = node->node->y,
+			.width = alloc_width,
+			.height = node->height,
+		};
 	}
 
+	// silence pixman errors
 	if (width <= 0 || height <= 0) {
 		return;
 	}
 
 	int thickness = config->titlebar_border_thickness;
-	int background_corner_radius = container_has_corner_radius(con) ?
-			con->corner_radius + con->current.border_thickness - thickness : 0;
-	enum corner_location corners = CORNER_LOCATION_TOP;
+	int bg_width = width - thickness * 2;
+	int bg_height = height - thickness * (config->titlebar_separator ? 2 : 1);
 
-	enum sway_container_layout layout;
-	const list_t *siblings;
-	if (con->current.parent) {
-		layout = con->current.parent->current.layout;
-		siblings = con->current.parent->current.children;
-	} else if (con->current.workspace) {
-		layout = con->current.workspace->layout;
-		siblings = con->current.workspace->tiling;
-	}
+	struct fx_corner_radii corners = get_titlebar_corners(con);
 
-	if (con->current.parent || con->current.workspace) {
-		if (layout == L_TABBED && siblings->length > 1) {
-			if (siblings->items[0] == con) {
-				corners &= ~CORNER_LOCATION_TOP_RIGHT;
-			} else if (siblings->items[siblings->length - 1] == con) {
-				corners &= ~CORNER_LOCATION_TOP_LEFT;
-			} else {
-				background_corner_radius = 0;
-				corners = CORNER_LOCATION_NONE;
-			}
-		} else if (layout == L_STACKED && siblings->items[0] != con) {
-			background_corner_radius = 0;
-			corners = CORNER_LOCATION_NONE;
-		}
-	}
+	int right_x = right_cut.width > 0 ? right_cut.x : thickness + bg_width;
+	right_x = MAX(right_x, thickness);
 
-	wlr_scene_node_set_position(&con->title_bar.background->node, thickness, thickness);
-	wlr_scene_rect_set_size(con->title_bar.background, width - thickness * 2,
-			height - thickness * (config->titlebar_separator ? 2 : 1));
-	wlr_scene_rect_set_corner_radius(con->title_bar.background, background_corner_radius, corners);
+	int left_width = MAX(right_x - thickness, 0);
+	int right_width = MAX(thickness + bg_width - right_x, 0);
 
-	text_box.x -= thickness;
-	text_box.y -= thickness;
-	wlr_scene_rect_set_clipped_region(con->title_bar.background, (struct clipped_region) {
-			.corners = CORNER_LOCATION_NONE,
-			.area = text_box,
-	});
+	arrange_titlebar_bg_rect(con->title_bar.background_left,
+		thickness, thickness, left_width, bg_height,
+		right_width > 0 ? fx_corner_radii_filter(corners, corner_radii_left(1)) : corners,
+		&left_cut);
+	arrange_titlebar_bg_rect(con->title_bar.background_right,
+		right_x, thickness, right_width, bg_height,
+		left_width > 0 ? fx_corner_radii_filter(corners, corner_radii_right(1)) : corners,
+		&right_cut);
 
 	wlr_scene_rect_set_size(con->title_bar.border, width, height);
-	wlr_scene_rect_set_corner_radius(con->title_bar.border, background_corner_radius + thickness, corners);
+	wlr_scene_rect_set_corner_radii(con->title_bar.border, fx_corner_radii_extend(corners, thickness));
 	wlr_scene_rect_set_clipped_region(con->title_bar.border, (struct clipped_region) {
-			.corners = corners,
-			.corner_radius = background_corner_radius,
-			.area = {
-			  .x = thickness,
-			  .y = thickness,
-			  .width = con->title_bar.background->width,
-			  .height = con->title_bar.background->height,
-			},
+		.corners = corners,
+		.area = {
+			.x = thickness,
+			.y = thickness,
+			.width = bg_width,
+			.height = bg_height,
+		},
 	});
 
 	container_update(con);
@@ -976,7 +982,7 @@ void container_update_marks(struct sway_container *con) {
 	}
 
 	if (!buffer) {
-	if (con->title_bar.marks_text) {
+		if (con->title_bar.marks_text) {
 			wlr_scene_node_destroy(con->title_bar.marks_text->node);
 			con->title_bar.marks_text = NULL;
 		}
@@ -1016,7 +1022,7 @@ void container_update_title_bar(struct sway_container *con) {
 
 	// we always have to remake these text buffers completely for text font
 	// changes etc...
-if (con->title_bar.marks_text) {
+	if (con->title_bar.marks_text) {
 		wlr_scene_node_destroy(con->title_bar.marks_text->node);
 		con->title_bar.marks_text = NULL;
 	}
@@ -1035,15 +1041,13 @@ void container_destroy(struct sway_container *con) {
 		return;
 	}
 
+	if (con->animation_state.animation.initialized) {
+		finish_animation(&con->animation_state.animation);
+	}
+
 	free(con->title);
 	free(con->formatted_title);
 	free(con->title_format);
-	if (con->animation_state.animation) {
-		if (con->animation_state.animation->initialized) {
-			wl_list_remove(&con->animation_state.animation->link);
-		}
-		free(con->animation_state.animation);
-	}
 	list_free(con->pending.children);
 	list_free(con->current.children);
 
@@ -1051,7 +1055,6 @@ void container_destroy(struct sway_container *con) {
 
 	if (con->view && con->view->container == con) {
 		con->view->container = NULL;
-		wlr_scene_node_destroy(&con->output_handler->node);
 		if (con->view->destroying) {
 			view_destroy(con->view);
 		}
@@ -1079,8 +1082,8 @@ void container_begin_destroy(struct sway_container *con) {
 
 	container_end_mouse_operation(con);
 
-	con->node.destroying = true;
 	node_set_dirty(&con->node);
+	con->node.destroying = true;
 
 	if (con->scratchpad) {
 		root_scratchpad_remove_container(con);
@@ -1092,16 +1095,6 @@ void container_begin_destroy(struct sway_container *con) {
 
 	if (con->pending.parent || con->pending.workspace) {
 		container_detach(con);
-	}
-
-	if (con->view && con->view->container == con) {
-		wl_list_remove(&con->output_enter.link);
-		wl_list_remove(&con->output_leave.link);
-		wl_list_remove(&con->output_handler_destroy.link);
-	}
-	if (con->animation_state.animation && con->animation_state.animation->initialized) {
-		con->animation_state.animation->initialized = false;
-		wl_list_remove(&con->animation_state.animation->link);
 	}
 }
 
@@ -1482,10 +1475,10 @@ void container_floating_resize_and_center(struct sway_container *con) {
 			top = con->pending.border == B_NORMAL ?
 				container_titlebar_height() : border_width;
 		}
-		
+
 		con->pending.content_width = fmin(con->pending.content_width, fmax(1, ws->width - border_width * 2));
 		con->pending.content_height = fmin(con->pending.content_height, fmax(1, ws->height - top - border_width));
-		
+
 		con->pending.content_x = ws->x + border_width + (ws->width - (con->pending.content_width + border_width * 2)) / 2;
 		con->pending.content_y = ws->y + top + (ws->height - (con->pending.content_height + top + border_width)) / 2;
 
@@ -1530,6 +1523,8 @@ void container_set_resizing(struct sway_container *con, bool resizing) {
 		return;
 	}
 
+	con->animation_state.seat_is_resizing = resizing;
+
 	if (con->view) {
 		if (con->view->impl->set_resizing) {
 			con->view->impl->set_resizing(con->view, resizing);
@@ -1546,6 +1541,9 @@ void container_set_floating(struct sway_container *container, bool enable) {
 	if (container_is_floating(container) == enable) {
 		return;
 	}
+
+	container->animation_state.seat_is_moving_float = false;
+	container->animation_state.seat_is_resizing = false;
 
 	struct sway_seat *seat = input_manager_current_seat();
 	struct sway_workspace *workspace = container->pending.workspace;
@@ -2113,7 +2111,8 @@ struct sway_container *container_split(struct sway_container *child,
 		enum sway_container_layout layout) {
 	// i3 doesn't split singleton H/V containers
 	// https://github.com/i3/i3/blob/3cd1c45eba6de073bc4300eebb4e1cc1a0c4479a/src/tree.c#L354
-	if (child->pending.parent || child->pending.workspace) {
+	if ((layout == L_HORIZ || layout == L_VERT) &&
+			(child->pending.parent || child->pending.workspace)) {
 		list_t *siblings = container_get_siblings(child);
 		if (siblings->length == 1) {
 			enum sway_container_layout current = container_parent_layout(child);
@@ -2494,8 +2493,17 @@ void container_swap(struct sway_container *con1, struct sway_container *con2) {
 }
 
 bool container_has_shadow(struct sway_container *con) {
-	return con->shadow_enabled
+	bool shadow_enabled = con->shadow_enabled
 		&& (con->current.border != B_CSD || config->shadows_on_csd_enabled);
+
+	if (!con->current.workspace) {
+		return shadow_enabled;
+	}
+
+	struct side_gaps gaps = con->current.workspace->current_gaps;
+	bool has_gaps = gaps.top > 0 || gaps.right > 0 || gaps.bottom > 0 || gaps.left > 0;
+
+	return (container_is_floating_or_child(con) || has_gaps) && shadow_enabled;
 }
 
 bool container_has_corner_radius(struct sway_container *con) {

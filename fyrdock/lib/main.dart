@@ -41,7 +41,13 @@ void main() async {
 
   final DisplayOutputInfo? initialTarget = await resolveTargetDisplayOutput();
 
-  bool isSupported = await waylandLayerShellPlugin.initialize(800, 200);
+  // gtk_layer_init_for_window is performed natively in my_application.cc
+  // before gtk_widget_realize so wlroots >= 0.20 always sees valid geometry.
+  bool isSupported = false;
+  try {
+    isSupported =
+        await _dockChannel.invokeMethod<bool>('isLayerSupported') ?? false;
+  } catch (_) {}
   if (isSupported) {
     try {
       await _dockChannel.invokeMethod(

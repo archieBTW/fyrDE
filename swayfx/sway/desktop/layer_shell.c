@@ -99,8 +99,8 @@ static void arrange_surface(struct sway_output *output, const struct wlr_box *fu
 		}
 
 		wlr_scene_node_set_enabled(&surface->blur_node->node, surface->blur_enabled);
-			wlr_scene_rect_set_size(surface->blur_node, surface->layer_surface->surface->current.width,
-				surface->layer_surface->surface->current.height);
+		wlr_scene_blur_set_size(surface->blur_node, surface->layer_surface->surface->current.width,
+			surface->layer_surface->surface->current.height);
 
 		wlr_scene_node_set_enabled(&surface->shadow_node->node, surface->shadow_enabled);
 
@@ -114,8 +114,7 @@ static void arrange_surface(struct sway_output *output, const struct wlr_box *fu
 			wlr_scene_node_set_position(&surface->shadow_node->node, x, y);
 
 			wlr_scene_shadow_set_clipped_region(surface->shadow_node, (struct clipped_region) {
-					.corners = CORNER_LOCATION_ALL,
-					.corner_radius = surface->corner_radius,
+					.corners = corner_radii_all(surface->corner_radius),
 					.area = {
 						.x = -x,
 						.y = -y,
@@ -247,7 +246,7 @@ static struct sway_layer_surface *sway_layer_surface_create(
 	surface->shadow_enabled = false;
 
 	bool failed = false;
-	surface->blur_node = wlr_scene_rect_create(surface->tree, 0, 0, (float[4]){0.0, 0.0, 0.0, 0.0});
+	surface->blur_node = alloc_scene_blur(surface->tree, 0, 0, &failed);
 	surface->shadow_node = alloc_scene_shadow(surface->tree, 0, 0,
 			0, config->shadow_blur_sigma, config->shadow_color, &failed);
 	if (failed) {
@@ -285,14 +284,6 @@ static struct sway_layer_surface *find_mapped_layer_by_client(
 		}
 	}
 	return NULL;
-}
-
-static void handle_output_destroy(struct wl_listener *listener, void *data) {
-	struct sway_layer_surface *layer =
-		wl_container_of(listener, layer, output_destroy);
-
-	layer->output = NULL;
-	wlr_layer_surface_v1_destroy(layer->layer_surface);
 }
 
 static void handle_node_destroy(struct wl_listener *listener, void *data) {
@@ -336,10 +327,10 @@ static void handle_node_destroy(struct wl_listener *listener, void *data) {
 	wl_list_remove(&layer->surface_commit.link);
 	wl_list_remove(&layer->node_destroy.link);
 	wl_list_remove(&layer->new_popup.link);
-	wl_list_remove(&layer->output_destroy.link);
 
 	layer->layer_surface->data = NULL;
 
+	wl_list_remove(&layer->link);
 	free(layer);
 }
 
@@ -350,10 +341,9 @@ static void handle_surface_commit(struct wl_listener *listener, void *data) {
 	struct wlr_layer_surface_v1 *layer_surface = surface->layer_surface;
 
 	// Rerender the optimized blur on change
-	struct wlr_layer_surface_v1 *wlr_layer_surface = surface->layer_surface;
-	if (wlr_layer_surface->current.layer ==
+	if (layer_surface->current.layer ==
 			ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND ||
-		wlr_layer_surface->current.layer == ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM) {
+		layer_surface->current.layer == ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM) {
 		if (surface->output) {
 			wlr_scene_optimized_blur_mark_dirty(surface->output->layers.blur_layer);
 		}
@@ -423,6 +413,7 @@ static void popup_handle_destroy(struct wl_listener *listener, void *data) {
 	wl_list_remove(&popup->destroy.link);
 	wl_list_remove(&popup->new_popup.link);
 	wl_list_remove(&popup->commit.link);
+	wl_list_remove(&popup->reposition.link);
 	free(popup);
 }
 
@@ -458,6 +449,11 @@ static void popup_handle_commit(struct wl_listener *listener, void *data) {
 	}
 }
 
+static void popup_handle_reposition(struct wl_listener *listener, void *data) {
+	struct sway_layer_popup *popup = wl_container_of(listener, popup, reposition);
+	popup_unconstrain(popup);
+}
+
 static void popup_handle_new_popup(struct wl_listener *listener, void *data);
 
 static struct sway_layer_popup *create_popup(struct wlr_xdg_popup *wlr_popup,
@@ -478,11 +474,13 @@ static struct sway_layer_popup *create_popup(struct wlr_xdg_popup *wlr_popup,
 	}
 
 	popup->destroy.notify = popup_handle_destroy;
-	wl_signal_add(&wlr_popup->base->events.destroy, &popup->destroy);
+	wl_signal_add(&wlr_popup->events.destroy, &popup->destroy);
 	popup->new_popup.notify = popup_handle_new_popup;
 	wl_signal_add(&wlr_popup->base->events.new_popup, &popup->new_popup);
 	popup->commit.notify = popup_handle_commit;
 	wl_signal_add(&wlr_popup->base->surface->events.commit, &popup->commit);
+	popup->reposition.notify = popup_handle_reposition;
+	wl_signal_add(&wlr_popup->events.reposition, &popup->reposition);
 
 	return popup;
 }
@@ -569,6 +567,7 @@ void handle_layer_shell_surface(struct wl_listener *listener, void *data) {
 	}
 
 	surface->output = output;
+	wl_list_insert(&output->layer_surfaces, &surface->link);
 
 	// now that the surface's output is known, we can advertise its scale
 	wlr_fractional_scale_v1_notify_scale(surface->layer_surface->surface,
@@ -586,9 +585,14 @@ void handle_layer_shell_surface(struct wl_listener *listener, void *data) {
 	surface->new_popup.notify = handle_new_popup;
 	wl_signal_add(&layer_surface->events.new_popup, &surface->new_popup);
 
-	surface->output_destroy.notify = handle_output_destroy;
-	wl_signal_add(&output->events.disable, &surface->output_destroy);
-
 	surface->node_destroy.notify = handle_node_destroy;
 	wl_signal_add(&scene_surface->tree->node.events.destroy, &surface->node_destroy);
+}
+
+void destroy_layers(struct sway_output *output) {
+	struct sway_layer_surface *layer, *layer_tmp;
+	wl_list_for_each_safe(layer, layer_tmp, &output->layer_surfaces, link) {
+		layer->output = NULL;
+		wlr_layer_surface_v1_destroy(layer->layer_surface);
+	}
 }
