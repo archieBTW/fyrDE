@@ -1,11 +1,13 @@
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/services.dart';
+import 'package:fyrdaw/models/automation_point.dart';
 import 'package:fyrdaw/models/daw_clip.dart';
 import 'package:fyrdaw/models/daw_effect.dart';
 import 'package:fyrdaw/models/enums.dart';
-import 'package:fyrdaw/models/sampler_pad.dart';
+import 'package:fyrdaw/models/midi_note.dart';
 import 'package:fyrdaw/models/tempo_marker.dart';
 import 'package:fyrdaw/models/track.dart';
 import 'package:fyrdaw/utils/audio_utils.dart';
@@ -15,6 +17,159 @@ import 'package:fyrdaw/utils/plugin_host.dart';
 import 'package:fyrdaw/utils/time_stretch.dart';
 import 'package:fyrdaw/wav_writer.dart';
 
+class _RenderPad {
+  final String filePath;
+  final int midiNote;
+  final int chokeGroup;
+  final double trimStart;
+  final double trimEnd;
+  final double pitch;
+  final double fadeIn;
+  final double fadeOut;
+  final double volume;
+
+  const _RenderPad({
+    required this.filePath,
+    required this.midiNote,
+    required this.chokeGroup,
+    required this.trimStart,
+    required this.trimEnd,
+    required this.pitch,
+    required this.fadeIn,
+    required this.fadeOut,
+    required this.volume,
+  });
+}
+
+class _RenderAudioClip {
+  final String filePath;
+  final double start;
+  final double length;
+  final double originalLength;
+  final double startOffset;
+  final double fadeIn;
+  final double fadeOut;
+  final double gain;
+  final double pitchSemitones;
+  final double stretchFactor;
+  final bool preservePitch;
+  final bool isLooped;
+
+  const _RenderAudioClip({
+    required this.filePath,
+    required this.start,
+    required this.length,
+    required this.originalLength,
+    required this.startOffset,
+    required this.fadeIn,
+    required this.fadeOut,
+    required this.gain,
+    required this.pitchSemitones,
+    required this.stretchFactor,
+    required this.preservePitch,
+    required this.isLooped,
+  });
+}
+
+class _RenderMidiClip {
+  final double start;
+  final double length;
+  final double startOffset;
+  final List<MidiNote> notes;
+
+  const _RenderMidiClip({
+    required this.start,
+    required this.length,
+    required this.startOffset,
+    required this.notes,
+  });
+}
+
+class _RenderTrack {
+  final String id;
+  final TrackType type;
+  final String? groupTrackId;
+  final double volume;
+  final double pan;
+  final double reverbSend;
+  final double delaySend;
+  final bool reverbPreFader;
+  final bool delayPreFader;
+  final String presetAssetPath;
+  final int presetBasePitch;
+  final int presetLoopPointMs;
+  final int presetReleaseMs;
+  final double presetVolumeMultiplier;
+  final SynthSettings synthSettings;
+  final ArpSettings arpSettings;
+  final List<DawEffect> effectsChain;
+  final Map<String, List<AutomationPoint>> automation;
+  final List<_RenderPad> samplerPads;
+  final List<_RenderAudioClip> audioClips;
+  final List<_RenderMidiClip> midiClips;
+
+  const _RenderTrack({
+    required this.id,
+    required this.type,
+    required this.groupTrackId,
+    required this.volume,
+    required this.pan,
+    required this.reverbSend,
+    required this.delaySend,
+    required this.reverbPreFader,
+    required this.delayPreFader,
+    required this.presetAssetPath,
+    required this.presetBasePitch,
+    required this.presetLoopPointMs,
+    required this.presetReleaseMs,
+    required this.presetVolumeMultiplier,
+    required this.synthSettings,
+    required this.arpSettings,
+    required this.effectsChain,
+    required this.automation,
+    required this.samplerPads,
+    required this.audioClips,
+    required this.midiClips,
+  });
+
+  double getInterpolatedAutomation(String param, double currentPos) =>
+      interpolateAutomationPoints(automation[param], currentPos);
+}
+
+class _MixdownRequest {
+  final List<_RenderTrack> activeTracks;
+  final String outWavPath;
+  final int bpm;
+  final double beatWidth;
+  final bool isSingleTrack;
+  final double masterVolume;
+  final bool masterLimiter;
+  final double auxReverbMix;
+  final double auxDelayMix;
+  final bool auxReverbSolo;
+  final bool auxDelaySolo;
+  final List<DawEffect> masterEffectsChain;
+  final List<TempoMarker> tempoMarkers;
+  final Map<String, Uint8List> preloadedAssets;
+
+  const _MixdownRequest({
+    required this.activeTracks,
+    required this.outWavPath,
+    required this.bpm,
+    required this.beatWidth,
+    required this.isSingleTrack,
+    required this.masterVolume,
+    required this.masterLimiter,
+    required this.auxReverbMix,
+    required this.auxDelayMix,
+    required this.auxReverbSolo,
+    required this.auxDelaySolo,
+    required this.masterEffectsChain,
+    required this.tempoMarkers,
+    required this.preloadedAssets,
+  });
+}
+
 class MixdownRenderer {
   static const int sampleRate = 44100;
   static const double unitsPerSecond = 100.0;
@@ -22,6 +177,10 @@ class MixdownRenderer {
   /// Renders either the full project (when [onlyTrack] is null) or a single
   /// track (when [onlyTrack] is provided) into a stereo 16-bit WAV file at
   /// [outWavPath]. Returns true if any audio was rendered.
+  ///
+  /// When [useIsolate] is true (default), Flutter bundle assets are preloaded
+  /// on the root isolate and all DSP mixing, effects, and WAV encoding run on
+  /// a background [Isolate] so the UI stays responsive.
   static Future<bool> renderToWav({
     required List<Track> tracks,
     required Map<String, List<DawClip>> trackClips,
@@ -37,6 +196,7 @@ class MixdownRenderer {
     bool auxDelaySolo = false,
     List<DawEffect> masterEffectsChain = const [],
     List<TempoMarker> tempoMarkers = const [],
+    bool useIsolate = true,
   }) async {
     final targetTracks = onlyTrack != null ? [onlyTrack] : tracks;
     final groupTracksMap = <String, Track>{
@@ -61,24 +221,230 @@ class MixdownRenderer {
         }
       }
     }
+    if (maxTimelinePos <= 0.0) return false;
+
+    // Preload any Flutter asset samples on the root isolate (rootBundle cannot
+    // be invoked inside a spawned worker Isolate).
+    final assetPathsToLoad = <String>{};
+    for (final t in activeTracks) {
+      final clips = trackClips[t.id] ?? const <DawClip>[];
+      if (clips.isEmpty) continue;
+      for (final c in clips) {
+        if (c is AudioClip && c.filePath.startsWith('assets/')) {
+          assetPathsToLoad.add(c.filePath);
+        } else if (c is MidiClip && c.notes.isNotEmpty) {
+          if (t.type == TrackType.sampler) {
+            for (final pad in t.samplerPads.values) {
+              if (pad.filePath != null && pad.filePath!.startsWith('assets/')) {
+                assetPathsToLoad.add(pad.filePath!);
+              }
+            }
+          } else if (t.type == TrackType.midi) {
+            assetPathsToLoad.add(getInstrumentPreset(t.instrumentIndex).assetPath);
+          }
+        }
+      }
+    }
+
+    final preloadedAssets = <String, Uint8List>{};
+    for (final assetPath in assetPathsToLoad) {
+      try {
+        final data = await rootBundle.load(assetPath);
+        preloadedAssets[assetPath] = Uint8List.fromList(
+          data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+        );
+      } catch (_) {}
+    }
+
+    List<DawEffect> cloneEffects(List<DawEffect> chain) => [
+      for (final fx in chain)
+        DawEffect(
+          fx.name,
+          Map<String, double>.from(fx.parameters),
+          isBypassed: fx.isBypassed,
+          sidechainTrackId: fx.sidechainTrackId,
+          pluginFormat: fx.pluginFormat,
+          pluginUri: fx.pluginUri,
+        ),
+    ];
+
+    final renderTracks = <_RenderTrack>[];
+    for (final t in activeTracks) {
+      final preset = getInstrumentPreset(t.instrumentIndex);
+      final clips = trackClips[t.id] ?? const <DawClip>[];
+      final audioClips = <_RenderAudioClip>[];
+      final midiClips = <_RenderMidiClip>[];
+      for (final c in clips) {
+        if (c is AudioClip) {
+          audioClips.add(
+            _RenderAudioClip(
+              filePath: c.filePath,
+              start: c.start,
+              length: c.length,
+              originalLength: c.originalLength,
+              startOffset: c.startOffset,
+              fadeIn: c.fadeIn,
+              fadeOut: c.fadeOut,
+              gain: c.gain,
+              pitchSemitones: c.pitchSemitones,
+              stretchFactor: c.stretchFactor,
+              preservePitch: c.preservePitch,
+              isLooped: c.isLooped,
+            ),
+          );
+        } else if (c is MidiClip && c.notes.isNotEmpty) {
+          midiClips.add(
+            _RenderMidiClip(
+              start: c.start,
+              length: c.length,
+              startOffset: c.startOffset,
+              notes: [
+                for (final n in c.notes)
+                  MidiNote(
+                    pitch: n.pitch,
+                    start: n.start,
+                    length: n.length,
+                    velocity: n.velocity,
+                  ),
+              ],
+            ),
+          );
+        }
+      }
+
+      renderTracks.add(
+        _RenderTrack(
+          id: t.id,
+          type: t.type,
+          groupTrackId: t.groupTrackId,
+          volume: t.volume,
+          pan: t.pan,
+          reverbSend: t.reverbSend,
+          delaySend: t.delaySend,
+          reverbPreFader: t.reverbPreFader,
+          delayPreFader: t.delayPreFader,
+          presetAssetPath: preset.assetPath,
+          presetBasePitch: preset.basePitch,
+          presetLoopPointMs: preset.loopPointMs,
+          presetReleaseMs: preset.releaseMs,
+          presetVolumeMultiplier: preset.volumeMultiplier,
+          synthSettings: SynthSettings(
+            attackSec: t.synthSettings.attackSec,
+            decaySec: t.synthSettings.decaySec,
+            sustain: t.synthSettings.sustain,
+            releaseSec: t.synthSettings.releaseSec,
+            filterCutoff: t.synthSettings.filterCutoff,
+            filterResonance: t.synthSettings.filterResonance,
+            octave: t.synthSettings.octave,
+            detuneCents: t.synthSettings.detuneCents,
+          ),
+          arpSettings: ArpSettings(
+            enabled: t.arpSettings.enabled,
+            mode: t.arpSettings.mode,
+            rateBeats: t.arpSettings.rateBeats,
+            octaves: t.arpSettings.octaves,
+            gate: t.arpSettings.gate,
+          ),
+          effectsChain: cloneEffects(t.effectsChain),
+          automation: {
+            for (final e in t.automation.entries)
+              e.key: [
+                for (final pt in e.value)
+                  AutomationPoint(pt.time, pt.value, curve: pt.curve),
+              ],
+          },
+          samplerPads: [
+            for (final pad in t.samplerPads.values)
+              if (pad.filePath != null)
+                _RenderPad(
+                  filePath: pad.filePath!,
+                  midiNote: pad.midiNote,
+                  chokeGroup: pad.chokeGroup,
+                  trimStart: pad.trimStart,
+                  trimEnd: pad.trimEnd,
+                  pitch: pad.pitch,
+                  fadeIn: pad.fadeIn,
+                  fadeOut: pad.fadeOut,
+                  volume: pad.volume,
+                ),
+          ],
+          audioClips: audioClips,
+          midiClips: midiClips,
+        ),
+      );
+    }
+
+    final request = _MixdownRequest(
+      activeTracks: renderTracks,
+      outWavPath: outWavPath,
+      bpm: bpm,
+      beatWidth: beatWidth ?? (100.0 * 60.0 / bpm),
+      isSingleTrack: onlyTrack != null,
+      masterVolume: masterVolume,
+      masterLimiter: masterLimiter,
+      auxReverbMix: auxReverbMix,
+      auxDelayMix: auxDelayMix,
+      auxReverbSolo: auxReverbSolo,
+      auxDelaySolo: auxDelaySolo,
+      masterEffectsChain: cloneEffects(masterEffectsChain),
+      tempoMarkers: [
+        for (final tm in tempoMarkers)
+          TempoMarker(
+            id: tm.id,
+            position: tm.position,
+            bpm: tm.bpm,
+            numerator: tm.numerator,
+            denominator: tm.denominator,
+            isRamp: tm.isRamp,
+          ),
+      ],
+      preloadedAssets: preloadedAssets,
+    );
+
+    if (useIsolate) {
+      return Isolate.run(() => _renderRequestToWav(request));
+    }
+    return _renderRequestToWav(request);
+  }
+
+  static Future<bool> _renderRequestToWav(_MixdownRequest req) async {
+    final activeTracks = req.activeTracks;
+    final groupTracksMap = <String, _RenderTrack>{
+      for (final t in activeTracks)
+        if (t.type == TrackType.group) t.id: t,
+    };
+
+    double maxTimelinePos = 0.0;
+    for (final t in activeTracks) {
+      for (final c in t.audioClips) {
+        if (c.start + c.length > maxTimelinePos) {
+          maxTimelinePos = c.start + c.length;
+        }
+      }
+      for (final c in t.midiClips) {
+        if (c.start + c.length > maxTimelinePos) {
+          maxTimelinePos = c.start + c.length;
+        }
+      }
+    }
 
     if (maxTimelinePos <= 0.0) return false;
 
-    final double resolvedBeatWidth = beatWidth ?? (100.0 * 60.0 / bpm);
+    final double resolvedBeatWidth = req.beatWidth;
 
     double timelineToSec(double units) {
-      if (tempoMarkers.isEmpty) return units / unitsPerSecond;
+      if (req.tempoMarkers.isEmpty) return units / unitsPerSecond;
       return TempoMarker.timelineToSeconds(
         units,
-        markers: tempoMarkers,
-        baseBpm: bpm.toDouble(),
+        markers: req.tempoMarkers,
+        baseBpm: req.bpm.toDouble(),
         beatWidth: resolvedBeatWidth,
       );
     }
 
     double secToTimeline(double sec) {
       if (sec <= 0.0) return 0.0;
-      if (tempoMarkers.isEmpty) return sec * unitsPerSecond;
+      if (req.tempoMarkers.isEmpty) return sec * unitsPerSecond;
       double lo = 0.0;
       double hi = max(maxTimelinePos + 200.0, sec * unitsPerSecond * 4.0);
       for (int it = 0; it < 24; it++) {
@@ -110,13 +476,13 @@ class MixdownRenderer {
     Future<DecodedWav?> loadAudio(String pathOrAsset, {bool isAsset = false}) async {
       if (wavCache.containsKey(pathOrAsset)) return wavCache[pathOrAsset];
       DecodedWav? decoded;
-      if (isAsset) {
-        try {
-          final data = await rootBundle.load(pathOrAsset);
-          decoded = decodeWavBytes(data.buffer.asUint8List());
-        } catch (_) {}
+      if (isAsset || pathOrAsset.startsWith('assets/')) {
+        final bytes = req.preloadedAssets[pathOrAsset];
+        if (bytes != null) {
+          decoded = decodeWavBytes(bytes);
+        }
       } else {
-        decoded = await decodeWavFile(pathOrAsset);
+        decoded = decodeWavFileSync(pathOrAsset);
         if (decoded == null && File(pathOrAsset).existsSync()) {
           decoded = await decodeAudioFileWithFfmpeg(pathOrAsset);
         }
@@ -131,320 +497,322 @@ class MixdownRenderer {
     final Map<String, Float64List> trackDryR = {};
 
     for (final track in activeTracks) {
-      final clips = trackClips[track.id] ?? const <DawClip>[];
-      if (clips.isEmpty) continue;
+      if (track.audioClips.isEmpty && track.midiClips.isEmpty) continue;
 
       final trackL = Float64List(totalFrames);
       final trackR = Float64List(totalFrames);
       bool trackHasAudio = false;
 
-      final audioClipsOnTrack = clips.whereType<AudioClip>().toList()
+      final audioClipsOnTrack = [...track.audioClips]
         ..sort((a, b) => a.start.compareTo(b.start));
 
-      for (final clip in clips) {
-        if (clip is AudioClip) {
-          final wav = await loadAudio(clip.filePath);
-          if (wav == null || wav.frameCount == 0) continue;
+      for (int clipIdx = 0; clipIdx < audioClipsOnTrack.length; clipIdx++) {
+        final clip = audioClipsOnTrack[clipIdx];
+        final wav = await loadAudio(
+          clip.filePath,
+          isAsset: clip.filePath.startsWith('assets/'),
+        );
+        if (wav == null || wav.frameCount == 0) continue;
 
-          // Compute automatic crossfade overlap windows with neighbors on same track
-          final clipIdx = audioClipsOnTrack.indexOf(clip);
-          double xfadeInUnits = 0.0;
-          if (clipIdx > 0) {
-            final prev = audioClipsOnTrack[clipIdx - 1];
-            if (prev.start + prev.length > clip.start) {
-              xfadeInUnits = min(clip.length, prev.start + prev.length - clip.start);
-            }
+        // Compute automatic crossfade overlap windows with neighbors on same track
+        double xfadeInUnits = 0.0;
+        if (clipIdx > 0) {
+          final prev = audioClipsOnTrack[clipIdx - 1];
+          if (prev.start + prev.length > clip.start) {
+            xfadeInUnits = min(clip.length, prev.start + prev.length - clip.start);
           }
-          double xfadeOutUnits = 0.0;
-          if (clipIdx >= 0 && clipIdx + 1 < audioClipsOnTrack.length) {
-            final next = audioClipsOnTrack[clipIdx + 1];
-            if (clip.start + clip.length > next.start) {
-              xfadeOutUnits = min(clip.length, clip.start + clip.length - next.start);
-            }
+        }
+        double xfadeOutUnits = 0.0;
+        if (clipIdx + 1 < audioClipsOnTrack.length) {
+          final next = audioClipsOnTrack[clipIdx + 1];
+          if (clip.start + clip.length > next.start) {
+            xfadeOutUnits = min(clip.length, clip.start + clip.length - next.start);
           }
-          final int xfadeInFrames =
-              ((xfadeInUnits / unitsPerSecond) * sampleRate).round();
-          final int xfadeOutFrames =
-              ((xfadeOutUnits / unitsPerSecond) * sampleRate).round();
+        }
+        final int xfadeInFrames =
+            ((xfadeInUnits / unitsPerSecond) * sampleRate).round();
+        final int xfadeOutFrames =
+            ((xfadeOutUnits / unitsPerSecond) * sampleRate).round();
 
-          final int clipStartFrame =
-              (timelineToSec(clip.start) * sampleRate).round();
-          final int clipLenFrames = max(
-            1,
-            ((timelineToSec(clip.start + clip.length) -
-                        timelineToSec(clip.start)) *
-                    sampleRate)
-                .round(),
+        final int clipStartFrame =
+            (timelineToSec(clip.start) * sampleRate).round();
+        final int clipLenFrames = max(
+          1,
+          ((timelineToSec(clip.start + clip.length) -
+                      timelineToSec(clip.start)) *
+                  sampleRate)
+              .round(),
+        );
+
+        // Apply independent pitch-preserved time stretching / semitone shifting
+        List<double> srcLeft = wav.left;
+        List<double> srcRight = wav.right;
+        double rateRatio = wav.sampleRate / sampleRate;
+        final bool useWsola = clip.preservePitch &&
+            (clip.pitchSemitones.abs() > 0.01 ||
+                (clip.stretchFactor - 1.0).abs() > 0.005);
+        if (useWsola) {
+          final stretched = TimeStretchEngine.processStereo(
+            left: wav.left,
+            right: wav.right,
+            sampleRate: wav.sampleRate,
+            stretchFactor: clip.stretchFactor,
+            pitchSemitones: clip.pitchSemitones,
+            preservePitch: true,
           );
+          srcLeft = stretched.left;
+          srcRight = stretched.right;
+        } else {
+          rateRatio =
+              (wav.sampleRate / sampleRate) *
+              pow(2.0, clip.pitchSemitones / 12.0) *
+              clip.stretchFactor.clamp(0.25, 4.0);
+        }
 
-          // Apply independent pitch-preserved time stretching / semitone shifting
-          List<double> srcLeft = wav.left;
-          List<double> srcRight = wav.right;
-          double rateRatio = wav.sampleRate / sampleRate;
-          final bool useWsola = clip.preservePitch &&
-              (clip.pitchSemitones.abs() > 0.01 ||
-                  (clip.stretchFactor - 1.0).abs() > 0.005);
-          if (useWsola) {
-            final stretched = TimeStretchEngine.processStereo(
-              left: wav.left,
-              right: wav.right,
-              sampleRate: wav.sampleRate,
-              stretchFactor: clip.stretchFactor,
-              pitchSemitones: clip.pitchSemitones,
-              preservePitch: true,
-            );
-            srcLeft = stretched.left;
-            srcRight = stretched.right;
-          } else {
-            rateRatio =
-                (wav.sampleRate / sampleRate) *
-                pow(2.0, clip.pitchSemitones / 12.0) *
-                clip.stretchFactor.clamp(0.25, 4.0);
+        final int srcFrameCount = srcLeft.length;
+        if (srcFrameCount == 0) continue;
+        final double srcStartSec = clip.startOffset / unitsPerSecond;
+        final double loopSpanUnits = useWsola
+            ? clip.originalLength / max(0.25, clip.stretchFactor)
+            : clip.originalLength;
+        final int loopSpanFrames = max(
+          1,
+          ((loopSpanUnits / unitsPerSecond) * wav.sampleRate)
+              .round()
+              .clamp(1, srcFrameCount),
+        );
+        final int fadeInFrames =
+            ((clip.fadeIn / unitsPerSecond) * sampleRate).round();
+        final int fadeOutFrames =
+            ((clip.fadeOut / unitsPerSecond) * sampleRate).round();
+
+        for (int i = 0; i < clipLenFrames; i++) {
+          final int dst = clipStartFrame + i;
+          if (dst < 0 || dst >= totalFrames) continue;
+
+          double srcPos = (srcStartSec * wav.sampleRate) + (i * rateRatio);
+          if (clip.isLooped && loopSpanFrames > 8 && srcPos >= loopSpanFrames) {
+            srcPos = srcPos % loopSpanFrames;
+          }
+          final int s0 = srcPos.floor();
+          if (s0 < 0 || s0 >= srcFrameCount) continue;
+          final int s1 = (s0 + 1).clamp(0, srcFrameCount - 1);
+          final double frac = srcPos - s0;
+
+          double env = clip.gain.clamp(0.0, 2.5);
+          if (fadeInFrames > 0 && i < fadeInFrames) {
+            env *= (i / fadeInFrames);
+          }
+          if (fadeOutFrames > 0 && i >= clipLenFrames - fadeOutFrames) {
+            env *= ((clipLenFrames - i) / fadeOutFrames).clamp(0.0, 1.0);
+          }
+          if (xfadeInFrames > 0 && i < xfadeInFrames) {
+            env *= 0.5 * (1.0 - cos(pi * i / xfadeInFrames));
+          }
+          if (xfadeOutFrames > 0 && i >= clipLenFrames - xfadeOutFrames) {
+            final rem = (clipLenFrames - i).clamp(0, xfadeOutFrames);
+            env *= 0.5 * (1.0 - cos(pi * rem / xfadeOutFrames));
           }
 
-          final int srcFrameCount = srcLeft.length;
-          if (srcFrameCount == 0) continue;
-          final double srcStartSec = clip.startOffset / unitsPerSecond;
-          final double loopSpanUnits = useWsola
-              ? clip.originalLength / max(0.25, clip.stretchFactor)
-              : clip.originalLength;
-          final int loopSpanFrames = max(
-            1,
-            ((loopSpanUnits / unitsPerSecond) * wav.sampleRate)
-                .round()
-                .clamp(1, srcFrameCount),
-          );
-          final int fadeInFrames =
-              ((clip.fadeIn / unitsPerSecond) * sampleRate).round();
-          final int fadeOutFrames =
-              ((clip.fadeOut / unitsPerSecond) * sampleRate).round();
+          final l =
+              (srcLeft[s0] * (1.0 - frac) + srcLeft[s1] * frac) * env;
+          final r =
+              (srcRight[s0] * (1.0 - frac) + srcRight[s1] * frac) * env;
+          trackL[dst] += l;
+          trackR[dst] += r;
+        }
+        trackHasAudio = true;
+        anyAudioRendered = true;
+      }
 
-          for (int i = 0; i < clipLenFrames; i++) {
-            final int dst = clipStartFrame + i;
-            if (dst < 0 || dst >= totalFrames) continue;
+      for (final clip in track.midiClips) {
+        if (clip.notes.isEmpty) continue;
+        if (track.type == TrackType.sampler) {
+          final sortedNotes = clip.notes
+              .where(
+                (n) =>
+                    n.start >= clip.startOffset &&
+                    n.start < clip.startOffset + clip.length,
+              )
+              .toList()
+            ..sort((a, b) => a.start.compareTo(b.start));
 
-            double srcPos = (srcStartSec * wav.sampleRate) + (i * rateRatio);
-            if (clip.isLooped && loopSpanFrames > 8 && srcPos >= loopSpanFrames) {
-              srcPos = srcPos % loopSpanFrames;
-            }
-            final int s0 = srcPos.floor();
-            if (s0 < 0 || s0 >= srcFrameCount) continue;
-            final int s1 = (s0 + 1).clamp(0, srcFrameCount - 1);
-            final double frac = srcPos - s0;
-
-            double env = clip.gain.clamp(0.0, 2.5);
-            if (fadeInFrames > 0 && i < fadeInFrames) {
-              env *= (i / fadeInFrames);
-            }
-            if (fadeOutFrames > 0 && i >= clipLenFrames - fadeOutFrames) {
-              env *= ((clipLenFrames - i) / fadeOutFrames).clamp(0.0, 1.0);
-            }
-            if (xfadeInFrames > 0 && i < xfadeInFrames) {
-              env *= 0.5 * (1.0 - cos(pi * i / xfadeInFrames));
-            }
-            if (xfadeOutFrames > 0 && i >= clipLenFrames - xfadeOutFrames) {
-              final rem = (clipLenFrames - i).clamp(0, xfadeOutFrames);
-              env *= 0.5 * (1.0 - cos(pi * rem / xfadeOutFrames));
-            }
-
-            final l =
-                (srcLeft[s0] * (1.0 - frac) + srcLeft[s1] * frac) * env;
-            final r =
-                (srcRight[s0] * (1.0 - frac) + srcRight[s1] * frac) * env;
-            trackL[dst] += l;
-            trackR[dst] += r;
-          }
-          trackHasAudio = true;
-          anyAudioRendered = true;
-        } else if (clip is MidiClip && clip.notes.isNotEmpty) {
-          if (track.type == TrackType.sampler) {
-            final sortedNotes = clip.notes
-                .where(
-                  (n) =>
-                      n.start >= clip.startOffset &&
-                      n.start < clip.startOffset + clip.length,
-                )
-                .toList()
-              ..sort((a, b) => a.start.compareTo(b.start));
-
-            for (int nIdx = 0; nIdx < sortedNotes.length; nIdx++) {
-              final note = sortedNotes[nIdx];
-              SamplerPad? pad;
-              for (final p in track.samplerPads.values) {
-                if (p.midiNote == note.pitch) {
-                  pad = p;
-                  break;
-                }
+          for (int nIdx = 0; nIdx < sortedNotes.length; nIdx++) {
+            final note = sortedNotes[nIdx];
+            _RenderPad? pad;
+            for (final p in track.samplerPads) {
+              if (p.midiNote == note.pitch) {
+                pad = p;
+                break;
               }
-              if (pad == null || pad.filePath == null) continue;
-              final wav = await loadAudio(
-                pad.filePath!,
-                isAsset: pad.filePath!.startsWith('assets/'),
-              );
-              if (wav == null || wav.frameCount == 0) continue;
+            }
+            if (pad == null) continue;
+            final wav = await loadAudio(
+              pad.filePath,
+              isAsset: pad.filePath.startsWith('assets/'),
+            );
+            if (wav == null || wav.frameCount == 0) continue;
 
-              final double absStartUnits =
-                  clip.start + (note.start - clip.startOffset);
-              final int noteStartFrame =
-                  (timelineToSec(absStartUnits) * sampleRate).round();
+            final double absStartUnits =
+                clip.start + (note.start - clip.startOffset);
+            final int noteStartFrame =
+                (timelineToSec(absStartUnits) * sampleRate).round();
 
-              // Respect pad choke group if another pad in same group triggers later
-              int? chokeStopFrame;
-              if (pad.chokeGroup > 0) {
-                for (int nextIdx = nIdx + 1; nextIdx < sortedNotes.length; nextIdx++) {
-                  final nextNote = sortedNotes[nextIdx];
-                  if (nextNote.start <= note.start) continue;
-                  SamplerPad? nextPad;
-                  for (final p in track.samplerPads.values) {
-                    if (p.midiNote == nextNote.pitch) {
-                      nextPad = p;
-                      break;
-                    }
-                  }
-                  if (nextPad != null && nextPad.chokeGroup == pad.chokeGroup) {
-                    final double nextUnits =
-                        clip.start + (nextNote.start - clip.startOffset);
-                    chokeStopFrame = (timelineToSec(nextUnits) * sampleRate).round();
+            // Respect pad choke group if another pad in same group triggers later
+            int? chokeStopFrame;
+            if (pad.chokeGroup > 0) {
+              for (int nextIdx = nIdx + 1; nextIdx < sortedNotes.length; nextIdx++) {
+                final nextNote = sortedNotes[nextIdx];
+                if (nextNote.start <= note.start) continue;
+                _RenderPad? nextPad;
+                for (final p in track.samplerPads) {
+                  if (p.midiNote == nextNote.pitch) {
+                    nextPad = p;
                     break;
                   }
                 }
-              }
-
-              final int startSample =
-                  (pad.trimStart.clamp(0.0, 1.0) * wav.frameCount).round();
-              final int endSample =
-                  (pad.trimEnd.clamp(0.0, 1.0) * wav.frameCount).round();
-              if (endSample <= startSample) continue;
-
-              final double ratio =
-                  (wav.sampleRate / sampleRate) * pad.pitch.clamp(0.25, 4.0);
-              final int outFrames =
-                  ((endSample - startSample) / ratio).round().clamp(1, totalFrames);
-              final int fadeInFrames = (pad.fadeIn * sampleRate).round();
-              final int fadeOutFrames = (pad.fadeOut * sampleRate).round();
-              final double velGain =
-                  pad.volume * (note.velocity.clamp(1, 127) / 127.0);
-
-              for (int i = 0; i < outFrames; i++) {
-                final int dst = noteStartFrame + i;
-                if (dst < 0 || dst >= totalFrames) continue;
-                if (chokeStopFrame != null && dst >= chokeStopFrame + 128) {
+                if (nextPad != null && nextPad.chokeGroup == pad.chokeGroup) {
+                  final double nextUnits =
+                      clip.start + (nextNote.start - clip.startOffset);
+                  chokeStopFrame = (timelineToSec(nextUnits) * sampleRate).round();
                   break;
                 }
-                final double srcPos = startSample + i * ratio;
-                final int s0 = srcPos.floor().clamp(0, wav.frameCount - 1);
-                final int s1 = (s0 + 1).clamp(0, wav.frameCount - 1);
-                final double frac = srcPos - s0;
-                double env = velGain;
-                if (fadeInFrames > 0 && i < fadeInFrames) {
-                  env *= i / fadeInFrames;
-                }
-                if (fadeOutFrames > 0 && i >= outFrames - fadeOutFrames) {
-                  env *= ((outFrames - i) / fadeOutFrames).clamp(0.0, 1.0);
-                }
-                if (chokeStopFrame != null && dst >= chokeStopFrame) {
-                  env *= (1.0 - (dst - chokeStopFrame) / 128.0).clamp(0.0, 1.0);
-                }
-                trackL[dst] +=
-                    (wav.left[s0] * (1.0 - frac) + wav.left[s1] * frac) * env;
-                trackR[dst] +=
-                    (wav.right[s0] * (1.0 - frac) + wav.right[s1] * frac) * env;
               }
-              trackHasAudio = true;
-              anyAudioRendered = true;
             }
-          } else {
-            final preset = getInstrumentPreset(track.instrumentIndex);
-            final wav = await loadAudio(preset.assetPath, isAsset: true);
-            if (wav == null || wav.frameCount == 0) continue;
 
-            final synth = track.synthSettings;
-            final int loopFrame =
-                ((preset.loopPointMs / 1000.0) * wav.sampleRate).round().clamp(
-                  0,
-                  max(0, wav.frameCount - 2),
-                );
-            final double effectiveReleaseSec =
-                (synth.releaseSec - 0.14).abs() < 1e-4
-                    ? preset.releaseMs / 1000.0
-                    : synth.releaseSec;
-            final int releaseFrames =
-                ((max(0.02, effectiveReleaseSec)) * sampleRate).round().clamp(
-                  200,
-                  sampleRate * 3,
-                );
-            final int attackFrames =
-                ((synth.attackSec * sampleRate).round()).clamp(32, sampleRate * 2);
-            final int decayFrames =
-                ((synth.decaySec * sampleRate).round()).clamp(32, sampleRate * 2);
+            final int startSample =
+                (pad.trimStart.clamp(0.0, 1.0) * wav.frameCount).round();
+            final int endSample =
+                (pad.trimEnd.clamp(0.0, 1.0) * wav.frameCount).round();
+            if (endSample <= startSample) continue;
 
-            final synthNotes = track.arpSettings.enabled
-                ? track.arpSettings.expandNotes(clip.notes, resolvedBeatWidth)
-                : clip.notes;
-            for (final note in synthNotes) {
-              if (note.start < clip.startOffset ||
-                  note.start >= clip.startOffset + clip.length) {
+            final double ratio =
+                (wav.sampleRate / sampleRate) * pad.pitch.clamp(0.25, 4.0);
+            final int outFrames =
+                ((endSample - startSample) / ratio).round().clamp(1, totalFrames);
+            final int fadeInFrames = (pad.fadeIn * sampleRate).round();
+            final int fadeOutFrames = (pad.fadeOut * sampleRate).round();
+            final double velGain =
+                pad.volume * (note.velocity.clamp(1, 127) / 127.0);
+
+            for (int i = 0; i < outFrames; i++) {
+              final int dst = noteStartFrame + i;
+              if (dst < 0 || dst >= totalFrames) continue;
+              if (chokeStopFrame != null && dst >= chokeStopFrame + 128) {
+                break;
+              }
+              final double srcPos = startSample + i * ratio;
+              final int s0 = srcPos.floor().clamp(0, wav.frameCount - 1);
+              final int s1 = (s0 + 1).clamp(0, wav.frameCount - 1);
+              final double frac = srcPos - s0;
+              double env = velGain;
+              if (fadeInFrames > 0 && i < fadeInFrames) {
+                env *= i / fadeInFrames;
+              }
+              if (fadeOutFrames > 0 && i >= outFrames - fadeOutFrames) {
+                env *= ((outFrames - i) / fadeOutFrames).clamp(0.0, 1.0);
+              }
+              if (chokeStopFrame != null && dst >= chokeStopFrame) {
+                env *= (1.0 - (dst - chokeStopFrame) / 128.0).clamp(0.0, 1.0);
+              }
+              trackL[dst] +=
+                  (wav.left[s0] * (1.0 - frac) + wav.left[s1] * frac) * env;
+              trackR[dst] +=
+                  (wav.right[s0] * (1.0 - frac) + wav.right[s1] * frac) * env;
+            }
+            trackHasAudio = true;
+            anyAudioRendered = true;
+          }
+        } else {
+          final wav = await loadAudio(track.presetAssetPath, isAsset: true);
+          if (wav == null || wav.frameCount == 0) continue;
+
+          final synth = track.synthSettings;
+          final int loopFrame =
+              ((track.presetLoopPointMs / 1000.0) * wav.sampleRate).round().clamp(
+                0,
+                max(0, wav.frameCount - 2),
+              );
+          final double effectiveReleaseSec =
+              (synth.releaseSec - 0.14).abs() < 1e-4
+                  ? track.presetReleaseMs / 1000.0
+                  : synth.releaseSec;
+          final int releaseFrames =
+              ((max(0.02, effectiveReleaseSec)) * sampleRate).round().clamp(
+                200,
+                sampleRate * 3,
+              );
+          final int attackFrames =
+              ((synth.attackSec * sampleRate).round()).clamp(32, sampleRate * 2);
+          final int decayFrames =
+              ((synth.decaySec * sampleRate).round()).clamp(32, sampleRate * 2);
+
+          final synthNotes = track.arpSettings.enabled
+              ? track.arpSettings.expandNotes(clip.notes, resolvedBeatWidth)
+              : clip.notes;
+          for (final note in synthNotes) {
+            if (note.start < clip.startOffset ||
+                note.start >= clip.startOffset + clip.length) {
+              continue;
+            }
+            final double absStartUnits =
+                clip.start + (note.start - clip.startOffset);
+            final int noteStartFrame =
+                (timelineToSec(absStartUnits) * sampleRate).round();
+            final double noteDurSec = max(
+              0.05,
+              timelineToSec(absStartUnits + note.length) -
+                  timelineToSec(absStartUnits),
+            );
+            final int holdFrames = (noteDurSec * sampleRate).round();
+            final int totalNoteFrames = holdFrames + releaseFrames;
+            final double semitoneOffset =
+                (note.pitch - track.presetBasePitch) +
+                (synth.octave * 12.0) +
+                (synth.detuneCents / 100.0);
+            final double speed = pow(
+              2.0,
+              semitoneOffset / 12.0,
+            ).toDouble().clamp(0.05, 16.0);
+            final double ratio = (wav.sampleRate / sampleRate) * speed;
+            final double velGain =
+                (note.velocity.clamp(1, 127) / 127.0) *
+                track.presetVolumeMultiplier;
+
+            double srcCursor = 0.0;
+            final int loopSpan = max(1, wav.frameCount - 1 - loopFrame);
+            for (int i = 0; i < totalNoteFrames; i++) {
+              final int dst = noteStartFrame + i;
+              if (dst < 0 || dst >= totalFrames) {
+                srcCursor += ratio;
                 continue;
               }
-              final double absStartUnits =
-                  clip.start + (note.start - clip.startOffset);
-              final int noteStartFrame =
-                  (timelineToSec(absStartUnits) * sampleRate).round();
-              final double noteDurSec = max(
-                0.05,
-                timelineToSec(absStartUnits + note.length) -
-                    timelineToSec(absStartUnits),
-              );
-              final int holdFrames = (noteDurSec * sampleRate).round();
-              final int totalNoteFrames = holdFrames + releaseFrames;
-              final double semitoneOffset =
-                  (note.pitch - preset.basePitch) +
-                  (synth.octave * 12.0) +
-                  (synth.detuneCents / 100.0);
-              final double speed = pow(
-                2.0,
-                semitoneOffset / 12.0,
-              ).toDouble().clamp(0.05, 16.0);
-              final double ratio = (wav.sampleRate / sampleRate) * speed;
-              final double velGain =
-                  (note.velocity.clamp(1, 127) / 127.0) *
-                  preset.volumeMultiplier;
-
-              double srcCursor = 0.0;
-              final int loopSpan = max(1, wav.frameCount - 1 - loopFrame);
-              for (int i = 0; i < totalNoteFrames; i++) {
-                final int dst = noteStartFrame + i;
-                if (dst < 0 || dst >= totalFrames) {
-                  srcCursor += ratio;
-                  continue;
-                }
-                double pos = srcCursor;
-                if (pos >= wav.frameCount - 1 && loopSpan > 8) {
-                  pos = loopFrame + ((pos - loopFrame) % loopSpan);
-                }
-                final int s0 = pos.floor().clamp(0, wav.frameCount - 1);
-                final int s1 = (s0 + 1).clamp(0, wav.frameCount - 1);
-                final double frac = pos - s0;
-
-                double env = velGain;
-                if (i < attackFrames) {
-                  env *= i / attackFrames;
-                } else if (i < holdFrames) {
-                  final dProgress = ((i - attackFrames) / decayFrames).clamp(0.0, 1.0);
-                  env *= (1.0 - (1.0 - synth.sustain.clamp(0.0, 1.0)) * dProgress);
-                } else {
-                  env *= synth.sustain.clamp(0.05, 1.0) *
-                      (1.0 - (i - holdFrames) / releaseFrames).clamp(0.0, 1.0);
-                }
-                trackL[dst] +=
-                    (wav.left[s0] * (1.0 - frac) + wav.left[s1] * frac) * env;
-                trackR[dst] +=
-                    (wav.right[s0] * (1.0 - frac) + wav.right[s1] * frac) * env;
-                srcCursor += ratio;
+              double pos = srcCursor;
+              if (pos >= wav.frameCount - 1 && loopSpan > 8) {
+                pos = loopFrame + ((pos - loopFrame) % loopSpan);
               }
-              trackHasAudio = true;
-              anyAudioRendered = true;
+              final int s0 = pos.floor().clamp(0, wav.frameCount - 1);
+              final int s1 = (s0 + 1).clamp(0, wav.frameCount - 1);
+              final double frac = pos - s0;
+
+              double env = velGain;
+              if (i < attackFrames) {
+                env *= i / attackFrames;
+              } else if (i < holdFrames) {
+                final dProgress = ((i - attackFrames) / decayFrames).clamp(0.0, 1.0);
+                env *= (1.0 - (1.0 - synth.sustain.clamp(0.0, 1.0)) * dProgress);
+              } else {
+                env *= synth.sustain.clamp(0.05, 1.0) *
+                    (1.0 - (i - holdFrames) / releaseFrames).clamp(0.0, 1.0);
+              }
+              trackL[dst] +=
+                  (wav.left[s0] * (1.0 - frac) + wav.left[s1] * frac) * env;
+              trackR[dst] +=
+                  (wav.right[s0] * (1.0 - frac) + wav.right[s1] * frac) * env;
+              srcCursor += ratio;
             }
+            trackHasAudio = true;
+            anyAudioRendered = true;
           }
         }
       }
@@ -471,7 +839,7 @@ class MixdownRenderer {
           _applySynthLowpass(
             trackL,
             trackR,
-            track: track,
+            automation: track.automation,
             cutoffNorm: track.synthSettings.filterCutoff,
             resonance: track.synthSettings.filterResonance,
             frameToTimeline: (frame) => secToTimeline(frame / sampleRate),
@@ -490,7 +858,11 @@ class MixdownRenderer {
       trackDryR.putIfAbsent(grp.id, () => Float64List(totalFrames));
     }
 
-    void routeProcessedTrack(Track track, Float64List targetL, Float64List targetR) {
+    void routeProcessedTrack(
+      _RenderTrack track,
+      Float64List targetL,
+      Float64List targetR,
+    ) {
       final trackL = trackDryL[track.id];
       final trackR = trackDryR[track.id];
       if (trackL == null || trackR == null) return;
@@ -520,7 +892,7 @@ class MixdownRenderer {
         track.effectsChain,
         procL,
         procR,
-        track: track,
+        automation: track.automation,
         frameToTimeline: (frame) => secToTimeline(frame / sampleRate),
         sidechainBuffers: trackDryL,
         sidechainBuffersR: trackDryR,
@@ -576,10 +948,10 @@ class MixdownRenderer {
     // Pass 2a: Route non-group child tracks into their parent group buffer or Master
     for (final track in activeTracks) {
       if (track.type == TrackType.group) continue;
-      final group = (onlyTrack == null && track.groupTrackId != null)
+      final group = (!req.isSingleTrack && track.groupTrackId != null)
           ? groupTracksMap[track.groupTrackId]
           : null;
-      if (group != null && activeTracks.contains(group)) {
+      if (group != null) {
         routeProcessedTrack(track, trackDryL[group.id]!, trackDryR[group.id]!);
       } else {
         routeProcessedTrack(track, masterL, masterR);
@@ -591,14 +963,14 @@ class MixdownRenderer {
       routeProcessedTrack(grp, masterL, masterR);
     }
 
-    final bool anyAuxSolo = auxReverbSolo || auxDelaySolo;
+    final bool anyAuxSolo = req.auxReverbSolo || req.auxDelaySolo;
     if (anyAuxSolo) {
       masterL.fillRange(0, totalFrames, 0.0);
       masterR.fillRange(0, totalFrames, 0.0);
     }
 
     // Process aux return buses (100% wet-only matching SoLoud auxReverbBus & auxDelayBus)
-    if ((!anyAuxSolo || auxReverbSolo) && auxRevL.any((v) => v.abs() > 1e-6)) {
+    if ((!anyAuxSolo || req.auxReverbSolo) && auxRevL.any((v) => v.abs() > 1e-6)) {
       FreeverbProcessor(sampleRate: sampleRate).processRange(
         left: auxRevL,
         right: auxRevR,
@@ -606,7 +978,7 @@ class MixdownRenderer {
         end: totalFrames,
         roomSize: 0.78,
         damp: 0.32,
-        mix: auxReverbMix.clamp(0.0, 1.5),
+        mix: req.auxReverbMix.clamp(0.0, 1.5),
         wetOnly: true,
       );
       for (int i = 0; i < totalFrames; i++) {
@@ -614,7 +986,7 @@ class MixdownRenderer {
         masterR[i] += auxRevR[i];
       }
     }
-    if ((!anyAuxSolo || auxDelaySolo) && auxDlyL.any((v) => v.abs() > 1e-6)) {
+    if ((!anyAuxSolo || req.auxDelaySolo) && auxDlyL.any((v) => v.abs() > 1e-6)) {
       EchoProcessor(sampleRate: sampleRate).processRange(
         left: auxDlyL,
         right: auxDlyR,
@@ -624,7 +996,7 @@ class MixdownRenderer {
         delaySec: 0.34,
         decay: 0.45,
         filterDamp: 0.40,
-        mix: auxDelayMix.clamp(0.0, 1.5),
+        mix: req.auxDelayMix.clamp(0.0, 1.5),
         wetOnly: true,
       );
       for (int i = 0; i < totalFrames; i++) {
@@ -633,20 +1005,20 @@ class MixdownRenderer {
       }
     }
 
-    if (masterEffectsChain.isNotEmpty) {
-      _applyEffectsToBuffer(masterEffectsChain, masterL, masterR);
+    if (req.masterEffectsChain.isNotEmpty) {
+      _applyEffectsToBuffer(req.masterEffectsChain, masterL, masterR);
     }
 
     // Write final WAV with master volume & soft limiter
-    final writer = WavWriter(outWavPath, sampleRate: sampleRate, channels: 2);
+    final writer = WavWriter(req.outWavPath, sampleRate: sampleRate, channels: 2);
     const int chunkSize = 4096;
     final byteBuf = ByteData(chunkSize * 4);
     for (int base = 0; base < totalFrames; base += chunkSize) {
       final int n = min(chunkSize, totalFrames - base);
       for (int i = 0; i < n; i++) {
-        double l = masterL[base + i] * masterVolume;
-        double r = masterR[base + i] * masterVolume;
-        if (masterLimiter) {
+        double l = masterL[base + i] * req.masterVolume;
+        double r = masterR[base + i] * req.masterVolume;
+        if (req.masterLimiter) {
           l = _softClip(l);
           r = _softClip(r);
         }
@@ -685,16 +1057,16 @@ class MixdownRenderer {
   }
 
   static bool _hasAnyParamAuto(
-    Track? track,
+    Map<String, List<AutomationPoint>>? automation,
     DawEffect? fx,
     List<String> paramKeys,
   ) {
-    if (track == null || fx == null) return false;
+    if (automation == null || fx == null) return false;
     for (final k in paramKeys) {
-      if (track.automation['${fx.name}_$k']?.isNotEmpty ?? false) return true;
+      if (automation['${fx.name}_$k']?.isNotEmpty ?? false) return true;
     }
     for (final k in fx.parameters.keys) {
-      if (track.automation['${fx.name}_$k']?.isNotEmpty ?? false) return true;
+      if (automation['${fx.name}_$k']?.isNotEmpty ?? false) return true;
     }
     return false;
   }
@@ -702,24 +1074,30 @@ class MixdownRenderer {
   static void _applySynthLowpass(
     Float64List left,
     Float64List right, {
-    Track? track,
+    Map<String, List<AutomationPoint>>? automation,
     required double cutoffNorm,
     required double resonance,
     double Function(int frame)? frameToTimeline,
   }) {
-    final bool hasAuto = track != null &&
+    final bool hasAuto = automation != null &&
         frameToTimeline != null &&
-        ((track.automation['Synth Cutoff']?.isNotEmpty ?? false) ||
-            (track.automation['Synth Reso']?.isNotEmpty ?? false));
+        ((automation['Synth Cutoff']?.isNotEmpty ?? false) ||
+            (automation['Synth Reso']?.isNotEmpty ?? false));
     final state = StereoBiquadState();
     _forEachControlBlock(left.length, hasAuto, (start, end, midFrame) {
       double c = cutoffNorm;
       double r = resonance;
       if (hasAuto) {
         final double posUnits = frameToTimeline(midFrame);
-        final double ac = track.getInterpolatedAutomation('Synth Cutoff', posUnits);
+        final double ac = interpolateAutomationPoints(
+          automation['Synth Cutoff'],
+          posUnits,
+        );
         if (ac >= 0.0) c = ac;
-        final double ar = track.getInterpolatedAutomation('Synth Reso', posUnits);
+        final double ar = interpolateAutomationPoints(
+          automation['Synth Reso'],
+          posUnits,
+        );
         if (ar >= 0.0) r = ar;
       }
       final double hz = (120.0 * pow(140.0, c.clamp(0.0, 1.0))).clamp(
@@ -740,7 +1118,7 @@ class MixdownRenderer {
     List<DawEffect> chain,
     Float64List left,
     Float64List right, {
-    Track? track,
+    Map<String, List<AutomationPoint>>? automation,
     double Function(int frame)? frameToTimeline,
     Map<String, Float64List> sidechainBuffers = const {},
     Map<String, Float64List> sidechainBuffersR = const {},
@@ -760,7 +1138,7 @@ class MixdownRenderer {
     bool processedOdAmp = false;
 
     double? timelineAt(int midFrame) =>
-        (track != null && frameToTimeline != null)
+        (automation != null && frameToTimeline != null)
             ? frameToTimeline(midFrame)
             : null;
 
@@ -777,7 +1155,7 @@ class MixdownRenderer {
       }
 
       if (fx.name == 'EQ') {
-        final bool hasAuto = _hasAnyParamAuto(track, fx, const [
+        final bool hasAuto = _hasAnyParamAuto(automation, fx, const [
           'lowFreq',
           'lowGain',
           'lowMidFreq',
@@ -800,20 +1178,22 @@ class MixdownRenderer {
             start: start,
             end: end,
             sampleRate: sampleRate,
-            params: resolveEffectParamMap(
-              track,
+            params: resolveEffectParamMapFromAutomation(
+              automation,
               fx,
               hasAuto ? timelineAt(midFrame) : null,
             ),
           );
         });
       } else if (fx.name == 'BassBoost') {
-        final bool hasAuto = _hasAnyParamAuto(track, fx, const ['Mix', 'Boost']);
+        final bool hasAuto = _hasAnyParamAuto(automation, fx, const ['Mix', 'Boost']);
         final shelfState = StereoBiquadState();
         _forEachControlBlock(left.length, hasAuto, (start, end, midFrame) {
           final double? pos = hasAuto ? timelineAt(midFrame) : null;
-          final double mix = resolveEffectParam(track, fx, 'Mix', 1.0, pos);
-          final double boost = resolveEffectParam(track, fx, 'Boost', 0.5, pos);
+          final double mix =
+              resolveEffectParamFromAutomation(automation, fx, 'Mix', 1.0, pos);
+          final double boost =
+              resolveEffectParamFromAutomation(automation, fx, 'Boost', 0.5, pos);
           final coeffs = BiquadCoeffs.design(
             kind: EqBandKind.lowShelf,
             sampleRate: sampleRate.toDouble(),
@@ -829,8 +1209,8 @@ class MixdownRenderer {
         if (processedOdAmp) continue;
         processedOdAmp = true;
         final bool hasAuto =
-            _hasAnyParamAuto(track, odFx, const ['Drive', 'Tone', 'Level']) ||
-            _hasAnyParamAuto(track, ampFx, const ['Drive', 'Tone', 'Level']);
+            _hasAnyParamAuto(automation, odFx, const ['Drive', 'Tone', 'Level']) ||
+            _hasAnyParamAuto(automation, ampFx, const ['Drive', 'Tone', 'Level']);
         final odAmpProc = OverdriveAndAmpProcessor();
         _forEachControlBlock(left.length, hasAuto, (start, end, midFrame) {
           final double? pos = hasAuto ? timelineAt(midFrame) : null;
@@ -843,16 +1223,16 @@ class MixdownRenderer {
             odParams: odFx == null
                 ? null
                 : {
-                    'Drive': resolveEffectParam(track, odFx, 'Drive', 0.5, pos),
-                    'Tone': resolveEffectParam(track, odFx, 'Tone', 0.5, pos),
-                    'Level': resolveEffectParam(track, odFx, 'Level', 0.5, pos),
+                    'Drive': resolveEffectParamFromAutomation(automation, odFx, 'Drive', 0.5, pos),
+                    'Tone': resolveEffectParamFromAutomation(automation, odFx, 'Tone', 0.5, pos),
+                    'Level': resolveEffectParamFromAutomation(automation, odFx, 'Level', 0.5, pos),
                   },
             ampParams: ampFx == null
                 ? null
                 : {
-                    'Drive': resolveEffectParam(track, ampFx, 'Drive', 0.7, pos),
-                    'Tone': resolveEffectParam(track, ampFx, 'Tone', 0.6, pos),
-                    'Level': resolveEffectParam(track, ampFx, 'Level', 0.5, pos),
+                    'Drive': resolveEffectParamFromAutomation(automation, ampFx, 'Drive', 0.7, pos),
+                    'Tone': resolveEffectParamFromAutomation(automation, ampFx, 'Tone', 0.6, pos),
+                    'Level': resolveEffectParamFromAutomation(automation, ampFx, 'Level', 0.5, pos),
                   },
             hasDedicatedEq: hasDedicatedEq,
             hasDedicatedComp: hasDedicatedComp,
@@ -866,15 +1246,18 @@ class MixdownRenderer {
             ? sidechainBuffersR[fx.sidechainTrackId!]
             : null;
         final bool hasAuto =
-            _hasAnyParamAuto(track, fx, const ['Mix', 'Thresh', 'Ratio', 'Gain']);
+            _hasAnyParamAuto(automation, fx, const ['Mix', 'Thresh', 'Ratio', 'Gain']);
         final compProc = CompressorProcessor();
         _forEachControlBlock(left.length, hasAuto, (start, end, midFrame) {
           final double? pos = hasAuto ? timelineAt(midFrame) : null;
-          final double mix = resolveEffectParam(track, fx, 'Mix', 1.0, pos);
+          final double mix =
+              resolveEffectParamFromAutomation(automation, fx, 'Mix', 1.0, pos);
           final double thresh =
-              resolveEffectParam(track, fx, 'Thresh', 0.5, pos);
-          final double ratio = resolveEffectParam(track, fx, 'Ratio', 0.5, pos);
-          final double gain = resolveEffectParam(track, fx, 'Gain', 0.5, pos);
+              resolveEffectParamFromAutomation(automation, fx, 'Thresh', 0.5, pos);
+          final double ratio =
+              resolveEffectParamFromAutomation(automation, fx, 'Ratio', 0.5, pos);
+          final double gain =
+              resolveEffectParamFromAutomation(automation, fx, 'Gain', 0.5, pos);
           compProc.processRange(
             left: left,
             right: right,
@@ -893,13 +1276,16 @@ class MixdownRenderer {
         });
       } else if (fx.name == 'Chorus') {
         final bool hasAuto =
-            _hasAnyParamAuto(track, fx, const ['Mix', 'Depth', 'Rate']);
+            _hasAnyParamAuto(automation, fx, const ['Mix', 'Depth', 'Rate']);
         final modProc = ModulatedDelayProcessor(sampleRate: sampleRate);
         _forEachControlBlock(left.length, hasAuto, (start, end, midFrame) {
           final double? pos = hasAuto ? timelineAt(midFrame) : null;
-          final double mix = resolveEffectParam(track, fx, 'Mix', 0.5, pos);
-          final double depth = resolveEffectParam(track, fx, 'Depth', 0.6, pos);
-          final double rate = resolveEffectParam(track, fx, 'Rate', 0.4, pos);
+          final double mix =
+              resolveEffectParamFromAutomation(automation, fx, 'Mix', 0.5, pos);
+          final double depth =
+              resolveEffectParamFromAutomation(automation, fx, 'Depth', 0.6, pos);
+          final double rate =
+              resolveEffectParamFromAutomation(automation, fx, 'Rate', 0.4, pos);
           modProc.processRange(
             left: left,
             right: right,
@@ -917,13 +1303,16 @@ class MixdownRenderer {
         });
       } else if (fx.name == 'Flanger') {
         final bool hasAuto =
-            _hasAnyParamAuto(track, fx, const ['Mix', 'Delay', 'Rate']);
+            _hasAnyParamAuto(automation, fx, const ['Mix', 'Delay', 'Rate']);
         final modProc = ModulatedDelayProcessor(sampleRate: sampleRate);
         _forEachControlBlock(left.length, hasAuto, (start, end, midFrame) {
           final double? pos = hasAuto ? timelineAt(midFrame) : null;
-          final double mix = resolveEffectParam(track, fx, 'Mix', 0.5, pos);
-          final double delay = resolveEffectParam(track, fx, 'Delay', 0.5, pos);
-          final double rate = resolveEffectParam(track, fx, 'Rate', 0.2, pos);
+          final double mix =
+              resolveEffectParamFromAutomation(automation, fx, 'Mix', 0.5, pos);
+          final double delay =
+              resolveEffectParamFromAutomation(automation, fx, 'Delay', 0.5, pos);
+          final double rate =
+              resolveEffectParamFromAutomation(automation, fx, 'Rate', 0.2, pos);
           final double baseDelay = (0.001 + delay * 0.009).clamp(0.001, 0.02);
           modProc.processRange(
             left: left,
@@ -941,12 +1330,14 @@ class MixdownRenderer {
           );
         });
       } else if (fx.name == 'Robotize') {
-        final bool hasAuto = _hasAnyParamAuto(track, fx, const ['Mix', 'Freq']);
+        final bool hasAuto = _hasAnyParamAuto(automation, fx, const ['Mix', 'Freq']);
         final roboProc = RobotizeProcessor();
         _forEachControlBlock(left.length, hasAuto, (start, end, midFrame) {
           final double? pos = hasAuto ? timelineAt(midFrame) : null;
-          final double mix = resolveEffectParam(track, fx, 'Mix', 1.0, pos);
-          final double freq = resolveEffectParam(track, fx, 'Freq', 0.3, pos);
+          final double mix =
+              resolveEffectParamFromAutomation(automation, fx, 'Mix', 1.0, pos);
+          final double freq =
+              resolveEffectParamFromAutomation(automation, fx, 'Freq', 0.3, pos);
           roboProc.processRange(
             left: left,
             right: right,
@@ -959,13 +1350,16 @@ class MixdownRenderer {
         });
       } else if (fx.name == 'Lofi') {
         final bool hasAuto =
-            _hasAnyParamAuto(track, fx, const ['Mix', 'Rate', 'Bits']);
+            _hasAnyParamAuto(automation, fx, const ['Mix', 'Rate', 'Bits']);
         final lofiProc = LofiProcessor();
         _forEachControlBlock(left.length, hasAuto, (start, end, midFrame) {
           final double? pos = hasAuto ? timelineAt(midFrame) : null;
-          final double mix = resolveEffectParam(track, fx, 'Mix', 1.0, pos);
-          final double rate = resolveEffectParam(track, fx, 'Rate', 0.2, pos);
-          final double bits = resolveEffectParam(track, fx, 'Bits', 0.3, pos);
+          final double mix =
+              resolveEffectParamFromAutomation(automation, fx, 'Mix', 1.0, pos);
+          final double rate =
+              resolveEffectParamFromAutomation(automation, fx, 'Rate', 0.2, pos);
+          final double bits =
+              resolveEffectParamFromAutomation(automation, fx, 'Bits', 0.3, pos);
           lofiProc.processRange(
             left: left,
             right: right,
@@ -979,13 +1373,16 @@ class MixdownRenderer {
         });
       } else if (fx.name == 'Echo') {
         final bool hasAuto =
-            _hasAnyParamAuto(track, fx, const ['Mix', 'Delay', 'Decay']);
+            _hasAnyParamAuto(automation, fx, const ['Mix', 'Delay', 'Decay']);
         final echoProc = EchoProcessor(sampleRate: sampleRate);
         _forEachControlBlock(left.length, hasAuto, (start, end, midFrame) {
           final double? pos = hasAuto ? timelineAt(midFrame) : null;
-          final double mix = resolveEffectParam(track, fx, 'Mix', 0.5, pos);
-          final double delay = resolveEffectParam(track, fx, 'Delay', 0.3, pos);
-          final double decay = resolveEffectParam(track, fx, 'Decay', 0.5, pos);
+          final double mix =
+              resolveEffectParamFromAutomation(automation, fx, 'Mix', 0.5, pos);
+          final double delay =
+              resolveEffectParamFromAutomation(automation, fx, 'Delay', 0.3, pos);
+          final double decay =
+              resolveEffectParamFromAutomation(automation, fx, 'Decay', 0.5, pos);
           echoProc.processRange(
             left: left,
             right: right,
@@ -1000,13 +1397,16 @@ class MixdownRenderer {
         });
       } else if (fx.name == 'Reverb') {
         final bool hasAuto =
-            _hasAnyParamAuto(track, fx, const ['Mix', 'Size', 'Decay']);
+            _hasAnyParamAuto(automation, fx, const ['Mix', 'Size', 'Decay']);
         final revProc = FreeverbProcessor(sampleRate: sampleRate);
         _forEachControlBlock(left.length, hasAuto, (start, end, midFrame) {
           final double? pos = hasAuto ? timelineAt(midFrame) : null;
-          final double mix = resolveEffectParam(track, fx, 'Mix', 0.5, pos);
-          final double size = resolveEffectParam(track, fx, 'Size', 0.5, pos);
-          final double decay = resolveEffectParam(track, fx, 'Decay', 0.5, pos);
+          final double mix =
+              resolveEffectParamFromAutomation(automation, fx, 'Mix', 0.5, pos);
+          final double size =
+              resolveEffectParamFromAutomation(automation, fx, 'Size', 0.5, pos);
+          final double decay =
+              resolveEffectParamFromAutomation(automation, fx, 'Decay', 0.5, pos);
           revProc.processRange(
             left: left,
             right: right,

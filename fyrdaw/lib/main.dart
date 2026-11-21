@@ -11,11 +11,12 @@ import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:flutter_midi_command/flutter_midi_command.dart';
-import 'package:archive/archive_io.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:fyrdaw/wav_writer.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:fyrdaw/services/project_archive_service.dart';
+import 'package:fyrdaw/services/undo_history.dart';
 import 'package:fyrdaw/models/enums.dart';
 import 'package:fyrdaw/models/daw_clip.dart';
 import 'package:fyrdaw/models/daw_effect.dart';
@@ -58,6 +59,16 @@ import 'package:fyrdaw/utils/time_stretch.dart';
 import 'fyr_theme.dart';
 
 part 'ui/daw_main_screen.dart';
+part 'ui/daw/daw_project_controller.dart';
+part 'ui/daw/daw_midi_controller.dart';
+part 'ui/daw/daw_audio_engine_controller.dart';
+part 'ui/daw/daw_playback_controller.dart';
+part 'ui/daw/daw_recording_controller.dart';
+part 'ui/daw/daw_editing_controller.dart';
+part 'ui/daw/daw_top_bar.dart';
+part 'ui/daw/daw_track_headers.dart';
+part 'ui/daw/daw_timeline_view.dart';
+part 'ui/daw/daw_bottom_panel.dart';
 
 AudioSource? globalSynthSound;
 AudioSource? globalSawSound;
@@ -345,6 +356,10 @@ class DawApp extends StatefulWidget {
 }
 
 class _DawAppState extends State<DawApp> {
+  void rebuild() {
+    if (mounted) setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
