@@ -6,6 +6,8 @@ import 'package:b_encode_decode/b_encode_decode.dart';
 import 'package:dtorrent_common/dtorrent_common.dart';
 import 'package:bittorrent_dht/src/kademlia/id.dart';
 import 'package:bittorrent_dht/src/kademlia/node.dart';
+import 'package:bittorrent_dht/src/kademlia/node_events.dart';
+import 'package:bittorrent_dht/src/krpc/krpc.dart';
 import 'package:bittorrent_dht/src/krpc/krpc_message.dart';
 import 'package:bittorrent_dht/src/kademlia/bucket.dart';
 import 'package:bittorrent_dht/src/kademlia/tree_node.dart';
@@ -384,6 +386,50 @@ void main() {
         var p = CompactAddress.parseIPv4Address(ps);
         assert(peers[i].addressString == p?.addressString);
         assert(peers[i].port == p?.port);
+      }
+    });
+
+    test('Node.add does not leak duplicate bucket listeners on node removal', () async {
+      final rootId = ID.createID(List<int>.filled(20, 0));
+      final root = Node(rootId, null, 900, 8);
+      var removedCount = 0;
+      final listener = root.createListener();
+      listener.on<NodeRemoved>((_) => removedCount++);
+
+      // Create 25 nodes that all hash into bucket 159 (MSB differs from 0x00)
+      final added = <Node>[];
+      for (var i = 0; i < 25; i++) {
+        final bytes = List<int>.filled(20, 0);
+        bytes[0] = 0x80;
+        bytes[19] = i + 1;
+        final n = Node(ID.createID(bytes), null);
+        if (root.add(n)) {
+          added.add(n);
+        }
+      }
+      expect(added.length, 8);
+
+      // Removing a single node must emit NodeRemoved exactly once, not 25 times
+      root.remove(added.first);
+      await Future<void>.delayed(Duration.zero);
+      expect(removedCount, 1);
+
+      listener.dispose();
+      root.dispose();
+    });
+
+    test('KRPC drops excess queued queries instead of spinning on 65536 transactions', () async {
+      final krpc = KRPC.newService(ID.randomID(20), timeout: 15, maxQuery: 16);
+      await krpc.start(0);
+      try {
+        final target = ID.randomID(20).toString();
+        final addr = InternetAddress.loopbackIPv4;
+        // Previously > 65535 queued queries permanently deadlocked in an infinite while loop.
+        for (var i = 0; i < 70000; i++) {
+          krpc.findNode(target, addr, 65432);
+        }
+      } finally {
+        await krpc.stop('test done');
       }
     });
   });

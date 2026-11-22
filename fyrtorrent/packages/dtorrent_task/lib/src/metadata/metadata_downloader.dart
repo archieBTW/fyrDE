@@ -86,6 +86,10 @@ class MetadataDownloader
   /// DHT instance for peer discovery
   final DHT _dht = DHT();
   DHT get dht => _dht;
+  EventsListener<DHTEvent>? _dhtListener;
+
+  static const int _maxActivePeers = 30;
+  static const int _maxPendingPeers = 60;
 
   /// Whether the downloader is currently running
   bool _running = false;
@@ -118,7 +122,8 @@ class MetadataDownloader
   }
   Future<void> _init() async {
     try {
-      localExternalIP = InternetAddress.tryParse(await Ipify.ipv4());
+      localExternalIP = InternetAddress.tryParse(
+          await Ipify.ipv4().timeout(const Duration(seconds: 5)));
       _log.info('External IP detected: $localExternalIP');
     } catch (e) {
       _log.warning('Failed to detect external IP', e);
@@ -129,18 +134,22 @@ class MetadataDownloader
     if (_running) return;
     _running = true;
 
-    var dhtListener = _dht.createListener();
-    dhtListener.on<NewPeerEvent>(_processDHTPeer);
+    _dhtListener?.dispose();
+    _dhtListener = _dht.createListener();
+    _dhtListener!.on<NewPeerEvent>(_processDHTPeer);
     var infoHashRaw = String.fromCharCodes(_infoHashBuffer);
     var port = await _dht.bootstrap();
+    if (!_running) return;
     if (port != null) {
       _dht.announce(infoHashRaw, port);
       _dht.requestPeers(infoHashRaw);
     }
     _dhtRetryTimer?.cancel();
-    _dhtRetryTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+    _dhtRetryTimer = Timer.periodic(const Duration(seconds: 15), (_) {
       if (!_running) return;
-      _dht.requestPeers(infoHashRaw);
+      if (_activePeers.length < _maxActivePeers) {
+        _dht.requestPeers(infoHashRaw);
+      }
       if (_metaDataPieces.isNotEmpty && _availablePeers.isNotEmpty) {
         _requestMetaData();
       }
@@ -151,9 +160,11 @@ class MetadataDownloader
     _running = false;
     _dhtRetryTimer?.cancel();
     _dhtRetryTimer = null;
+    _dhtListener?.dispose();
+    _dhtListener = null;
     await _dht.stop();
     var fs = <Future>[];
-    for (var peer in _activePeers) {
+    for (var peer in [..._activePeers]) {
       unHookPeer(peer);
       fs.add(peer.dispose());
     }
@@ -185,6 +196,10 @@ class MetadataDownloader
       [PeerType type = PeerType.TCP, dynamic socket]) {
     if (!_running) return;
     if (address.address == localExternalIP) return;
+    if (_activePeers.length >= _maxActivePeers ||
+        _peersAddress.length >= _maxPendingPeers) {
+      return;
+    }
     if (socket != null) {
       //  Indicates that it is an actively connecting peer, and currently, only
       //  one connection per IP address is allowed.
@@ -398,16 +413,21 @@ class MetadataDownloader
   }
 
   void _requestMetaData([Peer? peer]) {
+    if (!_running) return;
     if (_metaDataPieces.isNotEmpty) {
       peer ??= _randomAvailablePeer();
-      if (peer == null) return;
+      if (peer == null || peer.isDisposed) return;
+      final peerId = peer.remotePeerId;
+      if (peerId == null) return;
       var piece = _metaDataPieces.removeFirst();
       var msg = createRequestMessage(piece);
+      _requestTimeout[peerId]?.cancel();
       var timer = Timer(Duration(seconds: 10), () {
+        if (!_running) return;
         _metaDataPieces.add(piece);
         _requestMetaData();
       });
-      _requestTimeout[peer.remotePeerId!] = timer;
+      _requestTimeout[peerId] = timer;
       peer.sendExtendMessage('ut_metadata', msg);
     }
   }

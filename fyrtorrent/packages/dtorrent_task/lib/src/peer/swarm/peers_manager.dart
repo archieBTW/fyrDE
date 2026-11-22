@@ -13,7 +13,13 @@ import '../protocol/peer.dart';
 import '../extensions/pex.dart';
 import '../extensions/holepunch.dart';
 
-const MAX_ACTIVE_PEERS = 120;
+const MAX_ACTIVE_PEERS = 50;
+
+const MAX_CONNECTING_PEERS = 80;
+
+const MAX_UTP_PEERS = 15;
+
+const MAX_RECONNECT_ATTEMPTS = 2;
 
 const MAX_WRITE_BUFFER_SIZE = 10 * 1024 * 1024;
 
@@ -41,6 +47,12 @@ class PeersManager with Holepunch, PEX, EventsEmittable<PeerEvent> {
   final Set<CompactAddress> _peersAddress = {};
 
   final Set<InternetAddress> _incomingAddress = {};
+
+  final Map<CompactAddress, int> _reconnectAttempts = {};
+
+  final Set<CompactAddress> _utpFallbackTried = {};
+
+  final Set<Timer> _reconnectTimers = {};
 
   InternetAddress? localExternalIP;
 
@@ -79,7 +91,8 @@ class PeersManager with Holepunch, PEX, EventsEmittable<PeerEvent> {
 
   Future<void> _init() async {
     try {
-      localExternalIP = InternetAddress.tryParse(await Ipify.ipv4());
+      localExternalIP = InternetAddress.tryParse(
+          await Ipify.ipv4().timeout(const Duration(seconds: 5)));
     } catch (e) {
       // Do nothing
     }
@@ -228,9 +241,18 @@ class PeersManager with Holepunch, PEX, EventsEmittable<PeerEvent> {
   /// this type peer was managed by [TorrentTask] , user don't need to know that.
   void addNewPeerAddress(CompactAddress? address, PeerSource source,
       {PeerType? type, dynamic socket}) {
-    if (address == null) return;
+    if (_disposed || address == null) return;
     if (IGNORE_IPS.contains(address.address)) return;
     if (address.address == localExternalIP) return;
+    if (source != PeerSource.manual) {
+      if (_activePeers.length >= MAX_ACTIVE_PEERS ||
+          _peersAddress.length >= MAX_CONNECTING_PEERS) {
+        return;
+      }
+      if (type == PeerType.UTP && utpPeerCount >= MAX_UTP_PEERS) {
+        return;
+      }
+    }
     if (socket != null) {
       // Indicates that it is an actively connected peer, and currently, only one IP address is allowed to connect at a time.
       if (!_incomingAddress.add(address.address)) {
@@ -239,9 +261,6 @@ class PeersManager with Holepunch, PEX, EventsEmittable<PeerEvent> {
         return;
       }
     }
-    // TODO: should we allow reconnects?
-    // _activePeers.removeWhere((p) => p.address == address);
-    // _peersAddress.remove(address);
     if (_peersAddress.add(address)) {
       Peer? peer;
       if (type == null || type == PeerType.TCP) {
@@ -302,44 +321,54 @@ class PeersManager with Holepunch, PEX, EventsEmittable<PeerEvent> {
     _activePeers.remove(disposeEvent.peer);
 
     _pausedRemoteRequest.remove(disposeEvent.peer.id);
-    var tempIndex = [];
-    for (var i = 0; i < _pausedRequest.length; i++) {
-      var pr = _pausedRequest[i];
-      if (pr[0] == disposeEvent.peer) {
-        tempIndex.add(i);
+    for (var i = _pausedRequest.length - 1; i >= 0; i--) {
+      if (_pausedRequest[i][0] == disposeEvent.peer) {
+        _pausedRequest.removeAt(i);
       }
     }
-    for (var index in tempIndex) {
-      _pausedRequest.removeAt(index);
-    }
 
+    if (isDisposed) return;
+
+    final addr = disposeEvent.peer.address;
     if (disposeEvent.reason is TCPConnectException) {
       if (disposeEvent.peer.type == PeerType.TCP &&
           _activePeers.length < MAX_ACTIVE_PEERS &&
-          !isDisposed) {
-        addNewPeerAddress(
-          disposeEvent.peer.address,
+          utpPeerCount < MAX_UTP_PEERS &&
+          _utpFallbackTried.add(addr)) {
+        _scheduleReconnect(
+          addr,
           disposeEvent.peer.source,
-          type: PeerType.UTP,
+          PeerType.UTP,
+          const Duration(seconds: 2),
         );
       }
       return;
     }
 
-    if (reconnect) {
-      if (_activePeers.length < MAX_ACTIVE_PEERS && !isDisposed) {
-        addNewPeerAddress(
-          disposeEvent.peer.address,
+    if (reconnect && _activePeers.length < MAX_ACTIVE_PEERS) {
+      final attempts = (_reconnectAttempts[addr] ?? 0) + 1;
+      if (attempts <= MAX_RECONNECT_ATTEMPTS) {
+        _reconnectAttempts[addr] = attempts;
+        _scheduleReconnect(
+          addr,
           disposeEvent.peer.source,
-          type: disposeEvent.peer.type,
+          disposeEvent.peer.type,
+          Duration(seconds: 5 * attempts),
         );
       }
-    } else {
-      if (disposeEvent.peer.isSeeder && !isDisposed) {
-        addNewPeerAddress(disposeEvent.peer.address, disposeEvent.peer.source,
-            type: disposeEvent.peer.type);
-      }
     }
+  }
+
+  void _scheduleReconnect(CompactAddress address, PeerSource source,
+      PeerType type, Duration delay) {
+    if (isDisposed) return;
+    late Timer timer;
+    timer = Timer(delay, () {
+      _reconnectTimers.remove(timer);
+      if (isDisposed) return;
+      addNewPeerAddress(address, source, type: type);
+    });
+    _reconnectTimers.add(timer);
   }
 
   void _peerConnected(PeerConnected event) {
@@ -461,18 +490,32 @@ class PeersManager with Holepunch, PEX, EventsEmittable<PeerEvent> {
     _remoteRequest.clear();
     _pausedRequest.clear();
     _pausedRemoteRequest.clear();
+    _keepAliveTimer?.cancel();
+    _keepAliveTimer = null;
+    for (var timer in _reconnectTimers) {
+      timer.cancel();
+    }
+    _reconnectTimers.clear();
+    _reconnectAttempts.clear();
+    _utpFallbackTried.clear();
+    _peersAddress.clear();
+    _incomingAddress.clear();
     disposePeers(Set<Peer> peers) async {
-      if (peers.isNotEmpty) {
-        for (var i = 0; i < peers.length; i++) {
-          var peer = peers.elementAt(i);
-          _unHookPeer(peer);
-          await peer.dispose('Peer Manager disposed');
-        }
-      }
+      final snapshot = [...peers];
       peers.clear();
+      for (var peer in snapshot) {
+        _unHookPeer(peer);
+        await peer.dispose('Peer Manager disposed');
+      }
     }
 
     await disposePeers(_activePeers);
+    // Also dispose any connecting peers that never reached _activePeers
+    final remainingListeners = _peerListeners.keys.toList();
+    for (var peer in remainingListeners) {
+      _unHookPeer(peer);
+      await peer.dispose('Peer Manager disposed');
+    }
   }
 
   //TODO: test

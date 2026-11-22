@@ -39,7 +39,17 @@ class LSD with EventsEmittable<LSDEvent> {
     if (port == null) {
       throw Exception('lsd port is not set');
     }
-    _socket ??= await RawDatagramSocket.bind(InternetAddress.anyIPv4, LSD_PORT);
+    try {
+      _socket ??= await RawDatagramSocket.bind(
+        InternetAddress.anyIPv4,
+        LSD_PORT,
+        reuseAddress: true,
+        reusePort: Platform.isLinux || Platform.isMacOS,
+      );
+    } catch (e) {
+      _log.info('LSD could not bind UDP port $LSD_PORT (continuing without LSD): $e');
+      return;
+    }
     _socket?.listen((event) {
       if (event == RawSocketEvent.read) {
         var datagram = _socket?.receive();
@@ -94,14 +104,28 @@ class LSD with EventsEmittable<LSDEvent> {
     _timer = Timer(Duration(seconds: 5 * 60), () => _announce());
   }
 
-  Future<dynamic>? _sendMessage(String message, [Completer? completer]) {
-    if (_socket == null) return null;
+  Future<dynamic>? _sendMessage(String message,
+      [Completer? completer, int attempts = 0]) {
+    if (_closed || _socket == null) {
+      if (completer != null && !completer.isCompleted) {
+        completer.complete();
+      }
+      return completer?.future;
+    }
     completer ??= Completer();
-    var success = _socket?.send(message.codeUnits, LSD_HOST, LSD_PORT);
-    if (success != null && !(success > 0)) {
-      Timer.run(() => _sendMessage(message, completer));
-    } else {
-      completer.complete();
+    try {
+      var success = _socket?.send(message.codeUnits, LSD_HOST, LSD_PORT);
+      if (success != null && success <= 0 && attempts < 3) {
+        Timer(const Duration(milliseconds: 250),
+            () => _sendMessage(message, completer, attempts + 1));
+      } else if (!completer.isCompleted) {
+        completer.complete();
+      }
+    } catch (e) {
+      _log.fine('LSD multicast send failed: $e');
+      if (!completer.isCompleted) {
+        completer.complete();
+      }
     }
     return completer.future;
   }

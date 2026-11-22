@@ -142,8 +142,11 @@ abstract class Peer
   /// Remote data reception, listening to subscription.
   StreamSubscription<Uint8List>? _streamChunk;
 
+  /// Maximum allowed BitTorrent peer protocol message payload size (2 MiB).
+  static const int MAX_MESSAGE_LENGTH = 2 * 1024 * 1024;
+
   /// Buffer to obtain data from the channel.
-  List<int> _cacheBuffer = [];
+  Uint8List _cacheBuffer = Uint8List(0);
 
   /// The local sends a request buffer. The format is: [index, begin, length].
   final _requestBuffer = <List<int>>[];
@@ -296,7 +299,7 @@ abstract class Peer
     _handShaked = false;
 
     /// Clear the channel data cache.
-    _cacheBuffer.clear();
+    _cacheBuffer = Uint8List(0);
 
     /// Clear the request cache.
     _requestBuffer.clear();
@@ -372,12 +375,21 @@ abstract class Peer
   }
 
   void _processReceiveData(Uint8List data) {
+    if (_disposed) return;
     // Regardless of what message is received, as long as it is not empty, reset the countdown timer.
     if (data.isNotEmpty) _startToCountdown();
-    // if (data.isNotEmpty) log('Received data: $data');
 
-    // Accept data sent by the remote peer and buffer it in one place.
-    _cacheBuffer.addAll(data);
+    // Accept data sent by the remote peer and buffer it as compact Uint8List bytes.
+    if (data.isNotEmpty) {
+      if (_cacheBuffer.isEmpty) {
+        _cacheBuffer = data;
+      } else {
+        final combined = Uint8List(_cacheBuffer.length + data.length);
+        combined.setRange(0, _cacheBuffer.length, _cacheBuffer);
+        combined.setRange(_cacheBuffer.length, combined.length, data);
+        _cacheBuffer = combined;
+      }
+    }
 
     if (_cacheBuffer.isEmpty) return;
     // Check if it's a handshake header.
@@ -387,8 +399,13 @@ abstract class Peer
         if (_validateInfoHash(_cacheBuffer)) {
           var handshakeBuffer = Uint8List(HAND_SHAKE_MESSAGE_LENGTH);
           handshakeBuffer.setRange(0, HAND_SHAKE_MESSAGE_LENGTH, _cacheBuffer);
-          // clear the buffer to only the handshake
-          _cacheBuffer = _cacheBuffer.sublist(HAND_SHAKE_MESSAGE_LENGTH);
+          // clear the buffer to only the bytes after handshake
+          if (_cacheBuffer.length == HAND_SHAKE_MESSAGE_LENGTH) {
+            _cacheBuffer = Uint8List(0);
+          } else {
+            _cacheBuffer = Uint8List.sublistView(
+                _cacheBuffer, HAND_SHAKE_MESSAGE_LENGTH);
+          }
           Timer.run(() => _processHandShake(handshakeBuffer));
           if (_cacheBuffer.isNotEmpty) {
             Timer.run(() => _processReceiveData(Uint8List(0)));
@@ -396,19 +413,24 @@ abstract class Peer
           return;
         } else {
           // If infohash buffer is incorrect , dispose this peer
-          dispose('Infohash is incorrect');
+          dispose(BadException('Infohash is incorrect'));
           return;
         }
       }
     }
     if (_cacheBuffer.length >= MESSAGE_INTEGER) {
       var start = 0;
-      var lengthBuffer = Uint8List(MESSAGE_INTEGER);
-      lengthBuffer.setRange(0, MESSAGE_INTEGER, _cacheBuffer, start);
-      var length = ByteData.view(lengthBuffer.buffer).getInt32(0, Endian.big);
+      var length = ByteData.sublistView(
+              _cacheBuffer, start, start + MESSAGE_INTEGER)
+          .getUint32(0, Endian.big);
       List<Uint8List>? piecesMessage;
       List<Uint8List>? haveMessages;
       while (_cacheBuffer.length - start - MESSAGE_INTEGER >= length) {
+        if (length > MAX_MESSAGE_LENGTH) {
+          _cacheBuffer = Uint8List(0);
+          dispose(BadException('Peer message length exceeds limit: $length'));
+          return;
+        }
         if (length == 0) {
           // keep alive
           Timer.run(() => _processMessage(null, null));
@@ -419,13 +441,14 @@ abstract class Peer
 
           // the message type id is not needed anymore
           var messageBuffer = Uint8List(length - 1);
-
-          messageBuffer.setRange(
-            0,
-            messageBuffer.length,
-            _cacheBuffer,
-            start + MESSAGE_INTEGER + 1,
-          );
+          if (messageBuffer.isNotEmpty) {
+            messageBuffer.setRange(
+              0,
+              messageBuffer.length,
+              _cacheBuffer,
+              start + MESSAGE_INTEGER + 1,
+            );
+          }
 
           switch (id) {
             case ID_PIECE:
@@ -443,17 +466,27 @@ abstract class Peer
         // set to the start of the next message
         start += (MESSAGE_INTEGER + length);
         if (_cacheBuffer.length - start < MESSAGE_INTEGER) break;
-        lengthBuffer.setRange(0, MESSAGE_INTEGER, _cacheBuffer, start);
-        length = ByteData.view(lengthBuffer.buffer).getInt32(0, Endian.big);
+        length = ByteData.sublistView(
+                _cacheBuffer, start, start + MESSAGE_INTEGER)
+            .getUint32(0, Endian.big);
+      }
+      if (length > MAX_MESSAGE_LENGTH) {
+        _cacheBuffer = Uint8List(0);
+        dispose(BadException('Peer message length exceeds limit: $length'));
+        return;
       }
       if (piecesMessage != null && piecesMessage.isNotEmpty) {
-        // we shoud validate that the subpiece length is valid/same as what we requested
+        // we should validate that the subpiece length is valid/same as what we requested
         Timer.run(() => _processReceivePieces(piecesMessage!));
       }
       if (haveMessages != null && haveMessages.isNotEmpty) {
         Timer.run(() => _processHave(haveMessages!));
       }
-      if (start != 0) _cacheBuffer = _cacheBuffer.sublist(start);
+      if (start == _cacheBuffer.length) {
+        _cacheBuffer = Uint8List(0);
+      } else if (start != 0) {
+        _cacheBuffer = Uint8List.sublistView(_cacheBuffer, start);
+      }
     }
   }
 
@@ -473,6 +506,7 @@ abstract class Peer
   }
 
   void _processMessage(int? id, Uint8List? message) {
+    if (_disposed) return;
     if (id == null) {
       _log.fine('process keep alive $address');
       events.emit(PeerKeepAlive(this));
@@ -544,10 +578,14 @@ abstract class Peer
           if (message != null) _processAllowFast(message);
           return;
         case ID_EXTENDED:
-          if (message != null) {
-            var extensionId = message[0];
-            message = message.sublist(1);
-            processExtendMessage(extensionId, message);
+          if (message != null && message.isNotEmpty) {
+            try {
+              var extensionId = message[0];
+              message = message.sublist(1);
+              processExtendMessage(extensionId, message);
+            } catch (e) {
+              _log.fine('Malformed extended message from $address: $e');
+            }
           }
           return;
       }
@@ -752,8 +790,11 @@ abstract class Peer
   ///
   /// Unlike other message types, PIECE messages are processed in batches.
   void _processReceivePieces(List<Uint8List> messages) {
+    if (_disposed) return;
     var requests = <List<int>>[];
     for (var message in messages) {
+      if (_disposed) return;
+      if (message.length < MESSAGE_INTEGER * 2) continue;
       // MESSAGE_INTEGER * 2 for index + begin
       var dataHead = Uint8List(MESSAGE_INTEGER * 2);
       dataHead.setRange(0, MESSAGE_INTEGER * 2, message);
@@ -781,13 +822,17 @@ abstract class Peer
   }
 
   void _processHave(List<Uint8List> messages) {
+    if (_disposed) return;
     var indices = <int>[];
     for (var message in messages) {
+      if (message.length < 4) continue;
       var index = ByteData.view(message.buffer).getUint32(0);
       indices.add(index);
       updateRemoteBitfield(index, true);
     }
-    events.emit(PeerHaveEvent(this, indices));
+    if (indices.isNotEmpty) {
+      events.emit(PeerHaveEvent(this, indices));
+    }
   }
 
   /// Update the remote peer's bitfield.
@@ -810,6 +855,7 @@ abstract class Peer
   }
 
   void _processHandShake(List<int> data) {
+    if (_disposed) return;
     _remotePeerId = _parseRemotePeerId(data);
     var reserved = data.getRange(HAND_SHAKE_HEAD.length, INFO_HASH_START);
     var fast = reserved.elementAt(7) & 0x04;

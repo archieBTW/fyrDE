@@ -156,6 +156,14 @@ class TorrentItem extends ChangeNotifier {
     task.stop();
     notifyListeners();
   }
+
+  Future<void> stopAsync() async {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    _taskListener?.dispose();
+    _taskListener = null;
+    await task.stop();
+  }
 }
 
 class TorrentService extends ChangeNotifier {
@@ -168,6 +176,10 @@ class TorrentService extends ChangeNotifier {
 
   final List<String> _pendingMagnets = [];
   List<String> get pendingMagnets => _pendingMagnets;
+
+  final Map<String, VoidCallback> _activeMagnetCleanups = {};
+  final Completer<void> _dirsReady = Completer<void>();
+  bool _initialized = false;
 
   late Directory _appDir;
   late Directory _torrentDir;
@@ -211,41 +223,107 @@ class TorrentService extends ChangeNotifier {
     task.requestPeersFromDHT();
   }
 
-  Future<void> init() async {
+  Future<void> _fetchPublicIp() async {
+    try {
+      publicIp = await Ipify.ipv4().timeout(const Duration(seconds: 5));
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<void> init({List<String> initialArgs = const []}) async {
+    if (_initialized) {
+      if (initialArgs.isNotEmpty) {
+        await handleCliArgs(initialArgs);
+      }
+      return;
+    }
+    _initialized = true;
+
     _appDir = await getApplicationSupportDirectory();
     _torrentDir = Directory(p.join(_appDir.path, 'torrents'));
-    if (!_torrentDir.existsSync()) {
-      _torrentDir.createSync(recursive: true);
+    if (!await _torrentDir.exists()) {
+      await _torrentDir.create(recursive: true);
     }
-
-    try {
-      publicIp = await Ipify.ipv4();
-    } catch (_) {}
 
     final downloadsDir = await getDownloadsDirectory();
-    _defaultSavePath = downloadsDir?.path ?? p.join(Platform.environment['HOME'] ?? '', 'Downloads');
-    
+    _defaultSavePath = downloadsDir?.path ??
+        p.join(Platform.environment['HOME'] ?? '', 'Downloads');
+
     // Ensure downloads dir exists
     final dir = Directory(_defaultSavePath);
-    if (!dir.existsSync()) {
-      dir.createSync(recursive: true);
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
     }
 
+    if (!_dirsReady.isCompleted) {
+      _dirsReady.complete();
+    }
+
+    // Never block startup on external IP lookup
+    unawaited(_fetchPublicIp());
+
     await _loadPersistedTorrents();
+
+    if (initialArgs.isNotEmpty) {
+      await handleCliArgs(initialArgs);
+    }
+  }
+
+  Future<void> handleCliArgs(List<String> args) async {
+    await _dirsReady.future;
+    final logDir = Directory(
+      p.join(Platform.environment['HOME'] ?? '', '.config', 'fyrtorrent'),
+    );
+    if (!await logDir.exists()) {
+      await logDir.create(recursive: true);
+    }
+    final logFile = File(p.join(logDir.path, 'fyrtorrent.log'));
+    try {
+      await logFile.writeAsString(
+        'Handling args: $args\n',
+        mode: FileMode.append,
+      );
+    } catch (_) {}
+
+    for (var arg in args) {
+      final cleanArg = arg.replaceAll('"', '').replaceAll("'", '').trim();
+      if (cleanArg.startsWith('magnet:')) {
+        try {
+          await logFile.writeAsString(
+            'Handling magnet: $cleanArg\n',
+            mode: FileMode.append,
+          );
+        } catch (_) {}
+        unawaited(addTorrentFromMagnet(cleanArg).catchError((e) {
+          debugPrint('CLI magnet error: $e');
+        }));
+      } else if (cleanArg.endsWith('.torrent')) {
+        try {
+          await logFile.writeAsString(
+            'Handling torrent file: $cleanArg\n',
+            mode: FileMode.append,
+          );
+        } catch (_) {}
+        unawaited(addTorrentFromFile(cleanArg).catchError((e) {
+          debugPrint('CLI torrent file error: $e');
+        }));
+      }
+    }
   }
 
   Future<void> addTorrentFromFile(String filePath, {String? savePath}) async {
+    await _dirsReady.future;
     try {
       final model = await Torrent.parse(filePath);
       final infoHash = model.infoHash.toLowerCase();
-      
+
       if (_items.any((item) => item.infoHash.toLowerCase() == infoHash)) {
         return; // Already exists
       }
 
       final actualSavePath = savePath ?? _defaultSavePath;
       final task = TorrentTask.newTask(model, actualSavePath);
-      
+
       final item = TorrentItem(
         infoHash: infoHash,
         name: model.name,
@@ -258,7 +336,7 @@ class TorrentService extends ChangeNotifier {
       await task.start();
       _boostTaskDiscovery(task, model);
       notifyListeners();
-      
+
       // Persist
       final savedTorrentPath = p.join(_torrentDir.path, '$infoHash.torrent');
       if (filePath != savedTorrentPath) {
@@ -331,6 +409,7 @@ class TorrentService extends ChangeNotifier {
   }
 
   Future<void> addTorrentFromMagnet(String magnetUrl, {String? savePath}) async {
+    await _dirsReady.future;
     try {
       final infoHash = _getInfoHashFromMagnet(magnetUrl);
       if (infoHash == null) throw 'Invalid magnet link: info hash not found';
@@ -354,7 +433,8 @@ class TorrentService extends ChangeNotifier {
       notifyListeners();
 
       bool resolved = false;
-      
+      bool cleanedUp = false;
+
       // Start metadata downloader
       final downloader = MetadataDownloader(infoHash);
       final downloaderListener = downloader.createListener();
@@ -362,8 +442,9 @@ class TorrentService extends ChangeNotifier {
       // Start trackers to find peers for metadata
       final announceTracker = TorrentAnnounceTracker(downloader);
       final trackerListener = announceTracker.createListener();
-      
+
       final infoHashBuffer = Uint8List.fromList(_hexString2Buffer(infoHash)!);
+      Timer? magnetTimeout;
 
       trackerListener.on<AnnouncePeerEventEvent>((event) {
         if (event.event != null) {
@@ -374,6 +455,11 @@ class TorrentService extends ChangeNotifier {
       });
 
       void cleanup() {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        magnetTimeout?.cancel();
+        magnetTimeout = null;
+        _activeMagnetCleanups.remove(infoHash);
         _pendingMagnets.remove(infoHash);
         notifyListeners();
         downloaderListener.dispose();
@@ -381,6 +467,14 @@ class TorrentService extends ChangeNotifier {
         announceTracker.dispose();
         downloader.stop();
       }
+
+      _activeMagnetCleanups[infoHash] = cleanup;
+      magnetTimeout = Timer(const Duration(minutes: 5), () {
+        if (!resolved) {
+          debugPrint('Timed out fetching metadata for magnet: $infoHash');
+          cleanup();
+        }
+      });
 
       Future<void> completeWithTorrentBytes(Uint8List fullTorrentBytes) async {
         if (resolved) return;
@@ -488,22 +582,38 @@ class TorrentService extends ChangeNotifier {
     await prefs.setString('torrents_state', json.encode(state));
   }
 
-  void removeTorrent(TorrentItem item, {bool deleteFiles = false}) {
-    item.stop();
+  Future<void> removeTorrent(TorrentItem item, {bool deleteFiles = false}) async {
     _items.remove(item);
-    
+    notifyListeners();
+    await item.stopAsync();
+
     for (final candidate in {item.infoHash, item.infoHash.toLowerCase()}) {
       final torrentFile = File(p.join(_torrentDir.path, '$candidate.torrent'));
-      if (torrentFile.existsSync()) {
-        torrentFile.deleteSync();
-      }
+      try {
+        if (await torrentFile.exists()) {
+          await torrentFile.delete();
+        }
+      } catch (_) {}
     }
 
     if (deleteFiles) {
       // Implement file deletion if needed
     }
 
-    _saveState();
-    notifyListeners();
+    await _saveState();
+  }
+
+  Future<void> disposeAll() async {
+    for (final cleanup in _activeMagnetCleanups.values.toList()) {
+      try {
+        cleanup();
+      } catch (_) {}
+    }
+    _activeMagnetCleanups.clear();
+
+    final itemsCopy = List<TorrentItem>.from(_items);
+    await Future.wait(
+      itemsCopy.map((item) => item.stopAsync().catchError((_) {})),
+    );
   }
 }

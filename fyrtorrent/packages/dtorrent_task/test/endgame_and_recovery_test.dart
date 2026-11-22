@@ -7,6 +7,7 @@ import 'package:crypto/crypto.dart';
 import 'package:dtorrent_common/dtorrent_common.dart';
 import 'package:dtorrent_parser/dtorrent_parser.dart';
 import 'package:dtorrent_task/dtorrent_task.dart';
+import 'package:dtorrent_task/src/peer/protocol/peer_events.dart';
 import 'package:test/test.dart';
 
 Uint8List _buildWireMessage(int id, [List<int>? payload]) {
@@ -335,6 +336,42 @@ void main() {
         await chokingSeeder.stop();
         await healthySeeder.stop();
         await tmpDir.delete(recursive: true);
+      }
+    });
+
+    test('Oversized or negative-signed peer message length disposes peer cleanly without hanging', () async {
+      final infoHash = List<int>.filled(20, 7);
+      final server = await ServerSocket.bind(InternetAddress('127.0.0.6'), 0);
+      final disposed = Completer<dynamic>();
+
+      server.listen((socket) {
+        socket.listen((_) {}, onError: (_) {});
+        // Send valid handshake followed by 0xFFFFFFFF length prefix (which getInt32 read as -1)
+        socket.add(_buildHandshake(infoHash, '-BADPEER000000000001'));
+        socket.add(Uint8List.fromList([0xFF, 0xFF, 0xFF, 0xFF, 0x07]));
+      });
+
+      final peer = Peer.newTCPPeer(
+        CompactAddress(InternetAddress('127.0.0.6'), server.port),
+        infoHash,
+        4,
+        null,
+        PeerSource.manual,
+      );
+      final listener = peer.createListener();
+      listener.on<PeerDisposeEvent>((event) {
+        if (!disposed.isCompleted) disposed.complete(event.reason);
+      });
+
+      try {
+        await peer.connect(5);
+        final reason = await disposed.future.timeout(const Duration(seconds: 3));
+        expect(reason, isA<BadException>());
+        expect(peer.isDisposed, isTrue);
+      } finally {
+        listener.dispose();
+        await peer.dispose();
+        await server.close();
       }
     });
   });

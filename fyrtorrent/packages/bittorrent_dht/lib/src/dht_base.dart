@@ -55,6 +55,8 @@ class DHT with EventsEmittable<DHTEvent> {
 
   Timer? _tokenGenerateTimer;
 
+  DateTime? _lastNodeRemovedRefresh;
+
   int? _port;
 
   int? get port => _port;
@@ -117,9 +119,18 @@ class DHT with EventsEmittable<DHTEvent> {
     rootListener
       ?..on<NodeBucketIsEmpty>(_allFindNode)
       ..on<NodeRemoved>((event) {
-        root!.forEach((node) {
-          _tryToGetNode(node.address!, node.port!, queriedNode: node);
-        });
+        final now = DateTime.now();
+        if (_lastNodeRemovedRefresh == null ||
+            now.difference(_lastNodeRemovedRefresh!) >
+                const Duration(seconds: 10)) {
+          _lastNodeRemovedRefresh = now;
+          final closest = _root?.findClosestNodes(event.node.id) ?? const [];
+          for (var node in closest) {
+            if (node.address != null && node.port != null) {
+              _tryToGetNode(node.address!, node.port!, queriedNode: node);
+            }
+          }
+        }
         events.emit(
           DHTNodeRemoved(event.node),
         );
@@ -139,11 +150,16 @@ class DHT with EventsEmittable<DHTEvent> {
   ///
   /// User can invoke `bootstrap` after stop , everything will be fresh.
   Future stop() async {
+    _bootstrapped = false;
     events.dispose();
     resourceTable.clear();
     _announceTable.clear();
     _tokenGenerateTimer?.cancel();
     _tokenGenerateTimer = null;
+    _krpcListener?.dispose();
+    _krpcListener = null;
+    rootListener?.dispose();
+    rootListener = null;
     _port = null;
     _root?.dispose();
     _root = null;
@@ -282,14 +298,14 @@ class DHT with EventsEmittable<DHTEvent> {
     }
     try {
       var nid = ID.createID(newId);
-      // print('bucket $index Clear all and query the corresponding node ${nid.toString()}');
-      _root?.forEach((node) {
+      final closest = _root?.findClosestNodes(nid) ?? const [];
+      for (var node in closest) {
         node.queried = false;
         if (node.address != null && node.port != null) {
           _tryToGetNode(node.address!, node.port!,
               id: nid.toString(), queriedNode: node);
         }
-      });
+      }
     } catch (e) {
       // do nothing
     }
@@ -531,6 +547,7 @@ class DHT with EventsEmittable<DHTEvent> {
   }
 
   void _requestGetPeers(Node node, String infoHash) {
+    if (!_bootstrapped || _krpc == null || _krpc!.isStopped) return;
     _log.fine(
       'requesting peers for infohash ${Uint8List.fromList(infoHash.runes.toList()).toHexString()} from node ${node.address?.address}:${node.port} ${Uint8List.fromList(node.id.ids).toHexString()}',
     );
@@ -538,6 +555,7 @@ class DHT with EventsEmittable<DHTEvent> {
       return;
     }
     Timer.run(() {
+      if (!_bootstrapped || _krpc == null || _krpc!.isStopped) return;
       if (node.address != null && node.port != null) {
         _krpc?.getPeers(infoHash, node.address!, node.port!, queriedNode: node);
       }
@@ -546,14 +564,17 @@ class DHT with EventsEmittable<DHTEvent> {
 
   void _tryToGetNode(InternetAddress address, int port,
       {String? id, Node? queriedNode}) {
+    if (_krpc == null || _krpc!.isStopped) return;
     if (id == null) {
       if (_root != null) {
         id = _root?.id.toString();
       }
     }
     if (id != null) {
-      Timer.run(
-          () => _krpc?.findNode(id!, address, port, queriedNode: queriedNode));
+      Timer.run(() {
+        if (_krpc == null || _krpc!.isStopped) return;
+        _krpc?.findNode(id!, address, port, queriedNode: queriedNode);
+      });
     }
   }
 

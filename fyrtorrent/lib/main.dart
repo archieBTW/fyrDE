@@ -1,5 +1,6 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
@@ -8,7 +9,99 @@ import 'package:path/path.dart' as p;
 import 'fyr_theme.dart';
 import 'services/torrent_service.dart';
 
+ServerSocket? _instanceServer;
+
+String _instanceSocketPath() {
+  final home = Platform.environment['HOME'] ?? '';
+  final dir = Directory(p.join(home, '.config', 'fyrtorrent'));
+  if (!dir.existsSync()) {
+    dir.createSync(recursive: true);
+  }
+  return p.join(dir.path, 'instance.sock');
+}
+
+/// If another fyrtorrent instance is already running, forward CLI args to it
+/// and return true so this process can exit immediately instead of fighting
+/// over the same download files and ports.
+Future<bool> _tryForwardToExistingInstance(List<String> args) async {
+  final sockPath = _instanceSocketPath();
+  if (!File(sockPath).existsSync()) return false;
+  try {
+    final socket = await Socket.connect(
+      InternetAddress(sockPath, type: InternetAddressType.unix),
+      0,
+      timeout: const Duration(milliseconds: 500),
+    );
+    socket.write('${jsonEncode({'args': args})}\n');
+    await socket.flush();
+    await socket.close();
+    return true;
+  } catch (_) {
+    // Stale socket from a previous crashed process — clean it up.
+    try {
+      File(sockPath).deleteSync();
+    } catch (_) {}
+    return false;
+  }
+}
+
+Future<void> _startInstanceServer(TorrentService torrentService) async {
+  final sockPath = _instanceSocketPath();
+  try {
+    if (File(sockPath).existsSync()) {
+      File(sockPath).deleteSync();
+    }
+    _instanceServer = await ServerSocket.bind(
+      InternetAddress(sockPath, type: InternetAddressType.unix),
+      0,
+    );
+    _instanceServer!.listen((Socket client) {
+      final buffer = StringBuffer();
+      client.listen(
+        (chunk) => buffer.write(utf8.decode(chunk, allowMalformed: true)),
+        onDone: () {
+          client.destroy();
+          final raw = buffer.toString().trim();
+          if (raw.isEmpty) return;
+          try {
+            final payload = jsonDecode(raw);
+            if (payload is Map && payload['args'] is List) {
+              final incomingArgs =
+                  payload['args'].map<String>((e) => e.toString()).toList();
+              if (incomingArgs.isNotEmpty) {
+                unawaited(torrentService.handleCliArgs(incomingArgs));
+              }
+            }
+          } catch (_) {}
+          unawaited(windowManager.show().then((_) => windowManager.focus()));
+        },
+        onError: (_) => client.destroy(),
+      );
+    });
+  } catch (e) {
+    debugPrint('Could not bind single-instance socket: $e');
+  }
+}
+
+Future<void> _cleanupInstanceServer() async {
+  try {
+    await _instanceServer?.close();
+  } catch (_) {}
+  _instanceServer = null;
+  try {
+    final sockFile = File(_instanceSocketPath());
+    if (sockFile.existsSync()) {
+      sockFile.deleteSync();
+    }
+  } catch (_) {}
+}
+
 void main(List<String> args) async {
+  // Forward magnet links / .torrent files to an already-running instance first.
+  if (await _tryForwardToExistingInstance(args)) {
+    exit(0);
+  }
+
   WidgetsFlutterBinding.ensureInitialized();
   await windowManager.ensureInitialized();
   FyrTheme.initialize();
@@ -22,43 +115,15 @@ void main(List<String> args) async {
   );
 
   await windowManager.waitUntilReadyToShow(windowOptions, () async {
+    await windowManager.setPreventClose(true);
     await windowManager.show();
     await windowManager.focus();
   });
 
   final torrentService = TorrentService();
-  await torrentService.init();
-
-  // Logging for debugging
-  final logDir = Directory(
-    p.join(Platform.environment['HOME'] ?? '', '.config', 'fyrtorrent'),
-  );
-  if (!logDir.existsSync()) logDir.createSync(recursive: true);
-  final logFile = File(p.join(logDir.path, 'fyrtorrent.log'));
-  await logFile.writeAsString(
-    'Launched with args: $args\n',
-    mode: FileMode.append,
-  );
-
-  // Handle CLI arguments
-  if (args.isNotEmpty) {
-    for (var arg in args) {
-      final cleanArg = arg.replaceAll('"', '').replaceAll("'", "");
-      if (cleanArg.startsWith('magnet:')) {
-        await logFile.writeAsString(
-          'Handling magnet: $cleanArg\n',
-          mode: FileMode.append,
-        );
-        torrentService.addTorrentFromMagnet(cleanArg);
-      } else if (cleanArg.endsWith('.torrent')) {
-        await logFile.writeAsString(
-          'Handling torrent file: $cleanArg\n',
-          mode: FileMode.append,
-        );
-        torrentService.addTorrentFromFile(cleanArg);
-      }
-    }
-  }
+  unawaited(_startInstanceServer(torrentService));
+  // Render UI immediately; load persisted torrents and CLI args asynchronously.
+  unawaited(torrentService.init(initialArgs: args));
 
   runApp(
     ChangeNotifierProvider.value(
@@ -98,8 +163,45 @@ class FyrTorrentApp extends StatelessWidget {
   }
 }
 
-class MainScreen extends StatelessWidget {
+class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
+
+  @override
+  State<MainScreen> createState() => _MainScreenState();
+}
+
+class _MainScreenState extends State<MainScreen> with WindowListener {
+  bool _closing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    windowManager.addListener(this);
+  }
+
+  @override
+  void dispose() {
+    windowManager.removeListener(this);
+    super.dispose();
+  }
+
+  @override
+  void onWindowClose() async {
+    await _shutdownAndClose();
+  }
+
+  Future<void> _shutdownAndClose() async {
+    if (_closing) return;
+    _closing = true;
+    try {
+      await Future.wait([
+        TorrentService().disposeAll(),
+        _cleanupInstanceServer(),
+      ]).timeout(const Duration(seconds: 2));
+    } catch (_) {}
+    await windowManager.setPreventClose(false);
+    await windowManager.destroy();
+  }
 
   Future<String?> _pickFile({
     String? title,
@@ -237,20 +339,25 @@ class MainScreen extends StatelessWidget {
       backgroundColor: Colors.transparent,
       body: Stack(
         children: [
-          // Background Glow
+          // Background Glow (lightweight RadialGradient instead of sigma=100 BackdropFilter)
           Positioned(
-            top: -100,
-            right: -100,
-            child: Container(
-              width: 400,
-              height: 400,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: FyrTheme.accentColor.withOpacity(0.15),
-              ),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 100, sigmaY: 100),
-                child: Container(),
+            top: -150,
+            right: -150,
+            child: IgnorePointer(
+              child: RepaintBoundary(
+                child: Container(
+                  width: 500,
+                  height: 500,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: RadialGradient(
+                      colors: [
+                        FyrTheme.accentColor.withOpacity(0.18),
+                        FyrTheme.accentColor.withOpacity(0.0),
+                      ],
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
@@ -269,7 +376,7 @@ class MainScreen extends StatelessWidget {
                       // Traffic Lights
                       _buildTrafficLight(
                         Colors.redAccent,
-                        () => windowManager.close(),
+                        () => _shutdownAndClose(),
                       ),
                       const SizedBox(width: 8),
                       _buildTrafficLight(

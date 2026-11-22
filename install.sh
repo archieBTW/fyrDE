@@ -1685,6 +1685,14 @@ input "type:touchpad" {
 # END TOUCHPAD SETTINGS
 EOF
     fi
+    if [ ! -f ~/.config/sway/conf.d/40-power.conf ]; then
+        cat << 'EOF' > ~/.config/sway/conf.d/40-power.conf
+# POWER & SCREEN LOCK SETTINGS
+bindswitch --reload --locked lid:on exec ~/.config/fyr/lock.sh
+exec swayidle -w before-sleep '~/.config/fyr/lock.sh'
+# END POWER & SCREEN LOCK SETTINGS
+EOF
+    fi
 
     # Configure WirePlumber auto-profile for automatic HDMI and audio detection
     mkdir -p ~/.config/wireplumber/wireplumber.conf.d

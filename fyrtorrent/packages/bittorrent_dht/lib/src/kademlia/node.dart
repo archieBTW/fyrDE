@@ -63,7 +63,8 @@ class Node with EventsEmittable<NodeEvent> {
 
   final CompactAddress? _compactAddress;
 
-  Map<Bucket, EventsListener<BucketEvent>?>? _buckets;
+  List<Bucket>? _buckets;
+  final Map<int, EventsListener<BucketEvent>> _bucketListeners = {};
 
   InternetAddress? get address => _compactAddress?.address;
 
@@ -71,7 +72,7 @@ class Node with EventsEmittable<NodeEvent> {
 
   List<Bucket> get buckets {
     _buckets ??= _getBuckets();
-    return _buckets!.keys.toList();
+    return _buckets!;
   }
 
   final Map<String, String> token = <String, String>{};
@@ -104,13 +105,10 @@ class Node with EventsEmittable<NodeEvent> {
     events.emit(NodeReset(this));
   }
 
-  Map<Bucket, EventsListener<BucketEvent>?> _getBuckets() {
-    // TODO:Check
-    _buckets ??= {
-      for (var element
-          in Iterable.generate(id.byteLength * 8, (index) => Bucket(index)))
-        element: null
-    };
+  List<Bucket> _getBuckets() {
+    _buckets ??= List<Bucket>.generate(
+        id.byteLength * 8, (index) => Bucket(index, k),
+        growable: false);
     return _buckets!;
   }
 
@@ -118,20 +116,19 @@ class Node with EventsEmittable<NodeEvent> {
     var index = _getBucketIndex(node.id);
     if (index < 0) return false;
     var buckets = _getBuckets();
-    Bucket? bucket;
-    try {
-      bucket = buckets.keys.toList()[index];
-    } catch (e) {
-      bucket ??= Bucket(index, k);
-    }
+    if (index >= buckets.length) return false;
+    var bucket = buckets[index];
 
-    buckets.keys.toList()[index] = bucket;
-    var bucketListener = bucket.createListener();
-    bucketListener
-      ..on<BucketIsEmpty>(
-          (event) => events.emit(NodeBucketIsEmpty(event.bucket.index)))
-      ..on<BucketNodeRemoved>(
-          ((event) => events.emit(NodeRemoved(event.node))));
+    // Attach at most one listener per bucket to prevent exponential listener leaks.
+    _bucketListeners.putIfAbsent(index, () {
+      var bucketListener = bucket.createListener();
+      bucketListener
+        ..on<BucketIsEmpty>(
+            (event) => events.emit(NodeBucketIsEmpty(event.bucket.index)))
+        ..on<BucketNodeRemoved>(
+            (event) => events.emit(NodeRemoved(event.node)));
+      return bucketListener;
+    });
     return bucket.addNode(node) != null;
   }
 
@@ -139,8 +136,8 @@ class Node with EventsEmittable<NodeEvent> {
     if (_buckets == null || _buckets!.isEmpty) return null;
     var index = _getBucketIndex(id);
     if (index == -1) return this;
-    var buckets = _buckets;
-    var bucket = buckets!.keys.toList()[index];
+    if (index < 0 || index >= _buckets!.length) return null;
+    var bucket = _buckets![index];
     var tn = bucket.findNode(id);
     return tn?.node;
   }
@@ -148,29 +145,27 @@ class Node with EventsEmittable<NodeEvent> {
   Bucket? getIDBelongBucket(ID id) {
     if (_buckets == null || _buckets!.isEmpty) return null;
     var index = _getBucketIndex(id);
-    if (index == -1) return null;
-    return _buckets!.keys.toList()[index];
+    if (index < 0 || index >= _buckets!.length) return null;
+    return _buckets![index];
   }
 
   List<Node> findClosestNodes(ID id) {
     if (_buckets == null || _buckets!.isEmpty) return <Node>[];
     var index = _getBucketIndex(id);
     if (index == -1) return <Node>[this];
-    var bucket = _buckets!.keys.toList()[index];
+    if (index < 0 || index >= _buckets!.length) return <Node>[];
     var re = <Node>[];
-    while (index < _buckets!.keys.toList().length) {
-      if (_fillNodeList(bucket, re, k)) break;
+    while (index < _buckets!.length) {
+      if (_fillNodeList(_buckets![index], re, k)) break;
       index++;
-      if (index >= _buckets!.keys.toList().length) break;
-      bucket = _buckets!.keys.toList()[index];
     }
     return re;
   }
 
   bool _fillNodeList(Bucket bucket, List<Node> target, int max) {
-    for (var i = 0; i < bucket.nodes.keys.length; i++) {
+    for (var node in bucket.nodes.keys) {
       if (target.length >= max) break;
-      target.add(bucket.nodes.keys.toList()[i]);
+      target.add(node);
     }
     return target.length >= max;
   }
@@ -182,17 +177,16 @@ class Node with EventsEmittable<NodeEvent> {
   void remove(Node node) {
     if (_buckets == null || _buckets!.isEmpty) return;
     var index = _getBucketIndex(node.id);
-    var bucket = _buckets?.keys.toList()[index];
-    bucket?.removeNode(node);
+    if (index < 0 || index >= _buckets!.length) return;
+    _buckets![index].removeNode(node);
   }
 
   void forEach(void Function(Node node) processor) {
     var buckets = this.buckets;
     for (var i = 0; i < buckets.length; i++) {
       var b = buckets[i];
-      var l = b.nodes.keys.length;
-      for (var i = 0; i < l; i++) {
-        var node = b.nodes.keys.toList()[i];
+      if (b.nodes.isEmpty) continue;
+      for (var node in b.nodes.keys.toList()) {
         processor(node);
       }
     }
@@ -220,11 +214,14 @@ class Node with EventsEmittable<NodeEvent> {
     token.clear();
     announced.clear();
 
+    for (var listener in _bucketListeners.values) {
+      listener.dispose();
+    }
+    _bucketListeners.clear();
+
     if (_buckets != null) {
-      for (var i = 0; i < _buckets!.length; i++) {
-        var b = _buckets!.entries.toList()[i];
-        b.value?.dispose();
-        b.key.dispose();
+      for (var bucket in _buckets!) {
+        bucket.dispose();
       }
     }
     _buckets = null;

@@ -102,7 +102,11 @@ class _KRPC with EventsEmittable<KRPCEvent> implements KRPC {
 
   final int _maxQuery;
 
+  late final int _maxQueuedQueries = _maxQuery * 8 > 256 ? _maxQuery * 8 : 256;
+
   final Set<String> _pendingQueries = {};
+
+  int _queuedQueries = 0;
 
   final int _timeOutTime;
 
@@ -117,19 +121,28 @@ class _KRPC with EventsEmittable<KRPCEvent> implements KRPC {
 
   StreamSubscription<KQuery>? _querySub;
 
+  void _safeSend(List<int> message, InternetAddress address, int port) {
+    if (isStopped || _socket == null) return;
+    try {
+      _socket?.send(message, address, port);
+    } catch (e) {
+      _log.fine('UDP send error to ${address.address}:$port: $e');
+    }
+  }
+
   @override
   void sendError(String tid, InternetAddress address, int port,
       [int code = 201, String msg = 'Generic Error']) {
     if (isStopped || _socket == null) return;
     var message = errorMessage(tid, code, msg);
-    _socket?.send(message, address, port);
+    _safeSend(message, address, port);
   }
 
   @override
   void responseAnnouncePeer(String tid, InternetAddress address, int port) {
     if (isStopped || _socket == null) return;
     var message = announcePeerResponse(tid, _nodeId.toString());
-    _socket?.send(message, address, port);
+    _safeSend(message, address, port);
   }
 
   @override
@@ -138,6 +151,7 @@ class _KRPC with EventsEmittable<KRPCEvent> implements KRPC {
       {bool impliedPort = true, Node? queriedNode}) {
     if (isStopped || _socket == null) return;
     var tid = _recordTransaction(EVENT.ANNOUNCE_PEER, queriedNode);
+    if (tid == null) return;
     var message =
         announcePeerMessage(tid, _nodeId.toString(), infoHash, peerPort, token);
     _requestQuery(tid, message, address, port);
@@ -147,7 +161,7 @@ class _KRPC with EventsEmittable<KRPCEvent> implements KRPC {
   void pong(String tid, InternetAddress address, int port, [String? nodeId]) {
     if (isStopped || _socket == null) return;
     var message = pongMessage(tid, nodeId ?? _nodeId.toString());
-    _socket?.send(message, address, port);
+    _safeSend(message, address, port);
   }
 
   @override
@@ -156,7 +170,7 @@ class _KRPC with EventsEmittable<KRPCEvent> implements KRPC {
       [String? nodeId]) {
     if (isStopped || _socket == null) return;
     var message = findNodeResponse(tid, nodeId ?? _nodeId.toString(), nodes);
-    _socket?.send(message, address, port);
+    _safeSend(message, address, port);
   }
 
   @override
@@ -169,13 +183,14 @@ class _KRPC with EventsEmittable<KRPCEvent> implements KRPC {
     if (isStopped || _socket == null) return;
     var message = getPeersResponse(tid, nodeId ?? _nodeId.toString(), token,
         nodes: nodes, peers: peers);
-    _socket?.send(message, address, port);
+    _safeSend(message, address, port);
   }
 
   @override
   void ping(InternetAddress address, int port, {Node? queriedNode}) async {
     if (isStopped || _socket == null) return;
     var tid = _recordTransaction(EVENT.PING, queriedNode);
+    if (tid == null) return;
     var message = pingMessage(tid, _nodeId.toString());
     _requestQuery(tid, message, address, port);
   }
@@ -185,6 +200,7 @@ class _KRPC with EventsEmittable<KRPCEvent> implements KRPC {
       {String? qNodeId, Node? queriedNode}) {
     if (isStopped || _socket == null) return;
     var tid = _recordTransaction(EVENT.FIND_NODE, queriedNode);
+    if (tid == null) return;
     var message = findNodeMessage(tid, qNodeId ?? _nodeId.toString(), targetId);
     _requestQuery(tid, message, address, port);
   }
@@ -194,6 +210,7 @@ class _KRPC with EventsEmittable<KRPCEvent> implements KRPC {
       {Node? queriedNode}) {
     if (isStopped || _socket == null) return;
     var tid = _recordTransaction(EVENT.GET_PEERS, queriedNode);
+    if (tid == null) return;
     _transactionsValues[tid] = infoHash;
     var message = getPeersMessage(tid, _nodeId.toString(), infoHash);
     _requestQuery(tid, message, address, port);
@@ -201,10 +218,10 @@ class _KRPC with EventsEmittable<KRPCEvent> implements KRPC {
 
   void _requestQuery(String transacationId, List<int> message,
       InternetAddress address, int port) {
+    if (isStopped) return;
     _queryController ??= StreamController();
     _querySub ??= _queryController?.stream.listen(_processQueryRequest);
-    // _totalPending++;
-    // print('There are currently $_totalPending pending requests.');
+    _queuedQueries++;
     _queryController?.add(KQuery(
         message: message,
         address: address,
@@ -213,9 +230,9 @@ class _KRPC with EventsEmittable<KRPCEvent> implements KRPC {
   }
 
   void _processQueryRequest(KQuery event) {
+    if (_queuedQueries > 0) _queuedQueries--;
     if (isStopped) return;
 
-    // print('Sending request $tid, currently pending requests: $_pendingQuery."');
     var transaction = _transactionsMap[event.transacationId];
     if (transaction != null) {
       _increasePendingQuery(transaction);
@@ -223,12 +240,23 @@ class _KRPC with EventsEmittable<KRPCEvent> implements KRPC {
           () => _fireTimeout(event.transacationId));
     }
 
-    _socket?.send(event.message, event.address, event.port);
+    _safeSend(event.message, event.address, event.port);
   }
 
-  String _recordTransaction(EVENT event, Node? queriedNode) {
+  String? _recordTransaction(EVENT event, Node? queriedNode) {
+    // Enforce a hard queue cap so _transactionsMap can never exhaust all 65,535
+    // 16-bit IDs or spin forever searching for a free transaction ID.
+    if (_transactionsMap.length >= _maxQueuedQueries ||
+        _pendingQueries.length + _queuedQueries >= _maxQueuedQueries) {
+      return null;
+    }
     var tid = createTransactionId();
+    var attempts = 0;
     while (_transactionsMap.containsKey(tid)) {
+      attempts++;
+      if (attempts >= 65535) {
+        return null;
+      }
       tid = createTransactionId();
     }
     _transactionsMap[tid] = QueryTransaction(
@@ -428,8 +456,7 @@ class _KRPC with EventsEmittable<KRPCEvent> implements KRPC {
   void _fireError(
       int code, String? tid, String msg, InternetAddress address, int port) {
     if (tid != null) {
-      var tr = _transactionsMap.remove(tid);
-      tr?.timer?.cancel();
+      _cleanTransaction(tid);
       sendError(tid, address, port, code, msg);
     } else {
       _log.warning('UnSend Error:', '[$code]$msg');
@@ -512,6 +539,8 @@ class _KRPC with EventsEmittable<KRPCEvent> implements KRPC {
     }
     _transactionsMap.clear();
     _transactionsValues.clear();
+    _pendingQueries.clear();
+    _queuedQueries = 0;
 
     try {
       await _querySub?.cancel();

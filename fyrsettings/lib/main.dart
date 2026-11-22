@@ -36,7 +36,7 @@ void main(List<String> args) async {
       initialIndex = 3;
     } else if (arg == 'default-apps' || arg == 'apps') {
       initialIndex = 5;
-    } else if (arg == 'power' || arg == 'battery') {
+    } else if (arg == 'power' || arg == 'battery' || arg == 'lock' || arg == 'lockscreen') {
       initialIndex = 6;
     } else if (arg == 'bluetooth') {
       initialIndex = 1;
@@ -142,7 +142,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       SettingsCategory('Sound', Icons.volume_up, SoundPane()),
       SettingsCategory('Personalization', Icons.palette, PersonalizationPane()),
       SettingsCategory('Default Apps', Icons.apps, DefaultAppsPane()),
-      SettingsCategory('Power', Icons.battery_charging_full, PowerPane()),
+      SettingsCategory('Power & Lock', Icons.battery_charging_full, PowerPane()),
       SettingsCategory('Mouse & Touchpad', Icons.touch_app, TouchpadPane()),
       SettingsCategory('Shortcuts', Icons.keyboard, ShortcutsPane()),
       SettingsCategory('Updates', Icons.system_update_alt, UpdatesPane()),

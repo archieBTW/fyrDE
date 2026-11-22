@@ -491,12 +491,17 @@ class _TorrentTask
     _dht?.bootstrap();
     requestPeersFromDHT();
     _dhtRepeatTimer?.cancel();
+    var dhtTick = 0;
     _dhtRepeatTimer = Timer.periodic(const Duration(seconds: 8), (_) {
       if (state == TaskState.running && _fileManager != null && !_fileManager!.isAllComplete) {
-        requestPeersFromDHT();
+        dhtTick++;
+        // Query DHT periodically (~every 48s) only when we still need more peers
+        if (dhtTick % 6 == 0 && connectedPeersNumber < 25) {
+          requestPeersFromDHT();
+        }
         if (_peersManager != null) {
-          for (var peer in _peersManager!.activePeers) {
-            if (!peer.chokeMe && peer.isSleeping && peer.remoteCompletePieces.isNotEmpty) {
+          for (var peer in [..._peersManager!.activePeers]) {
+            if (!peer.isDisposed && !peer.chokeMe && peer.isSleeping && peer.remoteCompletePieces.isNotEmpty) {
               for (var index in peer.remoteCompletePieces) {
                 _pieceManager?[index]?.addAvailablePeer(peer);
               }
@@ -752,7 +757,7 @@ class _TorrentTask
   }
 
   void _wakeIdlePeers([Peer? exclude]) {
-    if (_peersManager == null) return;
+    if (state != TaskState.running || _peersManager == null) return;
     for (var p in [..._peersManager!.activePeers]) {
       if (p != exclude && !p.isDisposed && !p.chokeMe && p.isSleeping) {
         Timer.run(() => requestPieces(p));
@@ -822,7 +827,12 @@ class _TorrentTask
   }
 
   void requestPieces(Peer peer, [int pieceIndex = -1]) async {
-    if (_pieceManager == null || _peersManager == null) return;
+    if (state != TaskState.running ||
+        peer.isDisposed ||
+        _pieceManager == null ||
+        _peersManager == null) {
+      return;
+    }
     if (_peersManager!.addPausedRequest(peer, pieceIndex)) return;
     Piece? piece;
     if (pieceIndex != -1) {

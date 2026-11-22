@@ -61,13 +61,8 @@ bindsym $mod+t exec fyrterm
 bindsym $mod+f exec fyrfiles
 bindsym $mod+m exec ~/.config/fyr/toggle_floating.sh
 bindsym $mod+l exec ~/.config/fyr/lock.sh
-
-# Auto-lock and display power management
-exec swayidle -w \
-    timeout 300 '~/.config/fyr/lock.sh' \
-    timeout 600 'swaymsg "output * power off"' \
-    resume 'swaymsg "output * power on"' \
-    before-sleep '~/.config/fyr/lock.sh'
+# Idle lock, lid-close lock, and display power rules are managed in
+# ~/.config/sway/conf.d/40-power.conf (configurable in fyrSettings -> Power & Lock).
 
 # -------------------------------------------------------------
 # Window Splits
