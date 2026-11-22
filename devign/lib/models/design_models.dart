@@ -718,12 +718,12 @@ class FramePreset {
 }
 
 const List<FramePreset> kFramePresets = [
-  FramePreset('iPhone 15 Pro', 'Mobile', 393, 852),
+  FramePreset('Fyr Phone', 'Mobile', 393, 852),
   FramePreset('Android Pixel', 'Mobile', 412, 915),
-  FramePreset('iPad Pro 11"', 'Tablet', 834, 1194),
+  FramePreset('Tablet 11"', 'Tablet', 834, 1194),
   FramePreset('Desktop 1440', 'Desktop', 1440, 900),
-  FramePreset('MacBook Air', 'Desktop', 1280, 832),
+  FramePreset('Laptop 13"', 'Desktop', 1280, 832),
   FramePreset('Slide 16:9', 'Presentation', 1920, 1080),
-  FramePreset('Instagram Post', 'Social', 1080, 1080),
+  FramePreset('Social Square', 'Social', 1080, 1080),
   FramePreset('Open Graph Card', 'Social', 1200, 630),
 ];

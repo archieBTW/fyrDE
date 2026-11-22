@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">fyrAndroid</string>
+    <string name="top_edge_service_label">Fyr Top-Edge Quick Settings Interceptor</string>
+    <string name="top_edge_service_desc">Intercepts downward swipes from the top edge of the screen to open the Fyr Quick Settings menu.</string>
+</resources>

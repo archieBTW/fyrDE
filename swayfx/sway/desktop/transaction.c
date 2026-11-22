@@ -782,7 +782,13 @@ static void _arrange_container(struct sway_container *con,
 
 static void arrange_container(struct sway_container *con,
 		int width, int height, int x, int y, bool title_bar, int gaps) {
+	struct sway_workspace *ws = con->current.workspace;
+	bool ws_active_stationary = ws && ws->current.output &&
+		ws->current.output->wlr_output->enabled &&
+		ws->current.output->current.active_workspace == ws &&
+		!ws->animation_state.animation.initialized;
 	if (!config->animation_duration_ms || !con->view
+			|| !ws_active_stationary
 			|| con->animation_state.seat_is_resizing
 			|| con->animation_state.seat_is_moving_float) {
 		finish_animation(&con->animation_state.animation);
@@ -1100,6 +1106,14 @@ static void arrange_output(struct sway_output *output, int width, int height) {
 				base_x, base_y);
 			wlr_scene_node_set_position(&child->layers.fullscreen->node,
 				base_x, base_y);
+
+			if (!child->current.fullscreen) {
+				arrange_workspace_tiling(child,
+					area->width - gaps->left - gaps->right,
+					area->height - gaps->top - gaps->bottom);
+				arrange_workspace_floating(child);
+			}
+
 			wlr_scene_node_set_enabled(&child->layers.tiling->node, false);
 			wlr_scene_node_set_enabled(&child->layers.fullscreen->node, false);
 

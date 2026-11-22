@@ -67,9 +67,9 @@ bindsym $mod+l exec ~/.config/fyr/lock.sh
 # -------------------------------------------------------------
 # Window Splits
 # -------------------------------------------------------------
-# Split the current container vertically or horizontally
-bindsym $mod+Shift+v split v
-bindsym $mod+h split h
+# Split the current container vertically or horizontally (only when tiling)
+bindsym $mod+v [con_id=__focused__ tiling] split v
+bindsym $mod+h [con_id=__focused__ tiling] split h
 
 # -------------------------------------------------------------
 # Workspaces
@@ -180,7 +180,7 @@ bindsym $mod+period exec ~/.config/fyr/emoji_toggle.sh
 # ==========================================
 exec /opt/fyrclipboard/fyrclipboard
 layer_effects "fyrclipboard" blur enable; corner_radius 16
-bindsym $mod+v exec ~/.config/fyr/clipboard_toggle.sh
+bindsym Mod1+v exec ~/.config/fyr/clipboard_toggle.sh
 
 
 # ==========================================

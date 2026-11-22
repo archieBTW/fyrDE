@@ -703,18 +703,23 @@ class TopBar extends StatelessWidget {
               () => ctrl.rotateCanvas(90)),
           quickBtn(Icons.flip_rounded, 'Flip',
               () => ctrl.flipCanvas(horizontal: true)),
-          const Spacer(),
-          if (ctrl.statusMessage != null) ...[
-            Text(
-              ctrl.statusMessage!,
-              style: TextStyle(
-                fontSize: 11,
-                color: FyrTheme.accentColor,
-                fontWeight: FontWeight.w500,
+          const SizedBox(width: 8),
+          if (ctrl.statusMessage != null)
+            Expanded(
+              child: Text(
+                ctrl.statusMessage!,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: FyrTheme.accentColor,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
-            ),
-            const SizedBox(width: 12),
-          ],
+            )
+          else
+            const Spacer(),
+          const SizedBox(width: 8),
           InkWell(
             borderRadius: BorderRadius.circular(6),
             onTap: () => ctrl.setWorkspaceMode(WorkspaceMode.advanced),
@@ -735,7 +740,7 @@ class TopBar extends StatelessWidget {
                       size: 12, color: FyrTheme.accentColor),
                   const SizedBox(width: 5),
                   Text(
-                    'Need Curves, Symmetry & Pro Tools? Switch to Advanced',
+                    'Switch to Advanced Pro Studio',
                     style: TextStyle(
                       fontSize: 10.5,
                       fontWeight: FontWeight.w600,

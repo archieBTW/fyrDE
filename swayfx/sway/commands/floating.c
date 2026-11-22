@@ -37,16 +37,8 @@ struct cmd_results *cmd_floating(int argc, char **argv) {
 				"Can't change floating on hidden scratchpad container");
 	}
 
-	// If the container is in a floating split container,
-	// operate on the split container instead of the child.
-	if (container_is_floating_or_child(container)) {
-		while (container->pending.parent) {
-			container = container->pending.parent;
-		}
-	}
-
 	bool wants_floating =
-		parse_boolean(argv[0], container_is_floating(container));
+		parse_boolean(argv[0], container_is_floating_or_child(container));
 
 	container_set_floating(container, wants_floating);
 

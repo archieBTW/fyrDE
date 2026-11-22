@@ -22,7 +22,7 @@ WIDTH=$(echo $RES | cut -d'x' -f1)
 HEIGHT=$(echo $RES | cut -d'x' -f2)
 echo "Detected resolution: ${WIDTH}x${HEIGHT}"
 
-flutter_apps=("fyrdock" "fyroverview" "fyrwindowoverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrclipboard" "fyrstore" "fyrvirt" "fyrav" "fyrtext" "fyrdaw" "fyrphone" "fyrcalculator" "fyrcode" "fyrvideo" "fyrmusic" "fyrphotos" "fyrcamera" "fyrbrowser" "fyrjournal" "fyrcalender" "fyrclock" "fyrtorrent" "fyrapi" "fyrgraphics" "fyremu" "fyrdirector" "fyrdisks" "fyrmonitor" "fyrdocs" "fyrsheets" "fyrslides" "fyrdb" "fyrpods")
+flutter_apps=("fyrdock" "fyroverview" "fyrwindowoverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrclipboard" "fyrstore" "fyrvirt" "fyrav" "fyrtext" "fyrdaw" "fyrphone" "fyrcalculator" "fyrcode" "fyrvideo" "fyrmusic" "fyrphotos" "fyrcamera" "fyrbrowser" "fyrjournal" "fyrcalender" "fyrclock" "fyrtorrent" "fyrapi" "fyrgraphics" "devign" "fyremu" "fyrdirector" "fyrdisks" "fyrmonitor" "fyrdocs" "fyrsheets" "fyrslides" "fyrdb" "fyrpods")
 
 # --- Progress Tracking & Terminal Management ---
 CURRENT_STEP=0
@@ -888,6 +888,22 @@ MimeType=image/png;image/jpeg;image/webp;image/bmp;image/gif;image/tiff;applicat
 Keywords=gimp;photoshop;photopea;image;editor;layers;graphics;
 EOF
             ;;
+        "devign")
+            sudo ln -sf /opt/devign/devign /usr/local/bin/devign
+            sudo tee /usr/share/applications/devign.desktop > /dev/null <<'EOF'
+[Desktop Entry]
+Name=devign
+GenericName=UI/UX Design & Prototyping Studio
+Comment=Vector UI design, auto-layout, interactive prototyping, and code export studio for FyrDE
+Exec=/usr/local/bin/devign %f
+Icon=applications-graphics
+Terminal=false
+Type=Application
+Categories=Graphics;2DGraphics;VectorGraphics;Development;
+MimeType=application/x-devign;image/svg+xml;
+Keywords=figma;design;vector;ui;ux;prototype;wireframe;devign;
+EOF
+            ;;
         "fyremu")
             sudo ln -sf /opt/fyremu/fyremu /usr/local/bin/fyremu
             if [ -f "./fyremu/assets/icons/fyremu.png" ]; then
@@ -1191,9 +1207,9 @@ if [ -f "$CONF" ] && grep -q "floating enable" "$CONF"; then
         swaymsg 'default_floating_border auto 4' >/dev/null 2>&1 || true
         swaymsg 'gaps inner 20' >/dev/null 2>&1 || true
         swaymsg 'gaps outer 20' >/dev/null 2>&1 || true
-        swaymsg "[floating workspace=\"^[0-9]+$\" app_id=\"^(?!($EXCLUDED)$).*$\"] floating disable; [tiling] border auto 2; gaps inner all set 20; gaps outer all set 20" >/dev/null 2>&1 || true
+        swaymsg "[workspace=\"^[0-9]+$\" app_id=\"^(?!($EXCLUDED)$).*$\"] floating disable; [tiling] border auto 2; gaps inner all set 20; gaps outer all set 20" >/dev/null 2>&1 || true
     else
-        swaymsg "[floating workspace=\"^[0-9]+$\" app_id=\"^(?!($EXCLUDED)$).*$\"] floating disable; [tiling] border auto 2; gaps inner all set 20; gaps outer all set 20" >/dev/null 2>&1 || true
+        swaymsg "[workspace=\"^[0-9]+$\" app_id=\"^(?!($EXCLUDED)$).*$\"] floating disable; [tiling] border auto 2; gaps inner all set 20; gaps outer all set 20" >/dev/null 2>&1 || true
         swaymsg reload >/dev/null 2>&1 || true
     fi
 else

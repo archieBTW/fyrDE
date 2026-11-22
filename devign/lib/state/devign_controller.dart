@@ -39,7 +39,10 @@ class DevignController extends ChangeNotifier {
 
   DevignTool activeTool = DevignTool.select;
   int rightPanelTab = 0; // 0=Design, 1=Prototype, 2=Code
-  int leftPanelTab = 0; // 0=Layers, 1=Assets
+  int leftPanelTab = 0; // 0=Layers, 1=Assets, 2=Tokens
+  bool showLeftPanel = true;
+  bool showRightPanel = true;
+  String layerSearchQuery = '';
   bool showGrid = true;
   bool showRulers = true;
   bool showComments = true;
@@ -63,6 +66,16 @@ class DevignController extends ChangeNotifier {
   String? statusMessage;
   Timer? _statusTimer;
   int _idSeq = 1;
+
+  DevignController() {
+    loadStarterWorkspace();
+  }
+
+  @override
+  void dispose() {
+    _statusTimer?.cancel();
+    super.dispose();
+  }
 
   DesignPage get activePage =>
       pages[activePageIndex.clamp(0, max(0, pages.length - 1))];
@@ -131,7 +144,7 @@ class DevignController extends ChangeNotifier {
     pages.add(page);
     activePageIndex = 0;
 
-    // Screen 1: Welcome / Login Screen (iPhone 15 Pro)
+    // Screen 1: Welcome / Login Screen (Fyr Phone)
     final loginFrameId = _nextId('frame');
     final loginFrame = DesignNode(
       id: loginFrameId,
@@ -168,7 +181,7 @@ class DevignController extends ChangeNotifier {
     page.rootIds.add(loginFrameId);
     page.flowStartFrameId = loginFrameId;
 
-    // Screen 2: Dashboard Screen (iPhone 15 Pro)
+    // Screen 2: Dashboard Screen (Fyr Phone)
     final dashFrameId = _nextId('frame');
     final dashFrame = DesignNode(
       id: dashFrameId,

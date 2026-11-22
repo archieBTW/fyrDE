@@ -234,6 +234,12 @@ class ProjectIO {
     }
   }
 
+  /// Composites all visible layers of [doc] into a straight-RGBA buffer.
+  static Future<Uint8List> compositeDocumentToStraightRgba(
+    GraphicsDocument doc,
+  ) =>
+      flattenLayers(doc.layers, doc.width, doc.height);
+
   /// Flattens a list of [RasterLayer]s onto a [width] x [height] canvas using
   /// hardware/Skia blend modes so exported output matches the viewport identically.
   static Future<Uint8List> flattenLayers(
