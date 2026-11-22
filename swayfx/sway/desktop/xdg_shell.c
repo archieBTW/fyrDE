@@ -318,17 +318,26 @@ static void handle_commit(struct wl_listener *listener, void *data) {
 
 	if (new_size) {
 		// The client changed its surface size in this commit. For floating
-		// containers, we resize the container to match. For tiling containers,
-		// we only recenter the surface.
+		// containers, we resize the container to match unless newer compositor
+		// configures are still pending (otherwise stale commits from rapid
+		// floating/tiling toggles echo back and cause a resize oscillation loop).
 		memcpy(&view->geometry, new_geo, sizeof(struct wlr_box));
+		bool has_pending_configure =
+			!wl_list_empty(&xdg_surface->configure_list) ||
+			xdg_surface->configure_idle != NULL;
 		if (container_is_floating(view->container)) {
-			view_update_size(view);
-			// Only set the toplevel size the current container actually has a size.
-			if (view->container->current.width) {
-				wlr_xdg_toplevel_set_size(view->wlr_xdg_toplevel, view->geometry.width,
-					view->geometry.height);
+			if (has_pending_configure) {
+				view_send_frame_done(view);
+			} else if (view->geometry.width != view->container->pending.content_width ||
+					view->geometry.height != view->container->pending.content_height) {
+				view_update_size(view);
+				// Only set the toplevel size the current container actually has a size.
+				if (view->container->current.width) {
+					wlr_xdg_toplevel_set_size(view->wlr_xdg_toplevel, view->geometry.width,
+						view->geometry.height);
+				}
+				transaction_commit_dirty_client();
 			}
-			transaction_commit_dirty_client();
 		}
 
 		view_center_and_clip_surface(view);

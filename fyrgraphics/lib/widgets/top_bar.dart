@@ -217,7 +217,7 @@ class TopBar extends StatelessWidget {
                   onPressed: doc == null
                       ? null
                       : () => FyrDialogs.showExportDialog(context, ctrl),
-                  icon: const Icon(Icons.ios_share_rounded, size: 14),
+                  icon: const Icon(Icons.upload_rounded, size: 14),
                   label: const Text('Export',
                       style:
                           TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600)),
@@ -624,85 +624,92 @@ class TopBar extends StatelessWidget {
     EditorController ctrl,
     GraphicsDocument? doc,
   ) {
-    Widget quickBtn(IconData icon, String label, VoidCallback? onTap) {
-      return Padding(
-        padding: const EdgeInsets.only(right: 4),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(6),
-          onTap: onTap,
-          child: Container(
-            height: 24,
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            decoration: BoxDecoration(
-              color: FyrTheme.cardColor.withValues(alpha: 0.7),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: FyrTheme.dividerColor),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(icon, size: 13, color: FyrTheme.textColor),
-                const SizedBox(width: 5),
-                Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
-                    color: FyrTheme.textColor,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
+    Widget divider() => Container(
+          width: 1,
+          height: 14,
+          margin: const EdgeInsets.symmetric(horizontal: 6),
+          color: FyrTheme.dividerColor,
+        );
+
+    final hasDoc = doc != null;
 
     return Container(
-      height: 34,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
+      height: 32,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
       decoration: BoxDecoration(
         color: FyrTheme.contentColor,
         border: Border(bottom: BorderSide(color: FyrTheme.dividerColor)),
       ),
       child: Row(
         children: [
-          quickBtn(Icons.folder_open_rounded, 'Open', () async {
-            final res = await FilePicker.pickFiles(
-              type: FileType.custom,
-              allowedExtensions: [
-                'png',
-                'jpg',
-                'jpeg',
-                'webp',
-                'bmp',
-                'gif',
-                'fyrg',
-              ],
-            );
-            if (res != null && res.files.single.path != null) {
-              await ctrl.openFileFromPath(res.files.single.path!);
-            }
-          }),
-          quickBtn(Icons.auto_fix_high_rounded, 'Auto Enhance', () {
-            ctrl.runImmediateFilter(
-              'Auto Enhance',
-              (s, w, h, m) => ProPixelOps.autoLevels(
-                ProPixelOps.autoWhiteBalance(s, selectionMask: m),
-                selectionMask: m,
-              ),
-            );
-          }),
-          quickBtn(Icons.tune_rounded, 'Adjust',
-              () => ProDialogs.showDevelopAdjust(context, ctrl, simpleMode: true)),
-          quickBtn(Icons.palette_outlined, 'Photo Looks',
-              () => ProDialogs.showPhotoLooks(context, ctrl)),
-          quickBtn(Icons.blur_on_rounded, 'Blur',
-              () => FyrDialogs.showGaussianBlur(context, ctrl)),
-          quickBtn(Icons.rotate_right_rounded, 'Rotate',
-              () => ctrl.rotateCanvas(90)),
-          quickBtn(Icons.flip_rounded, 'Flip',
-              () => ctrl.flipCanvas(horizontal: true)),
+          _SimpleQuickButton(
+            icon: Icons.folder_open_rounded,
+            label: 'Open',
+            onTap: () async {
+              final res = await FilePicker.pickFiles(
+                type: FileType.custom,
+                allowedExtensions: [
+                  'png',
+                  'jpg',
+                  'jpeg',
+                  'webp',
+                  'bmp',
+                  'gif',
+                  'fyrg',
+                ],
+              );
+              if (res != null && res.files.single.path != null) {
+                await ctrl.openFileFromPath(res.files.single.path!);
+              }
+            },
+          ),
+          divider(),
+          _SimpleQuickButton(
+            icon: Icons.auto_fix_high_rounded,
+            label: 'Auto Enhance',
+            accent: true,
+            onTap: hasDoc
+                ? () {
+                    ctrl.runImmediateFilter(
+                      'Auto Enhance',
+                      (s, w, h, m) => ProPixelOps.autoLevels(
+                        ProPixelOps.autoWhiteBalance(s, selectionMask: m),
+                        selectionMask: m,
+                      ),
+                    );
+                  }
+                : null,
+          ),
+          _SimpleQuickButton(
+            icon: Icons.tune_rounded,
+            label: 'Adjust',
+            onTap: hasDoc
+                ? () => ProDialogs.showDevelopAdjust(context, ctrl,
+                    simpleMode: true)
+                : null,
+          ),
+          _SimpleQuickButton(
+            icon: Icons.palette_outlined,
+            label: 'Photo Looks',
+            onTap: hasDoc ? () => ProDialogs.showPhotoLooks(context, ctrl) : null,
+          ),
+          _SimpleQuickButton(
+            icon: Icons.blur_on_rounded,
+            label: 'Blur',
+            onTap:
+                hasDoc ? () => FyrDialogs.showGaussianBlur(context, ctrl) : null,
+          ),
+          divider(),
+          _SimpleQuickButton(
+            icon: Icons.rotate_right_rounded,
+            label: 'Rotate',
+            onTap: hasDoc ? () => ctrl.rotateCanvas(90) : null,
+          ),
+          _SimpleQuickButton(
+            icon: Icons.flip_rounded,
+            label: 'Flip',
+            onTap: hasDoc ? () => ctrl.flipCanvas(horizontal: true) : null,
+          ),
           const SizedBox(width: 8),
           if (ctrl.statusMessage != null)
             Expanded(
@@ -719,37 +726,12 @@ class TopBar extends StatelessWidget {
             )
           else
             const Spacer(),
-          const SizedBox(width: 8),
-          InkWell(
-            borderRadius: BorderRadius.circular(6),
+          const SizedBox(width: 6),
+          _SimpleQuickButton(
+            icon: Icons.auto_awesome,
+            label: 'Pro Studio',
+            trailingIcon: Icons.chevron_right_rounded,
             onTap: () => ctrl.setWorkspaceMode(WorkspaceMode.advanced),
-            child: Container(
-              height: 24,
-              padding: const EdgeInsets.symmetric(horizontal: 9),
-              decoration: BoxDecoration(
-                color: FyrTheme.accentColor.withValues(alpha: 0.14),
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(
-                  color: FyrTheme.accentColor.withValues(alpha: 0.45),
-                ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.auto_awesome,
-                      size: 12, color: FyrTheme.accentColor),
-                  const SizedBox(width: 5),
-                  Text(
-                    'Switch to Advanced Pro Studio',
-                    style: TextStyle(
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w600,
-                      color: FyrTheme.accentColor,
-                    ),
-                  ),
-                ],
-              ),
-            ),
           ),
         ],
       ),
@@ -891,6 +873,104 @@ class _MenuButton extends StatelessWidget {
             fontSize: 11.5,
             fontWeight: FontWeight.w500,
             color: FyrTheme.textColorMuted,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SimpleQuickButton extends StatefulWidget {
+  final IconData icon;
+  final String label;
+  final IconData? trailingIcon;
+  final bool accent;
+  final VoidCallback? onTap;
+
+  const _SimpleQuickButton({
+    required this.icon,
+    required this.label,
+    this.trailingIcon,
+    this.accent = false,
+    required this.onTap,
+  });
+
+  @override
+  State<_SimpleQuickButton> createState() => _SimpleQuickButtonState();
+}
+
+class _SimpleQuickButtonState extends State<_SimpleQuickButton> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.onTap != null;
+    final activeHover = enabled && _hovered;
+
+    final Color bgColor;
+    final Color borderColor;
+    if (activeHover) {
+      bgColor = widget.accent
+          ? FyrTheme.accentColor.withValues(alpha: 0.14)
+          : FyrTheme.cardColor;
+      borderColor = widget.accent
+          ? FyrTheme.accentColor.withValues(alpha: 0.35)
+          : FyrTheme.dividerColor;
+    } else {
+      bgColor = Colors.transparent;
+      borderColor = Colors.transparent;
+    }
+
+    final Color iconColor;
+    final Color textColor;
+    if (!enabled) {
+      iconColor = FyrTheme.textColorMuted.withValues(alpha: 0.38);
+      textColor = FyrTheme.textColorMuted.withValues(alpha: 0.38);
+    } else if (widget.accent) {
+      iconColor = FyrTheme.accentColor;
+      textColor = activeHover ? FyrTheme.textColor : FyrTheme.textColorMuted;
+    } else {
+      iconColor = activeHover ? FyrTheme.textColor : FyrTheme.textColorMuted;
+      textColor = activeHover ? FyrTheme.textColor : FyrTheme.textColorMuted;
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 1),
+      child: MouseRegion(
+        cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          behavior: HitTestBehavior.opaque,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            height: 24,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            decoration: BoxDecoration(
+              color: bgColor,
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: borderColor),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(widget.icon, size: 13.5, color: iconColor),
+                const SizedBox(width: 5),
+                Text(
+                  widget.label,
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w500,
+                    color: textColor,
+                  ),
+                ),
+                if (widget.trailingIcon != null) ...[
+                  const SizedBox(width: 2),
+                  Icon(widget.trailingIcon, size: 13, color: iconColor),
+                ],
+              ],
+            ),
           ),
         ),
       ),
