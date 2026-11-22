@@ -5,14 +5,18 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:fyrtaskbar/models/notification.dart';
 import 'package:fyrtaskbar/services/app_service.dart';
 import 'package:fyrtaskbar/services/osd_service.dart';
+import 'package:fyrtaskbar/services/tray_service.dart';
 import 'package:fyrtaskbar/state/system_state.dart';
 import 'package:fyrtaskbar/ui/taskbar_screen.dart';
+import 'package:fyrtaskbar/ui/tray_menu_popup.dart';
 
 void main() {
   setUp(() {
     SystemState.clearAllNotifications();
     SystemState.doNotDisturb.value = false;
     SystemState.dismissScreenshotPreview();
+    SystemState.activeVpnName.value = null;
+    TrayService.resetForTest();
     SystemState.screenWidth = 1920;
     SystemState.screenHeight = 1080;
   });
@@ -286,8 +290,8 @@ void main() {
         // Top bar rect
         expect(rects[0]['y'], 0);
         expect(rects[0]['height'], 56);
-        // Top-right toast rect only (leaves rest of screen click-through)
-        expect(rects[1]['x'], greaterThan(1500));
+        // Top-center notification popup rect only (leaves rest of screen click-through)
+        expect(rects[1]['x'], (1920 - 356) ~/ 2);
         expect(rects[1]['y'], 56);
 
         // Screenshot toast also keeps the rest of the desktop click-through.
@@ -333,6 +337,142 @@ void main() {
           ),
           isTrue,
         );
+
+        await tester.pumpWidget(const SizedBox());
+        await tester.pump();
+      },
+    );
+
+    test('TrayService.parseRegistration handles all SNI registration forms', () {
+      expect(
+        TrayService.parseRegistration('/StatusNotifierItem', ':1.42'),
+        (':1.42', '/StatusNotifierItem'),
+      );
+      expect(
+        TrayService.parseRegistration(
+          'org.kde.StatusNotifierItem-proton.vpn.app.gtk-1234',
+          ':1.99',
+        ),
+        (
+          'org.kde.StatusNotifierItem-proton.vpn.app.gtk-1234',
+          '/StatusNotifierItem',
+        ),
+      );
+      expect(
+        TrayService.parseRegistration(':1.55/org/ayatana/NotificationItem/app', null),
+        (':1.55', '/org/ayatana/NotificationItem/app'),
+      );
+    });
+
+    test('TrayItem.displayLabel combines title and accessible status description', () {
+      const item = TrayItem(
+        serviceKey: 'org.kde.StatusNotifierItem-proton-1/StatusNotifierItem',
+        busName: 'org.kde.StatusNotifierItem-proton-1',
+        objectPath: '/StatusNotifierItem',
+        id: 'proton.vpn.app.gtk',
+        title: 'Proton VPN',
+        tooltip: '',
+        iconAccessibleDesc: 'VPN connected',
+        status: 'Active',
+        iconName: 'proton-vpn-sign',
+        iconThemePath: '',
+        resolvedIconFile: null,
+        pixmapImage: null,
+        itemIsMenu: true,
+        menuPath: '/MenuBar',
+      );
+      expect(item.displayTitle, 'Proton VPN');
+      expect(item.displayLabel, 'Proton VPN — VPN connected');
+    });
+
+    testWidgets(
+      'TaskbarScreen renders AppIndicator tray icons and TrayMenuPopup',
+      (WidgetTester tester) async {
+        await tester.binding.setSurfaceSize(const Size(1920, 1080));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        const vpnItem = TrayItem(
+          serviceKey: 'org.kde.StatusNotifierItem-proton-1/StatusNotifierItem',
+          busName: 'org.kde.StatusNotifierItem-proton-1',
+          objectPath: '/StatusNotifierItem',
+          id: 'proton.vpn.app.gtk',
+          title: 'Proton VPN',
+          tooltip: '',
+          iconAccessibleDesc: 'VPN connected',
+          status: 'Active',
+          iconName: 'proton-vpn-sign',
+          iconThemePath: '',
+          resolvedIconFile: null,
+          pixmapImage: null,
+          itemIsMenu: true,
+          menuPath: '/MenuBar',
+        );
+        TrayService.items.value = const [vpnItem];
+
+        await tester.pumpWidget(const MaterialApp(home: TaskbarScreen()));
+        await tester.pump();
+
+        final trayFinder = find.bySemanticsLabel('Proton VPN — VPN connected');
+        expect(trayFinder, findsOneWidget);
+        expect(find.byType(Tooltip), findsNothing);
+
+        // Tap the tray icon to open its popup menu
+        await tester.tap(trayFinder);
+        await tester.pumpAndSettle();
+
+        expect(find.byType(TrayMenuPopup), findsOneWidget);
+        expect(find.text('Proton VPN'), findsOneWidget);
+        expect(find.text('VPN connected'), findsOneWidget);
+
+        await tester.pumpWidget(const SizedBox());
+        await tester.pump();
+      },
+    );
+
+    test('SystemState.parseActiveVpnFromNmcli detects WireGuard and OpenVPN connections', () {
+      const sample = '''
+AWTR:802-11-wireless:activated
+pvpn-killswitch-ipv6:dummy:activated
+ProtonVPN US-TX#543:wireguard:activated
+lo:loopback:activated
+''';
+      expect(
+        SystemState.parseActiveVpnFromNmcli(sample),
+        'ProtonVPN US-TX#543',
+      );
+      expect(
+        SystemState.parseActiveVpnFromNmcli(
+          'Office\\:Primary:vpn:activated\nAWTR:802-11-wireless:activated\n',
+        ),
+        'Office:Primary',
+      );
+      expect(
+        SystemState.parseActiveVpnFromNmcli('AWTR:802-11-wireless:activated\n'),
+        isNull,
+      );
+    });
+
+    testWidgets(
+      'TaskbarScreen shows generic VPN indicator when activeVpnName is set',
+      (WidgetTester tester) async {
+        await tester.binding.setSurfaceSize(const Size(1920, 1080));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        SystemState.activeVpnName.value = 'Work WireGuard';
+        await tester.pumpWidget(const MaterialApp(home: TaskbarScreen()));
+        await tester.pump();
+
+        expect(find.bySemanticsLabel('VPN: Work WireGuard'), findsOneWidget);
+        expect(find.byIcon(Icons.vpn_lock_rounded), findsOneWidget);
+        expect(find.byType(Tooltip), findsNothing);
+
+        // Open Quick Settings and verify neither "Quick Settings" heading nor
+        // a Settings button appears in the menu.
+        await tester.tapAt(const Offset(1880, 28));
+        await tester.pumpAndSettle();
+        expect(find.text('Quick Settings'), findsNothing);
+        expect(find.byIcon(Icons.settings_rounded), findsNothing);
+        expect(find.text('Settings'), findsNothing);
 
         await tester.pumpWidget(const SizedBox());
         await tester.pump();

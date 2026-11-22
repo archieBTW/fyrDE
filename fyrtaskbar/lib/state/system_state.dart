@@ -29,6 +29,7 @@ class SystemState {
   static int screenWidth = 1920;
   static int screenHeight = 1080;
   static final ValueNotifier<String?> wifiSsid = ValueNotifier(null);
+  static final ValueNotifier<String?> activeVpnName = ValueNotifier(null);
   static final ValueNotifier<List<String>> bluetoothDevices = ValueNotifier([]);
   static final ValueNotifier<bool> bluetoothEnabled = ValueNotifier(false);
   static final ValueNotifier<double> volume = ValueNotifier(0.5);
@@ -64,6 +65,8 @@ class SystemState {
   static Timer? _timer;
   static SwaySubscription? _swaySub;
   static Process? _pactlSub;
+  static Process? _nmMonitor;
+  static Timer? _nmDebounce;
   static StreamSubscription<FileSystemEvent>? _swayDirSub;
   static StreamSubscription<FileSystemEvent>? _dockDirSub;
 
@@ -119,6 +122,7 @@ class SystemState {
     });
     _startSwaySubscription();
     _startAudioSubscription();
+    _startNetworkSubscription();
     _startConfigWatchers();
   }
 
@@ -127,10 +131,14 @@ class SystemState {
     _timer = null;
     _screenshotTimer?.cancel();
     _screenshotTimer = null;
+    _nmDebounce?.cancel();
+    _nmDebounce = null;
     await _swaySub?.cancel();
     _swaySub = null;
     _pactlSub?.kill();
     _pactlSub = null;
+    _nmMonitor?.kill();
+    _nmMonitor = null;
     await _swayDirSub?.cancel();
     _swayDirSub = null;
     await _dockDirSub?.cancel();
@@ -247,6 +255,105 @@ class SystemState {
     }).catchError((_) {});
   }
 
+  static void _startNetworkSubscription() {
+    Process.start('nmcli', ['monitor']).then((process) {
+      _nmMonitor = process;
+      process.stdout
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen(
+            (_) {
+              _nmDebounce?.cancel();
+              _nmDebounce = Timer(const Duration(milliseconds: 300), () {
+                _refreshVpn();
+              });
+            },
+            onDone: () {
+              if (_nmMonitor == process) {
+                Future.delayed(
+                  const Duration(seconds: 5),
+                  _startNetworkSubscription,
+                );
+              }
+            },
+            onError: (_) {},
+          );
+      process.stderr.drain<void>().catchError((_) {});
+    }).catchError((_) {});
+  }
+
+  static String? parseActiveVpnFromNmcli(String output) {
+    const vpnTypes = {'vpn', 'wireguard', 'tun'};
+    for (final rawLine in output.split('\n')) {
+      final line = rawLine.trim();
+      if (line.isEmpty) continue;
+      final lastColon = line.lastIndexOf(':');
+      if (lastColon <= 0) continue;
+      final state = line.substring(lastColon + 1).trim();
+      if (state != 'activated') continue;
+
+      final beforeState = line.substring(0, lastColon);
+      final typeColon = beforeState.lastIndexOf(':');
+      if (typeColon <= 0) continue;
+      final type = beforeState.substring(typeColon + 1).trim().toLowerCase();
+      if (!vpnTypes.contains(type)) continue;
+
+      final name = beforeState
+          .substring(0, typeColon)
+          .replaceAll(r'\:', ':')
+          .trim();
+      if (name.isNotEmpty) return name;
+    }
+    return null;
+  }
+
+  static Future<void> _refreshVpn() async {
+    try {
+      final res = await _runWithTimeout('nmcli', [
+        '-t',
+        '-f',
+        'NAME,TYPE,STATE',
+        'connection',
+        'show',
+        '--active',
+      ]);
+      if (res.exitCode == 0) {
+        final found = parseActiveVpnFromNmcli(res.stdout.toString());
+        if (found != null) {
+          activeVpnName.value = found;
+          return;
+        }
+      }
+      // Fallback for non-NetworkManager VPN interfaces (e.g. wg-quick, OpenVPN, Tailscale).
+      final netDir = Directory('/sys/class/net');
+      if (await netDir.exists()) {
+        for (final entry in netDir.listSync()) {
+          final iface = entry.uri.pathSegments
+              .where((s) => s.isNotEmpty)
+              .lastOrNull;
+          if (iface == null) continue;
+          final lower = iface.toLowerCase();
+          final isVpnIface =
+              lower.startsWith('wg') ||
+              lower.startsWith('tun') ||
+              lower.startsWith('proton') ||
+              lower.startsWith('mullvad') ||
+              lower.startsWith('tailscale');
+          if (!isVpnIface) continue;
+          final stateFile = File('${entry.path}/operstate');
+          if (await stateFile.exists()) {
+            final state = (await stateFile.readAsString()).trim().toLowerCase();
+            if (state == 'up' || state == 'unknown') {
+              activeVpnName.value = iface;
+              return;
+            }
+          }
+        }
+      }
+      activeVpnName.value = null;
+    } catch (_) {}
+  }
+
   static Future<void> _refreshVolume() async {
     try {
       final volResult = await _runWithTimeout('wpctl', [
@@ -352,6 +459,8 @@ class SystemState {
         }
         wifiSsid.value = ssid;
       }
+
+      await _refreshVpn();
 
       final btShowResult = await _runWithTimeout('bluetoothctl', ['show']);
       if (btShowResult.exitCode == 0) {

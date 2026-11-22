@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:dbus/dbus.dart';
 import 'package:flutter/foundation.dart';
+import 'package:fyrtaskbar/fyr_theme.dart';
 
 class TrayMenuEntry {
   final int id;
@@ -26,10 +27,13 @@ class TrayMenuEntry {
 class TrayItem {
   final String serviceKey; // "$busName$objectPath"
   final String busName;
+  final String uniqueOwner;
   final String objectPath;
+  final String interfaceName;
   final String id;
   final String title;
   final String tooltip;
+  final String iconAccessibleDesc;
   final String status; // 'Passive', 'Active', 'NeedsAttention'
   final String iconName;
   final String iconThemePath;
@@ -41,10 +45,13 @@ class TrayItem {
   const TrayItem({
     required this.serviceKey,
     required this.busName,
+    this.uniqueOwner = '',
     required this.objectPath,
+    this.interfaceName = 'org.kde.StatusNotifierItem',
     required this.id,
     required this.title,
     required this.tooltip,
+    this.iconAccessibleDesc = '',
     required this.status,
     required this.iconName,
     required this.iconThemePath,
@@ -54,9 +61,22 @@ class TrayItem {
     required this.menuPath,
   });
 
+  String get displayTitle {
+    if (title.isNotEmpty) return title;
+    if (tooltip.isNotEmpty) return tooltip;
+    if (id.isNotEmpty) return id;
+    return busName;
+  }
+
   String get displayLabel {
+    if (title.isNotEmpty &&
+        iconAccessibleDesc.isNotEmpty &&
+        iconAccessibleDesc.toLowerCase() != title.toLowerCase()) {
+      return '$title — $iconAccessibleDesc';
+    }
     if (tooltip.isNotEmpty) return tooltip;
     if (title.isNotEmpty) return title;
+    if (iconAccessibleDesc.isNotEmpty) return iconAccessibleDesc;
     if (id.isNotEmpty) return id;
     return busName;
   }
@@ -73,74 +93,95 @@ class _StatusNotifierWatcherObject extends DBusObject {
     required this.onRegisterHost,
   }) : super(DBusObjectPath('/StatusNotifierWatcher'));
 
-  static const _iface = 'org.kde.StatusNotifierWatcher';
+  static const _kdeIface = 'org.kde.StatusNotifierWatcher';
+  static const _fdoIface = 'org.freedesktop.StatusNotifierWatcher';
+  static const _ifaces = [_kdeIface, _fdoIface];
+
+  static DBusIntrospectInterface _buildIntrospect(String iface) =>
+      DBusIntrospectInterface(
+        iface,
+        methods: [
+          DBusIntrospectMethod(
+            'RegisterStatusNotifierItem',
+            args: [
+              DBusIntrospectArgument(
+                DBusSignature('s'),
+                DBusArgumentDirection.in_,
+                name: 'service',
+              ),
+            ],
+          ),
+          DBusIntrospectMethod(
+            'RegisterStatusNotifierHost',
+            args: [
+              DBusIntrospectArgument(
+                DBusSignature('s'),
+                DBusArgumentDirection.in_,
+                name: 'service',
+              ),
+            ],
+          ),
+        ],
+        properties: [
+          DBusIntrospectProperty(
+            'RegisteredStatusNotifierItems',
+            DBusSignature('as'),
+            access: DBusPropertyAccess.read,
+          ),
+          DBusIntrospectProperty(
+            'IsStatusNotifierHostRegistered',
+            DBusSignature('b'),
+            access: DBusPropertyAccess.read,
+          ),
+          DBusIntrospectProperty(
+            'ProtocolVersion',
+            DBusSignature('i'),
+            access: DBusPropertyAccess.read,
+          ),
+        ],
+        signals: [
+          DBusIntrospectSignal(
+            'StatusNotifierItemRegistered',
+            args: [
+              DBusIntrospectArgument(
+                DBusSignature('s'),
+                DBusArgumentDirection.out,
+              ),
+            ],
+          ),
+          DBusIntrospectSignal(
+            'StatusNotifierItemUnregistered',
+            args: [
+              DBusIntrospectArgument(
+                DBusSignature('s'),
+                DBusArgumentDirection.out,
+              ),
+            ],
+          ),
+          DBusIntrospectSignal('StatusNotifierHostRegistered'),
+        ],
+      );
 
   @override
-  List<DBusIntrospectInterface> introspect() => [
-    DBusIntrospectInterface(
-      _iface,
-      methods: [
-        DBusIntrospectMethod(
-          'RegisterStatusNotifierItem',
-          args: [
-            DBusIntrospectArgument(
-              DBusSignature('s'),
-              DBusArgumentDirection.in_,
-              name: 'service',
-            ),
-          ],
-        ),
-        DBusIntrospectMethod(
-          'RegisterStatusNotifierHost',
-          args: [
-            DBusIntrospectArgument(
-              DBusSignature('s'),
-              DBusArgumentDirection.in_,
-              name: 'service',
-            ),
-          ],
-        ),
-      ],
-      properties: [
-        DBusIntrospectProperty(
-          'RegisteredStatusNotifierItems',
-          DBusSignature('as'),
-          access: DBusPropertyAccess.read,
-        ),
-        DBusIntrospectProperty(
-          'IsStatusNotifierHostRegistered',
-          DBusSignature('b'),
-          access: DBusPropertyAccess.read,
-        ),
-        DBusIntrospectProperty(
-          'ProtocolVersion',
-          DBusSignature('i'),
-          access: DBusPropertyAccess.read,
-        ),
-      ],
-      signals: [
-        DBusIntrospectSignal(
-          'StatusNotifierItemRegistered',
-          args: [DBusIntrospectArgument(DBusSignature('s'), DBusArgumentDirection.out)],
-        ),
-        DBusIntrospectSignal(
-          'StatusNotifierItemUnregistered',
-          args: [DBusIntrospectArgument(DBusSignature('s'), DBusArgumentDirection.out)],
-        ),
-        DBusIntrospectSignal('StatusNotifierHostRegistered'),
-      ],
-    ),
-  ];
+  List<DBusIntrospectInterface> introspect() =>
+      _ifaces.map(_buildIntrospect).toList();
 
   @override
   Future<DBusMethodResponse> handleMethodCall(DBusMethodCall methodCall) async {
-    if (methodCall.interface == _iface) {
+    if (_ifaces.contains(methodCall.interface)) {
       if (methodCall.name == 'RegisterStatusNotifierItem') {
         final service = methodCall.values.isNotEmpty &&
                 methodCall.values.first is DBusString
             ? (methodCall.values.first as DBusString).value
             : '';
-        await onRegisterItem(service, methodCall.sender);
+        final sender = methodCall.sender;
+        // Reply immediately before querying the item's D-Bus properties.
+        // Single-threaded clients (e.g. ProtonVPN/GTK/libappindicator) call
+        // RegisterStatusNotifierItem synchronously and deadlock on GetAll if
+        // we wait here before sending the reply.
+        Future.delayed(Duration.zero, () {
+          onRegisterItem(service, sender);
+        });
         return DBusMethodSuccessResponse();
       }
       if (methodCall.name == 'RegisterStatusNotifierHost') {
@@ -157,7 +198,7 @@ class _StatusNotifierWatcherObject extends DBusObject {
 
   @override
   Future<DBusMethodResponse> getProperty(String interface, String name) async {
-    if (interface == _iface) {
+    if (_ifaces.contains(interface)) {
       if (name == 'RegisteredStatusNotifierItems') {
         return DBusGetPropertyResponse(
           DBusArray.string(getRegisteredItems()),
@@ -175,7 +216,7 @@ class _StatusNotifierWatcherObject extends DBusObject {
 
   @override
   Future<DBusMethodResponse> getAllProperties(String interface) async {
-    if (interface == _iface) {
+    if (_ifaces.contains(interface)) {
       return DBusGetAllPropertiesResponse({
         'RegisteredStatusNotifierItems':
             DBusArray.string(getRegisteredItems()),
@@ -187,25 +228,35 @@ class _StatusNotifierWatcherObject extends DBusObject {
   }
 
   void emitRegistered(String serviceKey) {
-    emitSignal(_iface, 'StatusNotifierItemRegistered', [
-      DBusString(serviceKey),
-    ]);
+    for (final iface in _ifaces) {
+      emitSignal(iface, 'StatusNotifierItemRegistered', [
+        DBusString(serviceKey),
+      ]);
+    }
   }
 
   void emitUnregistered(String serviceKey) {
-    emitSignal(_iface, 'StatusNotifierItemUnregistered', [
-      DBusString(serviceKey),
-    ]);
+    for (final iface in _ifaces) {
+      emitSignal(iface, 'StatusNotifierItemUnregistered', [
+        DBusString(serviceKey),
+      ]);
+    }
   }
 
   void emitHostRegistered() {
-    emitSignal(_iface, 'StatusNotifierHostRegistered', []);
+    for (final iface in _ifaces) {
+      emitSignal(iface, 'StatusNotifierHostRegistered', []);
+    }
   }
 }
 
 class TrayService {
-  static const _watcherBus = 'org.kde.StatusNotifierWatcher';
-  static const _itemIface = 'org.kde.StatusNotifierItem';
+  static const _kdeWatcherBus = 'org.kde.StatusNotifierWatcher';
+  static const _fdoWatcherBus = 'org.freedesktop.StatusNotifierWatcher';
+  static const _watcherBuses = [_kdeWatcherBus, _fdoWatcherBus];
+
+  static const _kdeItemIface = 'org.kde.StatusNotifierItem';
+  static const _fdoItemIface = 'org.freedesktop.StatusNotifierItem';
   static const _menuIface = 'com.canonical.dbusmenu';
 
   static final ValueNotifier<List<TrayItem>> items = ValueNotifier([]);
@@ -213,8 +264,12 @@ class TrayService {
   static DBusClient? _client;
   static _StatusNotifierWatcherObject? _watcher;
   static StreamSubscription<DBusSignal>? _nameOwnerSub;
+  static final Set<String> _ownedWatchers = {};
+  static final Map<String, StreamSubscription<DBusSignal>> _externalWatcherSubs =
+      {};
   static final Map<String, TrayItem> _itemMap = {};
-  static final Map<String, StreamSubscription<DBusSignal>> _itemSubs = {};
+  static final Map<String, List<StreamSubscription<DBusSignal>>> _itemSubs = {};
+  static final Map<String, Timer> _refreshTimers = {};
   static final Map<String, String?> _iconCache = {};
 
   static Future<void> init() async {
@@ -229,18 +284,14 @@ class TrayService {
       );
 
       await _client!.registerObject(_watcher!);
-      final reply = await _client!.requestName(
-        _watcherBus,
-        flags: {DBusRequestNameFlag.replaceExisting},
-      );
 
-      if (reply == DBusRequestNameReply.primaryOwner ||
-          reply == DBusRequestNameReply.alreadyOwner) {
-        _watcher!.emitHostRegistered();
-      } else {
-        // Another watcher already owns the name — subscribe as a host and pull existing items.
-        await _syncFromExternalWatcher();
+      for (final busName in _watcherBuses) {
+        await _claimOrSyncWatcher(busName);
       }
+
+      // Pick up any already-running StatusNotifierItem apps (e.g. after a
+      // taskbar restart while ProtonVPN or other tray apps are open).
+      await _discoverExistingItems();
 
       _nameOwnerSub = DBusSignalStream(
         _client!,
@@ -254,38 +305,76 @@ class TrayService {
           final newOwner = (signal.values[2] as DBusString).value;
           if (newOwner.isEmpty) {
             _removeByBusName(name);
+            if (_watcherBuses.contains(name) && !_ownedWatchers.contains(name)) {
+              _claimOrSyncWatcher(name);
+            }
           }
         }
       });
     } catch (_) {}
   }
 
-  static Future<void> _syncFromExternalWatcher() async {
+  static Future<void> _claimOrSyncWatcher(String watcherBus) async {
     if (_client == null) return;
     try {
+      final reply = await _client!.requestName(
+        watcherBus,
+        flags: {
+          DBusRequestNameFlag.replaceExisting,
+          DBusRequestNameFlag.doNotQueue,
+        },
+      );
+
+      if (reply == DBusRequestNameReply.primaryOwner ||
+          reply == DBusRequestNameReply.alreadyOwner) {
+        _ownedWatchers.add(watcherBus);
+        await _externalWatcherSubs.remove(watcherBus)?.cancel();
+        _watcher?.emitHostRegistered();
+      } else {
+        await _syncFromExternalWatcher(watcherBus);
+      }
+    } catch (_) {}
+  }
+
+  static Future<void> _syncFromExternalWatcher(String watcherBus) async {
+    if (_client == null) return;
+    try {
+      final hostPrefix = watcherBus.startsWith('org.freedesktop.')
+          ? 'org.freedesktop.StatusNotifierHost'
+          : 'org.kde.StatusNotifierHost';
+      final hostName = '$hostPrefix-$pid';
+      try {
+        await _client!.requestName(hostName);
+      } catch (_) {}
+
       final remote = DBusRemoteObject(
         _client!,
-        name: _watcherBus,
+        name: watcherBus,
         path: DBusObjectPath('/StatusNotifierWatcher'),
       );
-      await remote
-          .callMethod(_watcherBus, 'RegisterStatusNotifierHost', [
-            DBusString('org.kde.StatusNotifierHost-${pid}'),
-          ])
-          .timeout(const Duration(seconds: 1));
+      try {
+        await remote
+            .callMethod(watcherBus, 'RegisterStatusNotifierHost', [
+              DBusString(hostName),
+            ])
+            .timeout(const Duration(seconds: 1));
+      } catch (_) {}
+
       final prop = await remote
-          .getProperty(_watcherBus, 'RegisteredStatusNotifierItems')
+          .getProperty(watcherBus, 'RegisteredStatusNotifierItems')
           .timeout(const Duration(seconds: 1));
       if (prop is DBusArray) {
         for (final v in prop.children.whereType<DBusString>()) {
           await _handleRegisterItem(v.value, null);
         }
       }
-      DBusSignalStream(
+
+      await _externalWatcherSubs[watcherBus]?.cancel();
+      _externalWatcherSubs[watcherBus] = DBusSignalStream(
         _client!,
-        sender: _watcherBus,
+        sender: watcherBus,
         path: DBusObjectPath('/StatusNotifierWatcher'),
-        interface: _watcherBus,
+        interface: watcherBus,
       ).listen((sig) {
         if (sig.values.isEmpty || sig.values.first is! DBusString) return;
         final key = (sig.values.first as DBusString).value;
@@ -298,7 +387,8 @@ class TrayService {
     } catch (_) {}
   }
 
-  static (String, String) _parseRegistration(String service, String? sender) {
+  @visibleForTesting
+  static (String, String) parseRegistration(String service, String? sender) {
     final trimmed = service.trim();
     if (trimmed.startsWith('/')) {
       return (sender ?? '', trimmed);
@@ -307,15 +397,46 @@ class TrayService {
     if (slashIdx > 0) {
       return (trimmed.substring(0, slashIdx), trimmed.substring(slashIdx));
     }
-    return (trimmed.isNotEmpty ? trimmed : (sender ?? ''), '/StatusNotifierItem');
+    return (
+      trimmed.isNotEmpty ? trimmed : (sender ?? ''),
+      '/StatusNotifierItem',
+    );
+  }
+
+  static Future<void> _discoverExistingItems() async {
+    if (_client == null) return;
+    try {
+      final dbus = DBusRemoteObject(
+        _client!,
+        name: 'org.freedesktop.DBus',
+        path: DBusObjectPath('/org/freedesktop/DBus'),
+      );
+      final res = await dbus
+          .callMethod('org.freedesktop.DBus', 'ListNames', [])
+          .timeout(const Duration(seconds: 1));
+      if (res.values.isEmpty || res.values.first is! DBusArray) return;
+      for (final nameVal in (res.values.first as DBusArray).children) {
+        if (nameVal is! DBusString) continue;
+        final name = nameVal.value;
+        if (name.startsWith('org.kde.StatusNotifierItem-') ||
+            name.startsWith('org.freedesktop.StatusNotifierItem-')) {
+          await _handleRegisterItem(name, null);
+        }
+      }
+    } catch (_) {}
   }
 
   static Future<void> _handleRegisterItem(String service, String? sender) async {
-    final (busName, objectPath) = _parseRegistration(service, sender);
+    final (busName, objectPath) = parseRegistration(service, sender);
     if (busName.isEmpty || !objectPath.startsWith('/')) return;
 
     final serviceKey = '$busName$objectPath';
-    final item = await _fetchItem(serviceKey, busName, objectPath);
+    var item = await _fetchItem(serviceKey, busName, objectPath);
+    if (item == null) {
+      // Retry once in case the client registered before finishing object export.
+      await Future.delayed(const Duration(milliseconds: 300));
+      item = await _fetchItem(serviceKey, busName, objectPath);
+    }
     if (item == null) return;
 
     final isNew = !_itemMap.containsKey(serviceKey);
@@ -324,34 +445,57 @@ class TrayService {
 
     if (isNew) {
       _watcher?.emitRegistered(serviceKey);
-      _listenToItem(serviceKey, busName, objectPath);
+      _listenToItem(serviceKey, item);
     }
   }
 
-  static void _listenToItem(
-    String serviceKey,
-    String busName,
-    String objectPath,
-  ) {
-    if (_client == null) return;
-    _itemSubs[serviceKey]?.cancel();
-    _itemSubs[serviceKey] = DBusSignalStream(
-      _client!,
-      sender: busName,
-      path: DBusObjectPath(objectPath),
-      interface: _itemIface,
-    ).listen((_) async {
-      final updated = await _fetchItem(serviceKey, busName, objectPath);
-      if (updated != null && _itemMap.containsKey(serviceKey)) {
-        _itemMap[serviceKey] = updated;
+  static void _scheduleRefresh(TrayItem item) {
+    final key = item.serviceKey;
+    _refreshTimers[key]?.cancel();
+    _refreshTimers[key] = Timer(const Duration(milliseconds: 60), () async {
+      _refreshTimers.remove(key);
+      if (!_itemMap.containsKey(key)) return;
+      final updated = await _fetchItem(key, item.busName, item.objectPath);
+      if (updated != null && _itemMap.containsKey(key)) {
+        _itemMap[key] = updated;
         _publishItems();
       }
     });
   }
 
+  static void _listenToItem(String serviceKey, TrayItem item) {
+    if (_client == null) return;
+    final oldSubs = _itemSubs.remove(serviceKey);
+    if (oldSubs != null) {
+      for (final s in oldSubs) {
+        s.cancel();
+      }
+    }
+
+    final targetSender =
+        item.uniqueOwner.isNotEmpty ? item.uniqueOwner : item.busName;
+
+    final sniSub = DBusSignalStream(
+      _client!,
+      sender: targetSender,
+      path: DBusObjectPath(item.objectPath),
+      interface: item.interfaceName,
+    ).listen((_) => _scheduleRefresh(item));
+
+    final propsSub = DBusSignalStream(
+      _client!,
+      sender: targetSender,
+      path: DBusObjectPath(item.objectPath),
+      interface: 'org.freedesktop.DBus.Properties',
+      name: 'PropertiesChanged',
+    ).listen((_) => _scheduleRefresh(item));
+
+    _itemSubs[serviceKey] = [sniSub, propsSub];
+  }
+
   static void _removeByBusName(String busName) {
     final toRemove = _itemMap.values
-        .where((i) => i.busName == busName)
+        .where((i) => i.busName == busName || i.uniqueOwner == busName)
         .map((i) => i.serviceKey)
         .toList();
     for (final key in toRemove) {
@@ -361,7 +505,13 @@ class TrayService {
 
   static void _removeByServiceKey(String serviceKey) {
     if (!_itemMap.containsKey(serviceKey)) return;
-    _itemSubs.remove(serviceKey)?.cancel();
+    _refreshTimers.remove(serviceKey)?.cancel();
+    final subs = _itemSubs.remove(serviceKey);
+    if (subs != null) {
+      for (final s in subs) {
+        s.cancel();
+      }
+    }
     _itemMap.remove(serviceKey);
     _publishItems();
     _watcher?.emitUnregistered(serviceKey);
@@ -371,6 +521,26 @@ class TrayService {
     items.value = _itemMap.values
         .where((i) => i.status != 'Passive')
         .toList();
+  }
+
+  static Future<String> _resolveUniqueOwner(String busName) async {
+    if (_client == null || busName.startsWith(':')) return busName;
+    try {
+      final dbus = DBusRemoteObject(
+        _client!,
+        name: 'org.freedesktop.DBus',
+        path: DBusObjectPath('/org/freedesktop/DBus'),
+      );
+      final res = await dbus
+          .callMethod('org.freedesktop.DBus', 'GetNameOwner', [
+            DBusString(busName),
+          ])
+          .timeout(const Duration(milliseconds: 500));
+      if (res.values.isNotEmpty && res.values.first is DBusString) {
+        return (res.values.first as DBusString).value;
+      }
+    } catch (_) {}
+    return '';
   }
 
   static Future<TrayItem?> _fetchItem(
@@ -385,9 +555,22 @@ class TrayService {
         name: busName,
         path: DBusObjectPath(objectPath),
       );
-      final props = await obj
-          .getAllProperties(_itemIface)
-          .timeout(const Duration(seconds: 2));
+
+      String activeIface = _kdeItemIface;
+      Map<String, DBusValue> props = {};
+      for (final iface in [_kdeItemIface, _fdoItemIface]) {
+        try {
+          final fetched = await obj
+              .getAllProperties(iface)
+              .timeout(const Duration(seconds: 2));
+          if (fetched.isNotEmpty) {
+            props = fetched;
+            activeIface = iface;
+            break;
+          }
+        } catch (_) {}
+      }
+      if (props.isEmpty) return null;
 
       String readStr(String key) {
         final v = props[key];
@@ -396,14 +579,30 @@ class TrayService {
 
       final id = readStr('Id');
       final title = readStr('Title');
-      final status = readStr('Status').isNotEmpty ? readStr('Status') : 'Active';
-      final iconName = readStr('IconName');
+      final statusRaw = readStr('Status');
+      final status = statusRaw.isNotEmpty ? statusRaw : 'Active';
       final iconThemePath = readStr('IconThemePath');
+      final iconAccessibleDesc = readStr('IconAccessibleDesc').trim();
       final itemIsMenu = (props['ItemIsMenu'] as DBusBoolean?)?.value ?? false;
+
+      String iconName = readStr('IconName');
+      DBusValue? pixmapVal = props['IconPixmap'];
+      if (status == 'NeedsAttention') {
+        final attnName = readStr('AttentionIconName');
+        if (attnName.isNotEmpty) {
+          iconName = attnName;
+        }
+        if (props['AttentionIconPixmap'] is DBusArray &&
+            (props['AttentionIconPixmap'] as DBusArray).children.isNotEmpty) {
+          pixmapVal = props['AttentionIconPixmap'];
+        }
+      }
 
       String? menuPath;
       final menuVal = props['Menu'];
-      if (menuVal is DBusObjectPath && menuVal.value.isNotEmpty && menuVal.value != '/') {
+      if (menuVal is DBusObjectPath &&
+          menuVal.value.isNotEmpty &&
+          menuVal.value != '/') {
         menuPath = menuVal.value;
       }
 
@@ -411,24 +610,36 @@ class TrayService {
       final ttVal = props['ToolTip'];
       if (ttVal is DBusStruct && ttVal.children.length >= 3) {
         final ttTitle = ttVal.children[2] is DBusString
-            ? (ttVal.children[2] as DBusString).value
+            ? (ttVal.children[2] as DBusString).value.trim()
             : '';
-        tooltip = ttTitle.trim();
+        final ttDesc = ttVal.children.length >= 4 && ttVal.children[3] is DBusString
+            ? (ttVal.children[3] as DBusString).value.trim()
+            : '';
+        if (ttTitle.isNotEmpty && ttDesc.isNotEmpty && ttDesc != ttTitle) {
+          tooltip = '$ttTitle — $ttDesc';
+        } else {
+          tooltip = ttTitle.isNotEmpty ? ttTitle : ttDesc;
+        }
       }
 
       ui.Image? pixmapImage;
       final resolvedIcon = _resolveIconFile(iconName, iconThemePath);
-      if (resolvedIcon == null && props['IconPixmap'] is DBusArray) {
-        pixmapImage = await _decodeBestPixmap(props['IconPixmap'] as DBusArray);
+      if (resolvedIcon == null && pixmapVal is DBusArray) {
+        pixmapImage = await _decodeBestPixmap(pixmapVal);
       }
+
+      final uniqueOwner = await _resolveUniqueOwner(busName);
 
       return TrayItem(
         serviceKey: serviceKey,
         busName: busName,
+        uniqueOwner: uniqueOwner,
         objectPath: objectPath,
+        interfaceName: activeIface,
         id: id,
         title: title,
         tooltip: tooltip,
+        iconAccessibleDesc: iconAccessibleDesc,
         status: status,
         iconName: iconName,
         iconThemePath: iconThemePath,
@@ -496,25 +707,67 @@ class TrayService {
     if (iconName.startsWith('/')) {
       return File(iconName).existsSync() ? iconName : null;
     }
-    final cacheKey = '$iconThemePath::$iconName';
+
+    final activeTheme = FyrTheme.iconThemeName;
+    final cacheKey = '$activeTheme::$iconThemePath::$iconName';
     if (_iconCache.containsKey(cacheKey)) return _iconCache[cacheKey];
 
     const exts = ['.svg', '.png', '.xpm'];
+    final home = Platform.environment['HOME'] ?? '';
+
+    List<String> themeDirs(String theme) {
+      if (theme.isEmpty) return const [];
+      const subpaths = [
+        '24x24/panel',
+        '22x22/panel',
+        '24x24/status',
+        '22x22/status',
+        'scalable/status',
+        'symbolic/status',
+        '24x24/apps',
+        '32x32/apps',
+        '48x48/apps',
+        'scalable/apps',
+        'symbolic/apps',
+        '16x16/panel',
+        '16x16/status',
+        '16x16/apps',
+      ];
+      return [
+        for (final sub in subpaths) ...[
+          if (home.isNotEmpty) '$home/.local/share/icons/$theme/$sub',
+          '/usr/share/icons/$theme/$sub',
+        ],
+      ];
+    }
+
     final searchDirs = <String>[
       if (iconThemePath.isNotEmpty) iconThemePath,
-      '${Platform.environment['HOME'] ?? ''}/.local/share/icons/hicolor/scalable/apps',
-      '${Platform.environment['HOME'] ?? ''}/.local/share/icons/hicolor/48x48/apps',
+      ...themeDirs(activeTheme),
+      if (home.isNotEmpty) ...[
+        '$home/.local/share/icons/hicolor/scalable/status',
+        '$home/.local/share/icons/hicolor/scalable/apps',
+        '$home/.local/share/icons/hicolor/48x48/apps',
+        '$home/.local/share/icons/hicolor/32x32/apps',
+        '$home/.local/share/icons/hicolor/24x24/apps',
+        '$home/.local/share/icons/hicolor/22x22/status',
+      ],
       '/usr/share/icons/Papirus-Dark/24x24/panel',
       '/usr/share/icons/Papirus-Dark/24x24/apps',
       '/usr/share/icons/Papirus/24x24/panel',
       '/usr/share/icons/Papirus/24x24/apps',
-      '/usr/share/icons/hicolor/scalable/apps',
       '/usr/share/icons/hicolor/scalable/status',
+      '/usr/share/icons/hicolor/scalable/apps',
       '/usr/share/icons/hicolor/48x48/apps',
       '/usr/share/icons/hicolor/32x32/apps',
+      '/usr/share/icons/hicolor/24x24/status',
       '/usr/share/icons/hicolor/24x24/apps',
       '/usr/share/icons/hicolor/22x22/status',
+      '/usr/share/icons/hicolor/22x22/apps',
+      '/usr/share/icons/hicolor/16x16/status',
+      '/usr/share/icons/hicolor/16x16/apps',
       '/usr/share/icons/Adwaita/scalable/status',
+      '/usr/share/icons/Adwaita/symbolic/status',
       '/usr/share/pixmaps',
     ];
 
@@ -526,7 +779,7 @@ class TrayService {
           return path;
         }
       }
-      // Also check direct subdirectories in custom iconThemePath (e.g. hicolor/24x24/apps)
+      // Also check subdirectories in custom iconThemePath (e.g. hicolor/24x24/apps)
       if (dir == iconThemePath && Directory(dir).existsSync()) {
         try {
           for (final entity in Directory(dir).listSync(recursive: true)) {
@@ -557,12 +810,56 @@ class TrayService {
         path: DBusObjectPath(item.objectPath),
       );
       await obj
-          .callMethod(_itemIface, 'Activate', [DBusInt32(x), DBusInt32(y)])
+          .callMethod(item.interfaceName, 'Activate', [
+            DBusInt32(x),
+            DBusInt32(y),
+          ])
           .timeout(const Duration(seconds: 1));
       return true;
     } catch (_) {
       return false;
     }
+  }
+
+  static Future<bool> secondaryActivate(TrayItem item, int x, int y) async {
+    if (_client == null) return false;
+    try {
+      final obj = DBusRemoteObject(
+        _client!,
+        name: item.busName,
+        path: DBusObjectPath(item.objectPath),
+      );
+      await obj
+          .callMethod(item.interfaceName, 'SecondaryActivate', [
+            DBusInt32(x),
+            DBusInt32(y),
+          ])
+          .timeout(const Duration(seconds: 1));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<void> scroll(
+    TrayItem item,
+    int delta, {
+    String orientation = 'vertical',
+  }) async {
+    if (_client == null) return;
+    try {
+      final obj = DBusRemoteObject(
+        _client!,
+        name: item.busName,
+        path: DBusObjectPath(item.objectPath),
+      );
+      await obj
+          .callMethod(item.interfaceName, 'Scroll', [
+            DBusInt32(delta),
+            DBusString(orientation),
+          ])
+          .timeout(const Duration(milliseconds: 500));
+    } catch (_) {}
   }
 
   static Future<List<TrayMenuEntry>> fetchMenu(TrayItem item) async {
@@ -609,7 +906,8 @@ class TrayService {
     }
     final result = <TrayMenuEntry>[];
     for (final childVariant in (node.children[2] as DBusArray).children) {
-      final raw = childVariant is DBusVariant ? childVariant.value : childVariant;
+      final raw =
+          childVariant is DBusVariant ? childVariant.value : childVariant;
       if (raw is! DBusStruct || raw.children.length < 3) continue;
 
       final id = (raw.children[0] as DBusInt32?)?.value ?? 0;
@@ -685,10 +983,33 @@ class TrayService {
     } catch (_) {}
   }
 
+  @visibleForTesting
+  static void resetForTest() {
+    for (final t in _refreshTimers.values) {
+      t.cancel();
+    }
+    _refreshTimers.clear();
+    _itemMap.clear();
+    _iconCache.clear();
+    items.value = [];
+  }
+
   static Future<void> dispose() async {
     await _nameOwnerSub?.cancel();
-    for (final s in _itemSubs.values) {
+    _nameOwnerSub = null;
+    for (final s in _externalWatcherSubs.values) {
       await s.cancel();
+    }
+    _externalWatcherSubs.clear();
+    _ownedWatchers.clear();
+    for (final t in _refreshTimers.values) {
+      t.cancel();
+    }
+    _refreshTimers.clear();
+    for (final subs in _itemSubs.values) {
+      for (final s in subs) {
+        await s.cancel();
+      }
     }
     _itemSubs.clear();
     await _client?.close();

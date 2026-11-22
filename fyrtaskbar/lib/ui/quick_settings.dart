@@ -572,59 +572,6 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Padding(
-          padding: const EdgeInsets.only(bottom: 14),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Quick Settings',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.bold,
-                  color: FyrTheme.textColorMuted,
-                  letterSpacing: 0.4,
-                ),
-              ),
-              InkWell(
-                onTap: () {
-                  _runCmd('/opt/fyrsettings/fyrsettings', []);
-                  widget.onClose();
-                },
-                borderRadius: BorderRadius.circular(10),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 5,
-                  ),
-                  decoration: BoxDecoration(
-                    color: FyrTheme.cardColor.withOpacity(0.8),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.settings,
-                        size: 14,
-                        color: FyrTheme.textColor,
-                      ),
-                      const SizedBox(width: 5),
-                      Text(
-                        'Settings',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: FyrTheme.textColor,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
         Column(
           children: [
             Row(

@@ -127,10 +127,8 @@ exec --no-startup-id /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1 |
 # -------------------------------------------------------------
 # Status Bar
 # -------------------------------------------------------------
-# Disable the default swaybar
-bar {
-    mode invisible
-}
+# fyrtaskbar replaces swaybar; omitting a `bar {}` block prevents swaybar
+# from launching and claiming org.kde.StatusNotifierWatcher on D-Bus.
 
 # ==========================================
 # Fyrsearch Sway Configuration

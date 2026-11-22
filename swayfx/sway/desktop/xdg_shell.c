@@ -300,8 +300,14 @@ static void handle_commit(struct wl_listener *listener, void *data) {
 		}
 		// XXX: https://github.com/swaywm/sway/issues/2176
 		wlr_xdg_surface_schedule_configure(xdg_surface);
+		uint32_t wm_capabilities =
+			WLR_XDG_TOPLEVEL_WM_CAPABILITIES_FULLSCREEN |
+			WLR_XDG_TOPLEVEL_WM_CAPABILITIES_MAXIMIZE;
+		if (config->scratchpad_minimize) {
+			wm_capabilities |= WLR_XDG_TOPLEVEL_WM_CAPABILITIES_MINIMIZE;
+		}
 		wlr_xdg_toplevel_set_wm_capabilities(view->wlr_xdg_toplevel,
-			WLR_XDG_TOPLEVEL_WM_CAPABILITIES_FULLSCREEN);
+			wm_capabilities);
 		// TODO: wlr_xdg_toplevel_set_bounds()
 		return;
 	}
@@ -445,6 +451,9 @@ static void handle_request_minimize(struct wl_listener *listener, void *data) {
 	struct sway_xdg_shell_view *xdg_shell_view =
 		wl_container_of(listener, xdg_shell_view, request_minimize);
 	struct sway_container *container = xdg_shell_view->view.container;
+	if (!container) {
+		return;
+	}
 	if (!container->pending.workspace) {
 		while (container->pending.parent) {
 			container = container->pending.parent;

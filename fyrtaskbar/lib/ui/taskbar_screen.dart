@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -193,41 +194,70 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
   }
 
   Widget _buildTrayIcon(TrayItem item) {
+    Widget iconWidget;
     if (item.resolvedIconFile != null) {
       final path = item.resolvedIconFile!;
       if (path.toLowerCase().endsWith('.svg')) {
-        return SvgPicture.file(
+        iconWidget = SvgPicture.file(
           File(path),
           width: 18,
           height: 18,
           fit: BoxFit.contain,
+          placeholderBuilder: (_) => Icon(
+            Icons.apps_rounded,
+            size: 16,
+            color: FyrTheme.textColor.withValues(alpha: 0.75),
+          ),
+        );
+      } else {
+        iconWidget = Image.file(
+          File(path),
+          width: 18,
+          height: 18,
+          fit: BoxFit.contain,
+          errorBuilder: (_, __, ___) => Icon(
+            Icons.apps_rounded,
+            size: 16,
+            color: FyrTheme.textColor.withValues(alpha: 0.85),
+          ),
         );
       }
-      return Image.file(
-        File(path),
-        width: 18,
-        height: 18,
-        fit: BoxFit.contain,
-        errorBuilder: (_, __, ___) => Icon(
-          Icons.apps,
-          size: 16,
-          color: FyrTheme.textColor.withOpacity(0.85),
-        ),
-      );
-    }
-    if (item.pixmapImage != null) {
-      return RawImage(
+    } else if (item.pixmapImage != null) {
+      iconWidget = RawImage(
         image: item.pixmapImage,
         width: 18,
         height: 18,
         fit: BoxFit.contain,
       );
+    } else {
+      iconWidget = Icon(
+        Icons.shield_outlined,
+        size: 16,
+        color: FyrTheme.accentColor,
+      );
     }
-    return Icon(
-      Icons.circle,
-      size: 10,
-      color: FyrTheme.accentColor,
-    );
+
+    if (item.status == 'NeedsAttention') {
+      return Stack(
+        clipBehavior: Clip.none,
+        children: [
+          iconWidget,
+          Positioned(
+            right: -2,
+            top: -2,
+            child: Container(
+              width: 6,
+              height: 6,
+              decoration: BoxDecoration(
+                color: FyrTheme.accentColor,
+                shape: BoxShape.circle,
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+    return iconWidget;
   }
 
   bool _isOverlayLayer = false;
@@ -313,32 +343,49 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
           } catch (_) {}
         }
       } else {
-        // Passive toasts/notifications only: restrict input to the top bar and
-        // the top-right overlay area so the rest of the desktop stays clickable.
-        final int toastWidth = math.min(356, screenWidth);
-        final int toastX = math.max(0, screenWidth - toastWidth);
+        // Passive toasts/notifications only: restrict input to the top bar,
+        // top-center notification popups, and top-right screenshot toast so
+        // the rest of the desktop stays clickable.
         final int maxToastHeight = math.max(0, screenHeight - 56);
-        final int desiredToastHeight = popupCount > 0
-            ? (hasScreenshot ? 290 : 12) + math.min(popupCount, 3) * 180 + 24
-            : 290;
-        final int toastHeight = math.min(maxToastHeight, desiredToastHeight);
-        final regionKey =
-            'toast:$screenWidth:$toastX:$toastWidth:$toastHeight';
+        final rects = <Map<String, int>>[
+          {'x': 0, 'y': 0, 'width': screenWidth, 'height': 56},
+        ];
+        final keyParts = <String>['toast', '$screenWidth'];
+
+        if (popupCount > 0 && maxToastHeight > 0) {
+          final int popupWidth = math.min(356, screenWidth);
+          final int popupX = math.max(0, (screenWidth - popupWidth) ~/ 2);
+          final int popupHeight = math.min(
+            maxToastHeight,
+            12 + math.min(popupCount, 3) * 180 + 24,
+          );
+          rects.add({
+            'x': popupX,
+            'y': 56,
+            'width': popupWidth,
+            'height': popupHeight,
+          });
+          keyParts.add('p:$popupX:$popupWidth:$popupHeight');
+        }
+
+        if (hasScreenshot && maxToastHeight > 0) {
+          final int shotWidth = math.min(356, screenWidth);
+          final int shotX = math.max(0, screenWidth - shotWidth);
+          final int shotHeight = math.min(maxToastHeight, 290);
+          rects.add({
+            'x': shotX,
+            'y': 56,
+            'width': shotWidth,
+            'height': shotHeight,
+          });
+          keyParts.add('s:$shotX:$shotWidth:$shotHeight');
+        }
+
+        final regionKey = keyParts.join('|');
         if (_lastInputRegionKey != regionKey) {
           _lastInputRegionKey = regionKey;
           try {
-            await channel.invokeMethod('setInputRegion', {
-              'rects': [
-                {'x': 0, 'y': 0, 'width': screenWidth, 'height': 56},
-                if (toastHeight > 0)
-                  {
-                    'x': toastX,
-                    'y': 56,
-                    'width': toastWidth,
-                    'height': toastHeight,
-                  },
-              ],
-            });
+            await channel.invokeMethod('setInputRegion', {'rects': rects});
           } catch (_) {}
         }
       }
@@ -457,56 +504,54 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 ...trayItems.map((item) {
-                                  return Tooltip(
-                                    message: item.displayLabel,
-                                    child: GestureDetector(
-                                      behavior: HitTestBehavior.opaque,
-                                      onTapUp: (details) async {
-                                        if (item.itemIsMenu &&
-                                            item.menuPath != null) {
-                                          await _openTrayMenu(
-                                            item,
-                                            details.globalPosition,
-                                          );
-                                        } else {
-                                          final ok = await TrayService.activate(
-                                            item,
-                                            details.globalPosition.dx.round(),
-                                            details.globalPosition.dy.round(),
-                                          );
-                                          if (!ok && item.menuPath != null) {
-                                            await _openTrayMenu(
-                                              item,
-                                              details.globalPosition,
-                                            );
-                                          }
+                                  final isActive =
+                                      _activeTrayItem?.serviceKey ==
+                                      item.serviceKey;
+                                  return _TrayIconButton(
+                                    item: item,
+                                    isActive: isActive,
+                                    icon: _buildTrayIcon(item),
+                                    onPrimaryTap: (pos) async {
+                                      if (item.itemIsMenu &&
+                                          item.menuPath != null) {
+                                        await _openTrayMenu(item, pos);
+                                      } else {
+                                        final ok = await TrayService.activate(
+                                          item,
+                                          pos.dx.round(),
+                                          pos.dy.round(),
+                                        );
+                                        if (!ok && item.menuPath != null) {
+                                          await _openTrayMenu(item, pos);
                                         }
-                                      },
-                                      onSecondaryTapUp: (details) async {
-                                        if (item.menuPath != null) {
-                                          await _openTrayMenu(
-                                            item,
-                                            details.globalPosition,
-                                          );
-                                        }
-                                      },
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 8,
-                                        ),
-                                        alignment: Alignment.center,
-                                        child: _buildTrayIcon(item),
-                                      ),
-                                    ),
+                                      }
+                                    },
+                                    onSecondaryTap: (pos) async {
+                                      if (item.menuPath != null) {
+                                        await _openTrayMenu(item, pos);
+                                      }
+                                    },
+                                    onMiddleTap: (pos) async {
+                                      await TrayService.secondaryActivate(
+                                        item,
+                                        pos.dx.round(),
+                                        pos.dy.round(),
+                                      );
+                                    },
+                                    onScroll: (delta) {
+                                      TrayService.scroll(item, delta);
+                                    },
                                   );
                                 }),
                                 Container(
                                   width: 1,
                                   height: 18,
                                   margin: const EdgeInsets.symmetric(
-                                    horizontal: 4,
+                                    horizontal: 6,
                                   ),
-                                  color: FyrTheme.textColor.withOpacity(0.15),
+                                  color: FyrTheme.textColor.withValues(
+                                    alpha: 0.15,
+                                  ),
                                 ),
                               ],
                             );
@@ -705,6 +750,28 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                                   },
                                 ),
                                 ValueListenableBuilder<String?>(
+                                  valueListenable: SystemState.activeVpnName,
+                                  builder: (context, vpnName, _) {
+                                    if (vpnName == null || vpnName.isEmpty) {
+                                      return const SizedBox.shrink();
+                                    }
+                                    return Semantics(
+                                      container: true,
+                                      label: 'VPN: $vpnName',
+                                      child: Padding(
+                                        padding: const EdgeInsets.only(
+                                          right: 12,
+                                        ),
+                                        child: Icon(
+                                          Icons.vpn_lock_rounded,
+                                          color: FyrTheme.accentColor,
+                                          size: 18,
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
+                                ValueListenableBuilder<String?>(
                                   valueListenable: SystemState.wifiSsid,
                                   builder: (context, ssid, _) {
                                     return Icon(
@@ -852,7 +919,7 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                         ),
                       if (_activeTrayItem != null)
                         Positioned(
-                          top: 8,
+                          top: 12,
                           right: _trayMenuRight,
                           child: GestureDetector(
                             onTap: () {},
@@ -871,6 +938,85 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TrayIconButton extends StatefulWidget {
+  final TrayItem item;
+  final bool isActive;
+  final Widget icon;
+  final Future<void> Function(Offset globalPosition) onPrimaryTap;
+  final Future<void> Function(Offset globalPosition) onSecondaryTap;
+  final Future<void> Function(Offset globalPosition) onMiddleTap;
+  final void Function(int delta) onScroll;
+
+  const _TrayIconButton({
+    required this.item,
+    required this.isActive,
+    required this.icon,
+    required this.onPrimaryTap,
+    required this.onSecondaryTap,
+    required this.onMiddleTap,
+    required this.onScroll,
+  });
+
+  @override
+  State<_TrayIconButton> createState() => _TrayIconButtonState();
+}
+
+class _TrayIconButtonState extends State<_TrayIconButton> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final bgColor = widget.isActive
+        ? FyrTheme.accentColor.withValues(alpha: 0.22)
+        : (_hovered
+              ? FyrTheme.textColor.withValues(alpha: 0.1)
+              : Colors.transparent);
+    final borderColor = widget.isActive
+        ? FyrTheme.accentColor.withValues(alpha: 0.5)
+        : Colors.transparent;
+
+    return Semantics(
+      label: widget.item.displayLabel,
+      button: true,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2),
+        child: Listener(
+          onPointerSignal: (event) {
+            if (event is PointerScrollEvent && event.scrollDelta.dy != 0) {
+              widget.onScroll(event.scrollDelta.dy > 0 ? -1 : 1);
+            }
+          },
+          child: MouseRegion(
+            cursor: SystemMouseCursors.click,
+            onEnter: (_) => setState(() => _hovered = true),
+            onExit: (_) => setState(() => _hovered = false),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTapUp: (details) => widget.onPrimaryTap(details.globalPosition),
+              onSecondaryTapUp: (details) =>
+                  widget.onSecondaryTap(details.globalPosition),
+              onTertiaryTapUp: (details) =>
+                  widget.onMiddleTap(details.globalPosition),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 120),
+                width: 32,
+                height: 32,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: bgColor,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: borderColor, width: 1),
+                ),
+                child: widget.icon,
+              ),
+            ),
+          ),
         ),
       ),
     );
