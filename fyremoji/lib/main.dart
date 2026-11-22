@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
@@ -83,27 +83,51 @@ class _EmojiPickerScreenState extends State<EmojiPickerScreen> {
   void _onEmojiSelected(Category? category, Emoji emoji) {
     Clipboard.setData(ClipboardData(text: emoji.emoji));
     if (mounted) {
+      final isDark = FyrTheme.isDark;
+      ScaffoldMessenger.of(context).clearSnackBars();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            'Copied ${emoji.emoji} to clipboard!',
-            style: TextStyle(color: FyrTheme.textColor),
+          content: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(emoji.emoji, style: const TextStyle(fontSize: 16)),
+              const SizedBox(width: 8),
+              Text(
+                'Copied to clipboard',
+                style: TextStyle(
+                  color: FyrTheme.textColor,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
           ),
-          backgroundColor: FyrTheme.hoverColor,
-          duration: const Duration(seconds: 1),
+          backgroundColor: isDark
+              ? const Color(0xFF1F1D26).withValues(alpha: 0.92)
+              : Colors.white.withValues(alpha: 0.94),
+          duration: const Duration(milliseconds: 650),
           behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.all(8),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          margin: const EdgeInsets.all(10),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: FyrTheme.accentColor, width: 1.2),
+          ),
         ),
       );
     }
-    Future.delayed(const Duration(seconds: 1), () {
+    Future.delayed(const Duration(milliseconds: 650), () {
       if (mounted) _hidePicker();
     });
   }
 
   @override
   Widget build(BuildContext context) {
+    final isDark = FyrTheme.isDark;
+    final glassBg = isDark
+        ? const Color(0xFF18171D).withValues(alpha: 0.60)
+        : Colors.white.withValues(alpha: 0.72);
+    final rimColor = FyrTheme.accentColor.withValues(alpha: 0.32);
+
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: Focus(
@@ -117,75 +141,90 @@ class _EmojiPickerScreenState extends State<EmojiPickerScreen> {
           }
           return KeyEventResult.ignored;
         },
-        child: Container(
-          decoration: BoxDecoration(
-            color: FyrTheme.bgColor,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: FyrTheme.hoverColor),
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(16),
-            child: EmojiPicker(
-              key: ValueKey(_pickerSession),
-              onEmojiSelected: _onEmojiSelected,
-              config: Config(
-                checkPlatformCompatibility: true,
-                emojiViewConfig: EmojiViewConfig(
-                  columns: 7,
-                  emojiSizeMax: 32 * (Platform.isIOS ? 1.30 : 1.0),
-                  verticalSpacing: 0,
-                  horizontalSpacing: 0,
-                  gridPadding: EdgeInsets.zero,
-                  recentsLimit: 28,
-                  replaceEmojiOnLimitExceed: false,
-                  noRecents: Text(
-                    'No Recents',
-                    style: TextStyle(
-                      fontSize: 20,
-                      color: FyrTheme.textColor.withValues(alpha: 0.3),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(20),
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+            child: Container(
+              decoration: BoxDecoration(
+                color: glassBg,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: rimColor, width: 1.1),
+              ),
+              child: EmojiPicker(
+                key: ValueKey(_pickerSession),
+                onEmojiSelected: _onEmojiSelected,
+                config: Config(
+                  checkPlatformCompatibility: true,
+                  emojiViewConfig: EmojiViewConfig(
+                    columns: 8,
+                    emojiSizeMax: 28,
+                    verticalSpacing: 2,
+                    horizontalSpacing: 2,
+                    gridPadding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 6,
                     ),
-                    textAlign: TextAlign.center,
+                    recentsLimit: 28,
+                    replaceEmojiOnLimitExceed: false,
+                    noRecents: Text(
+                      'No Recents',
+                      style: TextStyle(
+                        fontSize: 15,
+                        color: FyrTheme.textColorMuted.withValues(alpha: 0.6),
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    loadingIndicator: const SizedBox.shrink(),
+                    buttonMode: ButtonMode.MATERIAL,
+                    backgroundColor: Colors.transparent,
                   ),
-                  loadingIndicator: const SizedBox.shrink(),
-                  buttonMode: ButtonMode.MATERIAL,
-                  backgroundColor: FyrTheme.bgColor,
-                ),
-                categoryViewConfig: CategoryViewConfig(
-                  initCategory: Category.RECENT,
-                  backgroundColor: FyrTheme.bgColor,
-                  indicatorColor: FyrTheme.accentColor,
-                  iconColor: FyrTheme.textColor.withValues(alpha: 0.5),
-                  iconColorSelected: FyrTheme.accentColor,
-                  backspaceColor: FyrTheme.accentColor,
-                  categoryIcons: const CategoryIcons(),
-                  tabIndicatorAnimDuration: kTabScrollDuration,
-                  recentTabBehavior: RecentTabBehavior.RECENT,
-                ),
-                skinToneConfig: SkinToneConfig(
-                  dialogBackgroundColor: FyrTheme.bgColor,
-                  indicatorColor: FyrTheme.textColor.withValues(alpha: 0.5),
-                  enabled: true,
-                ),
-                searchViewConfig: SearchViewConfig(
-                  backgroundColor: FyrTheme.bgColor,
-                  buttonIconColor: FyrTheme.textColor,
-                  inputTextStyle: TextStyle(
-                    color: FyrTheme.textColor,
-                    fontSize: 14,
+                  categoryViewConfig: CategoryViewConfig(
+                    initCategory: Category.RECENT,
+                    backgroundColor: isDark
+                        ? Colors.white.withValues(alpha: 0.04)
+                        : Colors.black.withValues(alpha: 0.04),
+                    indicatorColor: FyrTheme.accentColor,
+                    iconColor: FyrTheme.textColorMuted.withValues(alpha: 0.65),
+                    iconColorSelected: FyrTheme.accentColor,
+                    backspaceColor: FyrTheme.accentColor,
+                    dividerColor: isDark
+                        ? Colors.white.withValues(alpha: 0.08)
+                        : Colors.black.withValues(alpha: 0.08),
+                    categoryIcons: const CategoryIcons(),
+                    tabIndicatorAnimDuration: kTabScrollDuration,
+                    recentTabBehavior: RecentTabBehavior.RECENT,
                   ),
-                  hintTextStyle: TextStyle(
-                    color: FyrTheme.textColorMuted,
-                    fontSize: 14,
+                  skinToneConfig: SkinToneConfig(
+                    dialogBackgroundColor: isDark
+                        ? const Color(0xFF1F1D26)
+                        : Colors.white,
+                    indicatorColor: FyrTheme.accentColor,
+                    enabled: true,
                   ),
-                  customSearchView: (config, state, showEmojiView) =>
-                      _FyrEmojiSearchView(config, state, showEmojiView),
-                ),
-                bottomActionBarConfig: BottomActionBarConfig(
-                  showSearchViewButton: true,
-                  showBackspaceButton: false,
-                  backgroundColor: FyrTheme.bgColor,
-                  buttonColor: FyrTheme.bgColor,
-                  buttonIconColor: FyrTheme.textColor,
+                  searchViewConfig: SearchViewConfig(
+                    backgroundColor: Colors.transparent,
+                    buttonIconColor: FyrTheme.accentColor,
+                    inputTextStyle: TextStyle(
+                      color: FyrTheme.textColor,
+                      fontSize: 13.5,
+                    ),
+                    hintTextStyle: TextStyle(
+                      color: FyrTheme.textColorMuted,
+                      fontSize: 13,
+                    ),
+                    customSearchView: (config, state, showEmojiView) =>
+                        _FyrEmojiSearchView(config, state, showEmojiView),
+                  ),
+                  bottomActionBarConfig: BottomActionBarConfig(
+                    showSearchViewButton: true,
+                    showBackspaceButton: false,
+                    backgroundColor: isDark
+                        ? Colors.white.withValues(alpha: 0.04)
+                        : Colors.black.withValues(alpha: 0.04),
+                    buttonColor: Colors.transparent,
+                    buttonIconColor: FyrTheme.accentColor,
+                  ),
                 ),
               ),
             ),
@@ -267,81 +306,138 @@ class _FyrEmojiSearchViewState extends SearchViewState<_FyrEmojiSearchView> {
     });
   }
 
+  int _hoveredIndex = -1;
+
   @override
   Widget build(BuildContext context) {
+    final isDark = FyrTheme.isDark;
+    final searchFill = isDark
+        ? Colors.white.withValues(alpha: 0.07)
+        : Colors.black.withValues(alpha: 0.05);
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final columns = widget.config.emojiViewConfig.columns;
         final emojiSize =
             widget.config.emojiViewConfig.getEmojiSize(constraints.maxWidth);
-        final emojiBoxSize =
-            widget.config.emojiViewConfig.getEmojiBoxSize(constraints.maxWidth);
 
         return Container(
-          color: widget.config.searchViewConfig.backgroundColor,
+          color: Colors.transparent,
           child: Column(
             children: [
-              // Search input bar at top
-              Container(
-                height: 44,
-                padding: const EdgeInsets.symmetric(horizontal: 6),
-                decoration: BoxDecoration(
-                  border: Border(
-                    bottom: BorderSide(color: FyrTheme.dividerColor),
-                  ),
-                ),
+              // Frosted pill search input bar at top
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
                 child: Row(
                   children: [
-                    IconButton(
-                      onPressed: widget.showEmojiView,
-                      color: widget.config.searchViewConfig.buttonIconColor,
-                      icon: const Icon(Icons.arrow_back, size: 18),
-                      tooltip: 'Back to emojis',
-                    ),
-                    Expanded(
-                      child: TextField(
-                        controller: _queryController,
-                        focusNode: focusNode,
-                        autofocus: true,
-                        onChanged: onTextInputChanged,
-                        onSubmitted: (_) {
-                          if (results.isNotEmpty) {
-                            widget.state.onEmojiSelected(null, results.first);
-                          }
-                        },
-                        style: TextStyle(
-                          color: FyrTheme.textColor,
-                          fontSize: 14,
-                        ),
-                        cursorColor: FyrTheme.accentColor,
-                        decoration: InputDecoration(
-                          border: InputBorder.none,
-                          hintText: 'Search emojis (e.g. smile, fire, heart)...',
-                          hintStyle: TextStyle(
-                            color: FyrTheme.textColorMuted,
-                            fontSize: 13,
+                    InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: widget.showEmojiView,
+                      child: Container(
+                        width: 34,
+                        height: 34,
+                        decoration: BoxDecoration(
+                          color: searchFill,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: isDark
+                                ? Colors.white.withValues(alpha: 0.08)
+                                : Colors.black.withValues(alpha: 0.08),
                           ),
-                          isDense: true,
+                        ),
+                        child: Icon(
+                          Icons.arrow_back_rounded,
+                          size: 16,
+                          color: FyrTheme.accentColor,
                         ),
                       ),
                     ),
-                    if (_query.isNotEmpty)
-                      IconButton(
-                        icon: Icon(
-                          Icons.close,
-                          size: 16,
-                          color: FyrTheme.textColorMuted,
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Container(
+                        height: 36,
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        decoration: BoxDecoration(
+                          color: searchFill,
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: FyrTheme.accentColor.withValues(alpha: 0.55),
+                            width: 1.2,
+                          ),
                         ),
-                        onPressed: () {
-                          _queryController.clear();
-                          onTextInputChanged('');
-                          focusNode.requestFocus();
-                        },
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.search_rounded,
+                              size: 16,
+                              color: FyrTheme.accentColor,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: TextField(
+                                controller: _queryController,
+                                focusNode: focusNode,
+                                autofocus: true,
+                                onChanged: (v) {
+                                  _hoveredIndex = -1;
+                                  onTextInputChanged(v);
+                                },
+                                onSubmitted: (_) {
+                                  if (results.isNotEmpty) {
+                                    widget.state.onEmojiSelected(
+                                      null,
+                                      results.first,
+                                    );
+                                  }
+                                },
+                                style: TextStyle(
+                                  color: FyrTheme.textColor,
+                                  fontSize: 13.5,
+                                ),
+                                cursorColor: FyrTheme.accentColor,
+                                decoration: InputDecoration(
+                                  border: InputBorder.none,
+                                  hintText: 'Search emojis...',
+                                  hintStyle: TextStyle(
+                                    color: FyrTheme.textColorMuted,
+                                    fontSize: 13,
+                                  ),
+                                  isDense: true,
+                                ),
+                              ),
+                            ),
+                            if (_query.isNotEmpty)
+                              InkWell(
+                                borderRadius: BorderRadius.circular(10),
+                                onTap: () {
+                                  _queryController.clear();
+                                  onTextInputChanged('');
+                                  focusNode.requestFocus();
+                                },
+                                child: Padding(
+                                  padding: const EdgeInsets.all(3),
+                                  child: Icon(
+                                    Icons.close_rounded,
+                                    size: 15,
+                                    color: FyrTheme.textColorMuted,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
                       ),
+                    ),
                   ],
                 ),
               ),
-              // Scrollable grid of matching emojis
+              Divider(
+                height: 1,
+                thickness: 1,
+                color: isDark
+                    ? Colors.white.withValues(alpha: 0.08)
+                    : Colors.black.withValues(alpha: 0.08),
+              ),
+              // Scrollable grid of matching emojis with accent hover border
               Expanded(
                 child: results.isEmpty
                     ? Center(
@@ -356,18 +452,53 @@ class _FyrEmojiSearchViewState extends SearchViewState<_FyrEmojiSearchView> {
                         ),
                       )
                     : GridView.builder(
-                        padding: const EdgeInsets.all(6),
+                        padding: const EdgeInsets.all(8),
                         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                           crossAxisCount: columns,
-                          mainAxisSpacing: 2,
-                          crossAxisSpacing: 2,
+                          mainAxisSpacing: 4,
+                          crossAxisSpacing: 4,
                         ),
                         itemCount: results.length,
-                        itemBuilder: (context, index) => buildEmoji(
-                          results[index],
-                          emojiSize,
-                          emojiBoxSize,
-                        ),
+                        itemBuilder: (context, index) {
+                          final emoji = results[index];
+                          final hovered = index == _hoveredIndex;
+                          return MouseRegion(
+                            cursor: SystemMouseCursors.click,
+                            onEnter: (_) =>
+                                setState(() => _hoveredIndex = index),
+                            onExit: (_) {
+                              if (_hoveredIndex == index) {
+                                setState(() => _hoveredIndex = -1);
+                              }
+                            },
+                            child: GestureDetector(
+                              onTap: () =>
+                                  widget.state.onEmojiSelected(null, emoji),
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 100),
+                                alignment: Alignment.center,
+                                decoration: BoxDecoration(
+                                  color: hovered
+                                      ? (isDark
+                                          ? Colors.white.withValues(alpha: 0.08)
+                                          : Colors.black.withValues(alpha: 0.05))
+                                      : Colors.transparent,
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(
+                                    color: hovered
+                                        ? FyrTheme.accentColor
+                                        : Colors.transparent,
+                                    width: 1.5,
+                                  ),
+                                ),
+                                child: Text(
+                                  emoji.emoji,
+                                  style: TextStyle(fontSize: emojiSize * 0.78),
+                                ),
+                              ),
+                            ),
+                          );
+                        },
                       ),
               ),
             ],

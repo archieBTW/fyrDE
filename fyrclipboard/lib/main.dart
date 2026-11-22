@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'clipboard_store.dart';
@@ -204,215 +205,267 @@ class _ClipboardOverlayScreenState extends State<ClipboardOverlayScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = FyrTheme.isDark;
+    final glassBg = isDark
+        ? const Color(0xFF18171D).withValues(alpha: 0.60)
+        : Colors.white.withValues(alpha: 0.72);
+    final rimColor = isDark
+        ? Colors.white.withValues(alpha: 0.14)
+        : Colors.black.withValues(alpha: 0.10);
+    final searchFill = isDark
+        ? Colors.white.withValues(alpha: 0.07)
+        : Colors.black.withValues(alpha: 0.05);
+
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: Focus(
         onKeyEvent: _handleKey,
-        child: Container(
-          decoration: BoxDecoration(
-            color: FyrTheme.panelBgColor.withValues(alpha: 0.94),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: FyrTheme.cardColor, width: 1.2),
-          ),
-          clipBehavior: Clip.antiAlias,
-          child: Column(
-            children: [
-              // Header + Search bar
-              Container(
-                padding: const EdgeInsets.fromLTRB(14, 12, 10, 10),
-                decoration: BoxDecoration(
-                  border: Border(
-                    bottom: BorderSide(color: FyrTheme.dividerColor),
-                  ),
-                ),
-                child: Column(
-                  children: [
-                    Row(
-                      children: [
-                        Icon(
-                          Icons.content_paste_rounded,
-                          size: 18,
-                          color: FyrTheme.accentColor,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: TextField(
-                            controller: _searchController,
-                            focusNode: _searchFocusNode,
-                            autofocus: true,
-                            onChanged: (val) => setState(() {
-                              _query = val;
-                              _selectedIndex = 0;
-                            }),
-                            style: TextStyle(
-                              color: FyrTheme.textColor,
-                              fontSize: 14,
-                            ),
-                            cursorColor: FyrTheme.accentColor,
-                            decoration: InputDecoration(
-                              isDense: true,
-                              border: InputBorder.none,
-                              hintText: 'Search clipboard history...',
-                              hintStyle: TextStyle(
-                                color: FyrTheme.textColorMuted,
-                                fontSize: 13,
-                              ),
-                            ),
-                          ),
-                        ),
-                        if (_query.isNotEmpty)
-                          IconButton(
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(
-                              minWidth: 28,
-                              minHeight: 28,
-                            ),
-                            icon: Icon(
-                              Icons.close,
-                              size: 16,
-                              color: FyrTheme.textColorMuted,
-                            ),
-                            onPressed: () {
-                              _searchController.clear();
-                              setState(() {
-                                _query = '';
-                                _selectedIndex = 0;
-                              });
-                              _searchFocusNode.requestFocus();
-                            },
-                          ),
-                        Tooltip(
-                          message: 'Clear unpinned items',
-                          child: IconButton(
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(
-                              minWidth: 30,
-                              minHeight: 30,
-                            ),
-                            icon: Icon(
-                              Icons.delete_sweep_outlined,
-                              size: 18,
-                              color: FyrTheme.textColorMuted,
-                            ),
-                            onPressed: () => _store.clearUnpinned(),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        _FilterChip(
-                          label: 'All',
-                          selected: _filter == _ClipboardFilter.all,
-                          onTap: () => setState(() {
-                            _filter = _ClipboardFilter.all;
-                            _selectedIndex = 0;
-                          }),
-                        ),
-                        const SizedBox(width: 6),
-                        _FilterChip(
-                          label: 'Pinned',
-                          selected: _filter == _ClipboardFilter.pinned,
-                          onTap: () => setState(() {
-                            _filter = _ClipboardFilter.pinned;
-                            _selectedIndex = 0;
-                          }),
-                        ),
-                        const SizedBox(width: 6),
-                        _FilterChip(
-                          label: 'Text',
-                          selected: _filter == _ClipboardFilter.text,
-                          onTap: () => setState(() {
-                            _filter = _ClipboardFilter.text;
-                            _selectedIndex = 0;
-                          }),
-                        ),
-                        const SizedBox(width: 6),
-                        _FilterChip(
-                          label: 'Images',
-                          selected: _filter == _ClipboardFilter.images,
-                          onTap: () => setState(() {
-                            _filter = _ClipboardFilter.images;
-                            _selectedIndex = 0;
-                          }),
-                        ),
-                        const Spacer(),
-                        Text(
-                          'Enter to copy',
-                          style: TextStyle(
-                            fontSize: 10,
-                            color: FyrTheme.textColorMuted.withValues(alpha: 0.7),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(20),
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+            child: Container(
+              decoration: BoxDecoration(
+                color: glassBg,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: rimColor, width: 1.0),
               ),
-              // Entries list
-              Expanded(
-                child: ValueListenableBuilder<List<ClipboardEntry>>(
-                  valueListenable: _store.entries,
-                  builder: (context, allEntries, _) {
-                    final items = _filteredEntries(allEntries);
-                    if (items.isEmpty) {
-                      return Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
+              child: Column(
+                children: [
+                  // Header + Search pill
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
+                    child: Column(
+                      children: [
+                        Row(
                           children: [
-                            Icon(
-                              Icons.content_paste_off_outlined,
-                              size: 36,
-                              color: FyrTheme.textColorMuted.withValues(
-                                alpha: 0.4,
+                            Expanded(
+                              child: Container(
+                                height: 38,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: searchFill,
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(
+                                    color: isDark
+                                        ? Colors.white.withValues(alpha: 0.08)
+                                        : Colors.black.withValues(alpha: 0.08),
+                                  ),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      Icons.search_rounded,
+                                      size: 17,
+                                      color: FyrTheme.textColorMuted,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: TextField(
+                                        controller: _searchController,
+                                        focusNode: _searchFocusNode,
+                                        autofocus: true,
+                                        onChanged: (val) => setState(() {
+                                          _query = val;
+                                          _selectedIndex = 0;
+                                        }),
+                                        style: TextStyle(
+                                          color: FyrTheme.textColor,
+                                          fontSize: 13.5,
+                                        ),
+                                        cursorColor: FyrTheme.accentColor,
+                                        decoration: InputDecoration(
+                                          isDense: true,
+                                          border: InputBorder.none,
+                                          hintText: 'Search clipboard...',
+                                          hintStyle: TextStyle(
+                                            color: FyrTheme.textColorMuted,
+                                            fontSize: 13,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    if (_query.isNotEmpty)
+                                      InkWell(
+                                        borderRadius: BorderRadius.circular(12),
+                                        onTap: () {
+                                          _searchController.clear();
+                                          setState(() {
+                                            _query = '';
+                                            _selectedIndex = 0;
+                                          });
+                                          _searchFocusNode.requestFocus();
+                                        },
+                                        child: Padding(
+                                          padding: const EdgeInsets.all(4),
+                                          child: Icon(
+                                            Icons.close_rounded,
+                                            size: 15,
+                                            color: FyrTheme.textColorMuted,
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
                               ),
                             ),
-                            const SizedBox(height: 10),
-                            Text(
-                              _query.isNotEmpty
-                                  ? 'No matching clipboard items'
-                                  : 'Clipboard history is empty',
-                              style: TextStyle(
-                                color: FyrTheme.textColorMuted,
-                                fontSize: 13,
+                            const SizedBox(width: 8),
+                            Tooltip(
+                              message: 'Clear unpinned items',
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(12),
+                                onTap: () => _store.clearUnpinned(),
+                                child: Container(
+                                  width: 36,
+                                  height: 36,
+                                  decoration: BoxDecoration(
+                                    color: searchFill,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color: isDark
+                                          ? Colors.white.withValues(alpha: 0.08)
+                                          : Colors.black.withValues(alpha: 0.08),
+                                    ),
+                                  ),
+                                  child: Icon(
+                                    Icons.delete_sweep_outlined,
+                                    size: 17,
+                                    color: FyrTheme.textColorMuted,
+                                  ),
+                                ),
                               ),
                             ),
                           ],
                         ),
-                      );
-                    }
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            _FilterChip(
+                              label: 'All',
+                              selected: _filter == _ClipboardFilter.all,
+                              onTap: () => setState(() {
+                                _filter = _ClipboardFilter.all;
+                                _selectedIndex = 0;
+                              }),
+                            ),
+                            const SizedBox(width: 6),
+                            _FilterChip(
+                              label: 'Pinned',
+                              selected: _filter == _ClipboardFilter.pinned,
+                              onTap: () => setState(() {
+                                _filter = _ClipboardFilter.pinned;
+                                _selectedIndex = 0;
+                              }),
+                            ),
+                            const SizedBox(width: 6),
+                            _FilterChip(
+                              label: 'Text',
+                              selected: _filter == _ClipboardFilter.text,
+                              onTap: () => setState(() {
+                                _filter = _ClipboardFilter.text;
+                                _selectedIndex = 0;
+                              }),
+                            ),
+                            const SizedBox(width: 6),
+                            _FilterChip(
+                              label: 'Images',
+                              selected: _filter == _ClipboardFilter.images,
+                              onTap: () => setState(() {
+                                _filter = _ClipboardFilter.images;
+                                _selectedIndex = 0;
+                              }),
+                            ),
+                            const Spacer(),
+                            Text(
+                              '↵ Copy',
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                color: FyrTheme.textColorMuted.withValues(
+                                  alpha: 0.65,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  Divider(
+                    height: 1,
+                    thickness: 1,
+                    color: isDark
+                        ? Colors.white.withValues(alpha: 0.07)
+                        : Colors.black.withValues(alpha: 0.07),
+                  ),
+                  // Entries list
+                  Expanded(
+                    child: ValueListenableBuilder<List<ClipboardEntry>>(
+                      valueListenable: _store.entries,
+                      builder: (context, allEntries, _) {
+                        final items = _filteredEntries(allEntries);
+                        if (items.isEmpty) {
+                          return Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.content_paste_off_outlined,
+                                  size: 36,
+                                  color: FyrTheme.textColorMuted.withValues(
+                                    alpha: 0.4,
+                                  ),
+                                ),
+                                const SizedBox(height: 10),
+                                Text(
+                                  _query.isNotEmpty
+                                      ? 'No matching clipboard items'
+                                      : 'Clipboard history is empty',
+                                  style: TextStyle(
+                                    color: FyrTheme.textColorMuted,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }
 
-                    final safeSelected =
-                        _selectedIndex.clamp(0, items.length - 1);
+                        final safeSelected =
+                            _selectedIndex.clamp(0, items.length - 1);
 
-                    return ListView.builder(
-                      controller: _scrollController,
-                      padding: const EdgeInsets.all(10),
-                      itemCount: items.length,
-                      itemBuilder: (context, index) {
-                        final entry = items[index];
-                        final isSelected = index == safeSelected;
-                        return _ClipboardItemCard(
-                          entry: entry,
-                          isSelected: isSelected,
-                          relativeTime: _formatRelativeTime(entry.timestamp),
-                          sizeLabel: _formatBytes(entry.byteSize),
-                          onTap: () => _selectEntry(entry),
-                          onHover: () {
-                            if (_selectedIndex != index) {
-                              setState(() => _selectedIndex = index);
-                            }
+                        return ListView.builder(
+                          controller: _scrollController,
+                          padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                          itemCount: items.length,
+                          itemBuilder: (context, index) {
+                            final entry = items[index];
+                            final isHighlighted = index == safeSelected;
+                            return _ClipboardItemCard(
+                              entry: entry,
+                              isHighlighted: isHighlighted,
+                              relativeTime: _formatRelativeTime(
+                                entry.timestamp,
+                              ),
+                              sizeLabel: _formatBytes(entry.byteSize),
+                              onTap: () => _selectEntry(entry),
+                              onHover: () {
+                                if (_selectedIndex != index) {
+                                  setState(() => _selectedIndex = index);
+                                }
+                              },
+                              onPin: () => _store.togglePin(entry.id),
+                              onDelete: () => _store.deleteEntry(entry.id),
+                            );
                           },
-                          onPin: () => _store.togglePin(entry.id),
-                          onDelete: () => _store.deleteEntry(entry.id),
                         );
                       },
-                    );
-                  },
-                ),
+                    ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         ),
       ),
@@ -433,28 +486,29 @@ class _FilterChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = FyrTheme.isDark;
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(10),
-      child: Container(
+      borderRadius: BorderRadius.circular(14),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
         decoration: BoxDecoration(
-          color: selected
-              ? FyrTheme.accentColor.withValues(alpha: 0.22)
-              : FyrTheme.cardColor.withValues(alpha: 0.6),
-          borderRadius: BorderRadius.circular(10),
+          color: isDark
+              ? Colors.white.withValues(alpha: selected ? 0.10 : 0.04)
+              : Colors.black.withValues(alpha: selected ? 0.08 : 0.03),
+          borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color: selected
-                ? FyrTheme.accentColor
-                : Colors.transparent,
+            color: selected ? FyrTheme.accentColor : Colors.transparent,
+            width: 1.2,
           ),
         ),
         child: Text(
           label,
           style: TextStyle(
             fontSize: 11,
-            fontWeight: selected ? FontWeight.bold : FontWeight.w500,
-            color: selected ? FyrTheme.accentColor : FyrTheme.textColorMuted,
+            fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+            color: selected ? FyrTheme.textColor : FyrTheme.textColorMuted,
           ),
         ),
       ),
@@ -464,7 +518,7 @@ class _FilterChip extends StatelessWidget {
 
 class _ClipboardItemCard extends StatelessWidget {
   final ClipboardEntry entry;
-  final bool isSelected;
+  final bool isHighlighted;
   final String relativeTime;
   final String sizeLabel;
   final VoidCallback onTap;
@@ -474,7 +528,7 @@ class _ClipboardItemCard extends StatelessWidget {
 
   const _ClipboardItemCard({
     required this.entry,
-    required this.isSelected,
+    required this.isHighlighted,
     required this.relativeTime,
     required this.sizeLabel,
     required this.onTap,
@@ -485,23 +539,40 @@ class _ClipboardItemCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = FyrTheme.isDark;
+    final cardSurface = isDark
+        ? Colors.white.withValues(alpha: 0.055)
+        : Colors.black.withValues(alpha: 0.04);
+    final subtleBorder = isDark
+        ? Colors.white.withValues(alpha: 0.07)
+        : Colors.black.withValues(alpha: 0.07);
+
     return MouseRegion(
+      cursor: SystemMouseCursors.click,
       onEnter: (_) => onHover(),
       child: GestureDetector(
         onTap: onTap,
-        child: Container(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 110),
+          curve: Curves.easeOutCubic,
           margin: const EdgeInsets.only(bottom: 8),
-          padding: const EdgeInsets.all(10),
+          padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
           decoration: BoxDecoration(
-            color: isSelected
-                ? FyrTheme.accentColor.withValues(alpha: 0.16)
-                : FyrTheme.cardColor.withValues(alpha: 0.7),
-            borderRadius: BorderRadius.circular(12),
+            color: cardSurface,
+            borderRadius: BorderRadius.circular(14),
             border: Border.all(
-              color: isSelected
-                  ? FyrTheme.accentColor.withValues(alpha: 0.75)
-                  : FyrTheme.dividerColor,
+              color: isHighlighted ? FyrTheme.accentColor : subtleBorder,
+              width: isHighlighted ? 1.6 : 1.0,
             ),
+            boxShadow: isHighlighted
+                ? [
+                    BoxShadow(
+                      color: FyrTheme.accentColor.withValues(alpha: 0.16),
+                      blurRadius: 10,
+                      spreadRadius: 0,
+                    ),
+                  ]
+                : null,
           ),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -514,7 +585,7 @@ class _ClipboardItemCard extends StatelessWidget {
                         entry.imagePath != null &&
                         File(entry.imagePath!).existsSync())
                       ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(10),
                         child: Image.file(
                           File(entry.imagePath!),
                           height: 88,
@@ -530,7 +601,7 @@ class _ClipboardItemCard extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontSize: 13,
-                          height: 1.35,
+                          height: 1.38,
                           color: FyrTheme.textColor,
                         ),
                       ),
@@ -542,7 +613,7 @@ class _ClipboardItemCard extends StatelessWidget {
                               ? Icons.image_outlined
                               : Icons.notes_rounded,
                           size: 12,
-                          color: FyrTheme.textColorMuted,
+                          color: FyrTheme.textColorMuted.withValues(alpha: 0.8),
                         ),
                         const SizedBox(width: 4),
                         Text(
@@ -550,24 +621,26 @@ class _ClipboardItemCard extends StatelessWidget {
                               ? 'Image • $sizeLabel'
                               : '${entry.text.length} chars',
                           style: TextStyle(
-                            fontSize: 10,
-                            color: FyrTheme.textColorMuted,
+                            fontSize: 10.5,
+                            color: FyrTheme.textColorMuted.withValues(
+                              alpha: 0.85,
+                            ),
                           ),
                         ),
                         const SizedBox(width: 8),
                         Text(
                           relativeTime,
                           style: TextStyle(
-                            fontSize: 10,
+                            fontSize: 10.5,
                             color: FyrTheme.textColorMuted.withValues(
-                              alpha: 0.8,
+                              alpha: 0.65,
                             ),
                           ),
                         ),
                         if (entry.pinned) ...[
                           const SizedBox(width: 8),
                           Icon(
-                            Icons.push_pin,
+                            Icons.push_pin_rounded,
                             size: 11,
                             color: FyrTheme.accentColor,
                           ),
@@ -589,11 +662,15 @@ class _ClipboardItemCard extends StatelessWidget {
                     ),
                     tooltip: entry.pinned ? 'Unpin' : 'Pin',
                     icon: Icon(
-                      entry.pinned ? Icons.push_pin : Icons.push_pin_outlined,
-                      size: 15,
+                      entry.pinned
+                          ? Icons.push_pin_rounded
+                          : Icons.push_pin_outlined,
+                      size: 14,
                       color: entry.pinned
                           ? FyrTheme.accentColor
-                          : FyrTheme.textColorMuted,
+                          : FyrTheme.textColorMuted.withValues(
+                              alpha: isHighlighted ? 0.9 : 0.55,
+                            ),
                     ),
                     onPressed: onPin,
                   ),
@@ -605,9 +682,11 @@ class _ClipboardItemCard extends StatelessWidget {
                     ),
                     tooltip: 'Delete',
                     icon: Icon(
-                      Icons.close,
-                      size: 15,
-                      color: FyrTheme.textColorMuted,
+                      Icons.close_rounded,
+                      size: 14,
+                      color: FyrTheme.textColorMuted.withValues(
+                        alpha: isHighlighted ? 0.9 : 0.55,
+                      ),
                     ),
                     onPressed: onDelete,
                   ),

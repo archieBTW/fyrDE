@@ -37,6 +37,17 @@ class OverlayWindowController {
     _isVisible = initiallyVisible;
     await stop();
 
+    try {
+      _channel.setMethodCallHandler((call) async {
+        if (call.method == 'onHidden') {
+          _isVisible = false;
+          onHide?.call();
+        }
+      });
+    } catch (_) {
+      // Ignore handler setup in unit tests without a Flutter binding.
+    }
+
     final sockFile = File(socketPath);
     if (!sockFile.parent.existsSync()) {
       sockFile.parent.createSync(recursive: true);

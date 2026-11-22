@@ -171,7 +171,7 @@ bindsym $mod+Ctrl exec ~/.config/fyr/help_toggle.sh
 # Fyremoji Sway Configuration
 # ==========================================
 exec /opt/fyremoji/fyremoji
-layer_effects "fyremoji" blur enable; corner_radius 16
+layer_effects "fyremoji" blur enable; blur_ignore_transparent enable; corner_radius 20; shadows enable
 bindsym $mod+period exec ~/.config/fyr/emoji_toggle.sh
 
 
@@ -179,7 +179,7 @@ bindsym $mod+period exec ~/.config/fyr/emoji_toggle.sh
 # Fyrclipboard Sway Configuration
 # ==========================================
 exec /opt/fyrclipboard/fyrclipboard
-layer_effects "fyrclipboard" blur enable; corner_radius 16
+layer_effects "fyrclipboard" blur enable; blur_ignore_transparent enable; corner_radius 20; shadows enable
 bindsym Mod1+v exec ~/.config/fyr/clipboard_toggle.sh
 
 

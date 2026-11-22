@@ -33,7 +33,7 @@ static void my_application_activate(GApplication* application) {
   cfg.width = 460;
   cfg.height = 540;
   cfg.start_hidden = !fyr_core::ShouldStartShown(self->dart_entrypoint_arguments);
-  cfg.hide_on_focus_out = true;
+  cfg.hide_on_focus_out = false;
   fyr_core::ConfigureLayerOverlayWindow(window, cfg);
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();

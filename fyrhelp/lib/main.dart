@@ -70,6 +70,21 @@ class _HelpScreenState extends State<HelpScreen> {
     Process.start('swaymsg', ['move', 'scratchpad'], mode: ProcessStartMode.detached);
   }
 
+  Widget _buildSectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 14.0, bottom: 4.0, left: 8.0),
+      child: Text(
+        title.toUpperCase(),
+        style: TextStyle(
+          color: FyrTheme.accentColor,
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 1.0,
+        ),
+      ),
+    );
+  }
+
   Widget _buildShortcut(String keys, String description) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 8.0),
@@ -163,31 +178,38 @@ class _HelpScreenState extends State<HelpScreen> {
                 Expanded(
                   child: ListView(
                     children: [
+                      _buildSectionHeader('System & Overlays'),
+                      _buildShortcut('Super + Space', 'Open App Launcher (fyrSearch)'),
+                      _buildShortcut('Super + Tab', 'Open Overview (fyrOverview)'),
+                      _buildShortcut('Super + W', 'Open Workspace Overview (fyrWindowOverview)'),
+                      _buildShortcut('Alt + V', 'Open Clipboard History (fyrClipboard)'),
+                      _buildShortcut('Super + .', 'Open Emoji Picker (fyrEmoji)'),
+                      _buildShortcut('Super + Ctrl', 'Show This Cheatsheet (fyrHelp)'),
+                      _buildShortcut('Ctrl + Shift + Esc', 'Open Task Manager (fyrMonitor)'),
+                      _buildShortcut('Super + T', 'Open Terminal (fyrTerm)'),
+                      _buildShortcut('Super + F', 'Open File Manager (fyrFiles)'),
                       _buildShortcut('Super + L', 'Lock Screen'),
+                      _buildSectionHeader('Window Management'),
                       _buildShortcut('Super + Q', 'Close Focused Window'),
+                      _buildShortcut('Super + M', 'Toggle Floating / Tiling Mode'),
                       _buildShortcut('Alt + Tab', 'Focus Next Window'),
                       _buildShortcut('Alt + Shift + Tab', 'Focus Previous Window'),
-                      _buildShortcut('Super + T', 'Open Terminal (fyrterm)'),
-                      _buildShortcut('Super + F', 'Open File Manager (fyr_files)'),
-                      _buildShortcut('Super + M', 'Toggle Floating Mode'),
-                      _buildShortcut('Super + Space', 'Open App Launcher (fyrsearch)'),
-                      _buildShortcut('Super + Tab', 'Open Overview (fyroverview)'),
-                      _buildShortcut('Super + Ctrl', 'Show This Cheatsheet (fyrhelp)'),
-                      _buildShortcut('Super + .', 'Open Emoji Picker (fyremoji)'),
-                      _buildShortcut('Alt + V', 'Open Clipboard History (fyrclipboard)'),
-                      _buildShortcut('Ctrl + Shift + Esc', 'Open Task Manager (fyrmonitor)'),
-                      _buildShortcut('Super + V', 'Split Vertical'),
-                      _buildShortcut('Super + H', 'Split Horizontal'),
+                      _buildShortcut('Super + V', 'Split Vertical (Tiling Mode)'),
+                      _buildShortcut('Super + H', 'Split Horizontal (Tiling Mode)'),
+                      _buildShortcut('Super + Arrows', 'Change Window Focus'),
+                      _buildShortcut('Super + Shift + Arrows', 'Resize Window'),
+                      _buildSectionHeader('Workspaces & Touchpad Gestures'),
                       _buildShortcut('Super + 1..0', 'Switch to Workspace 1..10'),
                       _buildShortcut('Super + Shift + 1..0', 'Move Window to Workspace 1..10'),
-                      _buildShortcut('Super + Arrows', 'Change Focus'),
-                      _buildShortcut('Super + Shift + Arrows', 'Resize Window'),
-                      _buildShortcut('Swipe 3 L/R', 'Prev/Next Workspace'),
-                      _buildShortcut('Swipe 3 D/U', 'Show/Hide Overview'),
+                      _buildShortcut('Swipe 3 Fingers L / R', 'Previous / Next Workspace'),
+                      _buildShortcut('Swipe 3 Fingers D / U', 'Show / Hide Overview'),
+                      _buildSectionHeader('Screenshots, Recording & Media'),
                       _buildShortcut('Print Screen', 'Screenshot (Full Screen)'),
                       _buildShortcut('Shift + Print Screen', 'Screenshot (Select Region)'),
                       _buildShortcut('Alt + Print Screen', 'Screenshot (Focused Window)'),
                       _buildShortcut('Super + Print Screen', 'Toggle Screen Recording'),
+                      _buildShortcut('Volume / Mute Keys', 'Adjust Audio & Mic (OSD)'),
+                      _buildShortcut('Brightness Keys', 'Adjust Screen Brightness (OSD)'),
                     ],
                   ),
                 ),
