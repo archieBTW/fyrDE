@@ -9,19 +9,19 @@ class ScreenshotToastOverlay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<ScreenshotPreview?>(
-      valueListenable: SystemState.activeScreenshotToast,
-      builder: (context, preview, _) {
-        if (preview == null) return const SizedBox.shrink();
-        return Positioned(
-          top: 12,
-          right: 20,
-          child: GestureDetector(
+    return Positioned(
+      top: 12,
+      right: 20,
+      child: ValueListenableBuilder<ScreenshotPreview?>(
+        valueListenable: SystemState.activeScreenshotToast,
+        builder: (context, preview, _) {
+          if (preview == null) return const SizedBox.shrink();
+          return GestureDetector(
             onTap: () {},
             child: _ScreenshotToastCard(preview: preview),
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 }

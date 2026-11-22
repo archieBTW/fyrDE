@@ -665,12 +665,16 @@ static void handle_request_move(struct wl_listener *listener, void *data) {
 	if (xsurface->surface == NULL || !xsurface->surface->mapped) {
 		return;
 	}
-	if (!container_is_floating(view->container) ||
-			view->container->pending.fullscreen_mode) {
+	if (!container_is_floating_or_child(view->container) ||
+			container_is_fullscreen_or_child(view->container)) {
 		return;
 	}
 	struct sway_seat *seat = input_manager_current_seat();
-	seatop_begin_move_floating(seat, view->container);
+	if (seat->cursor->pressed_button_count > 0 ||
+			seat->cursor->simulating_pointer_from_tool_tip) {
+		seatop_begin_move_floating(seat,
+			container_toplevel_ancestor(view->container));
+	}
 }
 
 static void handle_request_resize(struct wl_listener *listener, void *data) {
@@ -681,12 +685,17 @@ static void handle_request_resize(struct wl_listener *listener, void *data) {
 	if (xsurface->surface == NULL || !xsurface->surface->mapped) {
 		return;
 	}
-	if (!container_is_floating(view->container)) {
+	if (!container_is_floating_or_child(view->container) ||
+			container_is_fullscreen_or_child(view->container)) {
 		return;
 	}
 	struct wlr_xwayland_resize_event *e = data;
 	struct sway_seat *seat = input_manager_current_seat();
-	seatop_begin_resize_floating(seat, view->container, e->edges);
+	if (seat->cursor->pressed_button_count > 0 ||
+			seat->cursor->simulating_pointer_from_tool_tip) {
+		seatop_begin_resize_floating(seat,
+			container_toplevel_ancestor(view->container), e->edges);
+	}
 }
 
 static void handle_request_activate(struct wl_listener *listener, void *data) {

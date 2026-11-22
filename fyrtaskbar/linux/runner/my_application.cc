@@ -1,5 +1,6 @@
 #include "my_application.h"
 
+#include <cairo.h>
 #include <cstdlib>
 #include <cstring>
 #include <flutter_linux/flutter_linux.h>
@@ -107,6 +108,58 @@ static void fyr_method_call_cb(FlMethodChannel *channel,
         gtk_widget_set_size_request(GTK_WIDGET(window), width, height);
         gtk_window_resize(window, width, height);
       }
+    }
+    g_autoptr(FlMethodResponse) response =
+        FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+    fl_method_call_respond(method_call, response, nullptr);
+  } else if (strcmp(method, "setInputRegion") == 0) {
+    FlValue *args = fl_method_call_get_args(method_call);
+    if (args && fl_value_get_type(args) == FL_VALUE_TYPE_MAP) {
+      FlValue *full_val = fl_value_lookup_string(args, "full");
+      if (full_val && fl_value_get_type(full_val) == FL_VALUE_TYPE_BOOL &&
+          fl_value_get_bool(full_val)) {
+        gtk_widget_input_shape_combine_region(GTK_WIDGET(window), nullptr);
+      } else {
+        cairo_region_t *region = cairo_region_create();
+        FlValue *rects_val = fl_value_lookup_string(args, "rects");
+        if (rects_val && fl_value_get_type(rects_val) == FL_VALUE_TYPE_LIST) {
+          size_t len = fl_value_get_length(rects_val);
+          for (size_t i = 0; i < len; ++i) {
+            FlValue *rect_val = fl_value_get_list_value(rects_val, i);
+            if (!rect_val ||
+                fl_value_get_type(rect_val) != FL_VALUE_TYPE_MAP) {
+              continue;
+            }
+            FlValue *x_val = fl_value_lookup_string(rect_val, "x");
+            FlValue *y_val = fl_value_lookup_string(rect_val, "y");
+            FlValue *w_val = fl_value_lookup_string(rect_val, "width");
+            FlValue *h_val = fl_value_lookup_string(rect_val, "height");
+            if (x_val && y_val && w_val && h_val &&
+                fl_value_get_type(x_val) == FL_VALUE_TYPE_INT &&
+                fl_value_get_type(y_val) == FL_VALUE_TYPE_INT &&
+                fl_value_get_type(w_val) == FL_VALUE_TYPE_INT &&
+                fl_value_get_type(h_val) == FL_VALUE_TYPE_INT) {
+              int w = static_cast<int>(fl_value_get_int(w_val));
+              int h = static_cast<int>(fl_value_get_int(h_val));
+              if (w > 0 && h > 0) {
+                cairo_rectangle_int_t rect = {
+                    static_cast<int>(fl_value_get_int(x_val)),
+                    static_cast<int>(fl_value_get_int(y_val)),
+                    w,
+                    h,
+                };
+                cairo_region_union_rectangle(region, &rect);
+              }
+            }
+          }
+        }
+        gtk_widget_input_shape_combine_region(GTK_WIDGET(window), region);
+        cairo_region_destroy(region);
+      }
+      if (GdkWindow *gdk_window = gtk_widget_get_window(GTK_WIDGET(window))) {
+        gdk_window_invalidate_rect(gdk_window, nullptr, TRUE);
+      }
+      gtk_widget_queue_draw(GTK_WIDGET(window));
     }
     g_autoptr(FlMethodResponse) response =
         FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));

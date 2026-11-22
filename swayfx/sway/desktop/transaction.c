@@ -75,6 +75,27 @@ static void anim_update_callback(void *data) {
 		return;
 	}
 
+	int ws_offset_x = 0;
+	if (!con->node.destroying) {
+		struct sway_workspace *ws = con->current.workspace;
+		if (!ws || !ws->output) {
+			return;
+		}
+		struct sway_output *output = ws->output;
+		bool ws_active = output->current.active_workspace == ws &&
+			output->wlr_output->enabled;
+		bool ws_animating = ws->animation_state.animation.initialized;
+		if (!ws_active && !ws_animating) {
+			return;
+		}
+		if (ws_animating && container_is_floating(con)) {
+			int base_x = ws->current_gaps.left + output->usable_area.x;
+			int current_x = get_animated_value(ws->animation_state.start_x,
+				ws->animation_state.end_x, &ws->animation_state.animation);
+			ws_offset_x = current_x - base_x;
+		}
+	}
+
 	int width = get_animated_value(con->animation_state.from_width,
 		con->animation_state.to_width, &con->animation_state.animation);
 	int height = get_animated_value(con->animation_state.from_height,
@@ -85,7 +106,7 @@ static void anim_update_callback(void *data) {
 		con->animation_state.to_y, &con->animation_state.animation);
 
 	bool title_bar = con_has_title_bar(con);
-	_arrange_container(con, width, height, x, y, title_bar, 0);
+	_arrange_container(con, width, height, x + ws_offset_x, y, title_bar, 0);
 	// refresh decorations for parent-managed title bars (tabbed/stacked)
 	if (!title_bar) {
 		container_update(con);
@@ -412,6 +433,9 @@ static void arrange_title_bar(struct sway_container *con,
 }
 
 static void disable_container(struct sway_container *con) {
+	if (!con->node.destroying) {
+		finish_animation(&con->animation_state.animation);
+	}
 	if (con->view) {
 		wlr_scene_node_reparent(&con->view->scene_tree->node, con->content_tree);
 	} else {
@@ -762,6 +786,16 @@ static void arrange_container(struct sway_container *con,
 			|| con->animation_state.seat_is_resizing
 			|| con->animation_state.seat_is_moving_float) {
 		finish_animation(&con->animation_state.animation);
+		con->animation_state.from_x = x;
+		con->animation_state.from_y = y;
+		con->animation_state.to_x = x;
+		con->animation_state.to_y = y;
+		con->animation_state.from_width = width;
+		con->animation_state.from_height = height;
+		con->animation_state.to_width = width;
+		con->animation_state.to_height = height;
+		con->animation_state.from_alpha = 1.0f;
+		con->animation_state.to_alpha = 1.0f;
 
 		_arrange_container(con, width, height, x, y, title_bar, gaps);
 		return;
