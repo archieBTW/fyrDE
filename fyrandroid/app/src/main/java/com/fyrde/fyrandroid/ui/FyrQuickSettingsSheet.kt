@@ -13,7 +13,6 @@ import android.hardware.camera2.CameraManager
 import android.media.AudioManager
 import android.net.Uri
 import android.net.wifi.WifiManager
-import android.os.BatteryManager
 import android.os.Build
 import android.os.SystemClock
 import android.provider.Settings
@@ -24,26 +23,26 @@ import android.view.View
 import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.LinearLayout
-import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import com.fyrde.fyrandroid.theme.FyrThemeManager
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 /**
- * Custom Fyr Quick Settings menu modeled directly on `fyrtaskbar/lib/ui/quick_settings.dart`:
- * - Slides down from the top on downward swipes
- * - 2x4 grid of 58dp circular `QuickToggle` buttons (Wi-Fi, Bluetooth, Airplane, Flashlight,
- *   Auto-Rotate, Do Not Disturb, Dark/Light Mode, Hotspot/Night Display)
- * - Fyr Media Controls Card (Previous, Play/Pause, Next)
- * - Brightness & Volume `SliderRow` bars
- * - Live Light/Dark Mode & Fyr Accent Color customizer + Top-Edge Interceptor toggle
+ * Fyr Quick Settings panel modeled directly on `fyrtaskbar/lib/ui/quick_settings.dart`:
+ * - Clean translucent glass panel (no title header, no Settings button)
+ * - 2x4 grid of 58dp circular icon-only `QuickToggle` buttons
+ *   (Wi-Fi, Bluetooth, Airplane, Flashlight / Auto-Rotate, DND, Dark Mode, Hotspot)
+ * - Compact frosted `QuickSettingsMediaCard` shown when audio playback is active
+ * - Slim `FyrSliderBar` brightness and volume rows matching `slider_row.dart`
  */
 @SuppressLint("ViewConstructor")
 class FyrQuickSettingsSheet(
     context: Context,
     private val onThemeChanged: () -> Unit,
-    private val onAdjustWindowBrightness: (Float) -> Unit
+    private val onAdjustWindowBrightness: (Float) -> Unit,
+    private val onVisibilityChanged: (Boolean) -> Unit = {}
 ) : FrameLayout(context) {
 
     private val density = resources.displayMetrics.density
@@ -51,17 +50,25 @@ class FyrQuickSettingsSheet(
 
     private val cardSurface = LinearLayout(context)
     private val cardBg = GradientDrawable()
+    private val mediaCard = LinearLayout(context)
     private val mediaCardBg = GradientDrawable()
-    private val settingsPillBg = GradientDrawable()
+    private val mediaArtBadgeBg = GradientDrawable()
+    private val playCircleBg = GradientDrawable()
 
-    private val batteryLabel = TextView(context)
-    private val settingsBtn = TextView(context)
     private val togglesRow1 = LinearLayout(context)
     private val togglesRow2 = LinearLayout(context)
     private val mediaTitle = TextView(context)
-    private val brightnessSlider = SeekBar(context)
-    private val volumeSlider = SeekBar(context)
-    private val accentSwatchesRow = LinearLayout(context)
+    private val mediaSubtitle = TextView(context)
+    private val mediaNoteIcon = FyrIconView(context, FyrIcon.MUSIC_NOTE, FyrThemeManager.accentColor)
+    private val prevIcon = FyrIconView(context, FyrIcon.PREV, FyrThemeManager.textColor)
+    private val playPauseIcon = FyrIconView(context, FyrIcon.PAUSE, Color.WHITE)
+    private val nextIcon = FyrIconView(context, FyrIcon.NEXT, FyrThemeManager.textColor)
+
+    private val brightnessIcon = FyrIconView(context, FyrIcon.SUN, FyrThemeManager.textColorMuted)
+    private val volumeIcon = FyrIconView(context, FyrIcon.VOLUME, FyrThemeManager.textColorMuted)
+    private val volumeChevron = FyrIconView(context, FyrIcon.CHEVRON_RIGHT, FyrThemeManager.textColor)
+    private lateinit var brightnessSlider: FyrSliderBar
+    private lateinit var volumeSlider: FyrSliderBar
 
     private val cameraManager =
         context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
@@ -90,7 +97,7 @@ class FyrQuickSettingsSheet(
     init {
         visibility = View.GONE
         isClickable = true
-        setBackgroundColor(0x66000000)
+        setBackgroundColor(0x52000000)
         setOnClickListener { close() }
 
         initTorchCamera()
@@ -98,71 +105,12 @@ class FyrQuickSettingsSheet(
         cardSurface.apply {
             orientation = LinearLayout.VERTICAL
             isClickable = true
-            setPadding(dp(20f), dp(18f), dp(20f), dp(20f))
+            setPadding(dp(24f), dp(24f), dp(24f), dp(24f))
             background = cardBg
+            elevation = dp(18f).toFloat()
         }
 
-        // Top Bar: Battery status + Top-Edge Service button + System Settings pill
-        val topHeader = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 0, 0, dp(16f))
-        }
-
-        batteryLabel.apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
-            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-        }
-
-        val topEdgeBtn = TextView(context).apply {
-            text = "Top-Swipe"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-            setPadding(dp(10f), dp(6f), dp(10f), dp(6f))
-            setOnClickListener {
-                close()
-                context.startActivity(
-                    Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                    }
-                )
-                Toast.makeText(
-                    context,
-                    "Enable 'Fyr Top-Edge Quick Settings Interceptor' to intercept top-bar swipes",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
-        }
-
-        settingsBtn.apply {
-            text = "⚙ Settings"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
-            typeface = Typeface.DEFAULT_BOLD
-            setPadding(dp(12f), dp(6f), dp(12f), dp(6f))
-            background = settingsPillBg
-            setOnClickListener {
-                close()
-                context.startActivity(
-                    Intent(Settings.ACTION_SETTINGS).apply {
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                    }
-                )
-            }
-        }
-
-        topHeader.addView(
-            batteryLabel,
-            LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
-        )
-        topHeader.addView(topEdgeBtn)
-        topHeader.addView(
-            settingsBtn,
-            LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
-                leftMargin = dp(8f)
-            }
-        )
-        cardSurface.addView(topHeader)
-
-        // 2x4 Circular Quick Toggles (`QuickToggle` in `fyrtaskbar`)
+        // 2x4 Circular Icon-Only Quick Toggles (identical to `QuickToggle` in `fyrtaskbar`)
         togglesRow1.apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
@@ -170,125 +118,129 @@ class FyrQuickSettingsSheet(
         togglesRow2.apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setPadding(0, dp(14f), 0, 0)
+            setPadding(0, dp(16f), 0, 0)
         }
         cardSurface.addView(togglesRow1)
         cardSurface.addView(togglesRow2)
 
-        // Media Controls Card (`QuickSettingsMediaCard` in `fyrtaskbar`)
-        val mediaCard = LinearLayout(context).apply {
+        // Optional Media Controls Card (`QuickSettingsMediaCard` in `fyrtaskbar`)
+        mediaCard.apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(14f), dp(12f), dp(14f), dp(12f))
+            setPadding(dp(12f), dp(12f), dp(12f), dp(12f))
             background = mediaCardBg
+            visibility = View.GONE
+        }
+        val artBox = FrameLayout(context).apply {
+            background = mediaArtBadgeBg
+        }
+        artBox.addView(
+            mediaNoteIcon,
+            LayoutParams(dp(22f), dp(22f), Gravity.CENTER)
+        )
+        mediaCard.addView(artBox, LinearLayout.LayoutParams(dp(44f), dp(44f)))
+
+        val mediaTextCol = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12f), 0, dp(8f), 0)
         }
         mediaTitle.apply {
-            text = "♫  Media Playback"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            text = "Now Playing"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+            maxLines = 1
         }
-        val prevBtn = createMediaControlBtn("⏮") {
-            dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS)
+        mediaSubtitle.apply {
+            text = "Media Playback"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            maxLines = 1
         }
-        val playPauseBtn = createMediaControlBtn("⏯") {
-            dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
-        }
-        val nextBtn = createMediaControlBtn("⏭") {
-            dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_NEXT)
-        }
+        mediaTextCol.addView(mediaTitle)
+        mediaTextCol.addView(mediaSubtitle)
         mediaCard.addView(
-            mediaTitle,
+            mediaTextCol,
             LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
         )
-        mediaCard.addView(prevBtn)
-        mediaCard.addView(playPauseBtn)
-        mediaCard.addView(nextBtn)
+
+        val prevWrap = wrapIconButton(prevIcon, 32f, 18f) {
+            dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS)
+        }
+        val playCircle = FrameLayout(context).apply {
+            background = playCircleBg
+            setOnClickListener { dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) }
+        }
+        playCircle.addView(playPauseIcon, LayoutParams(dp(18f), dp(18f), Gravity.CENTER))
+        val nextWrap = wrapIconButton(nextIcon, 32f, 18f) {
+            dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_NEXT)
+        }
+
+        mediaCard.addView(prevWrap)
+        mediaCard.addView(
+            playCircle,
+            LinearLayout.LayoutParams(dp(34f), dp(34f)).apply {
+                leftMargin = dp(4f)
+                rightMargin = dp(4f)
+            }
+        )
+        mediaCard.addView(nextWrap)
+
         cardSurface.addView(
             mediaCard,
             LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-                topMargin = dp(16f)
-                bottomMargin = dp(16f)
+                topMargin = dp(18f)
             }
         )
 
-        // Brightness SliderRow
-        cardSurface.addView(
-            createSliderRow("☀", brightnessSlider, trailingText = null)
-        )
-        brightnessSlider.max = 255
-        brightnessSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                if (!fromUser) return
-                val clamped = progress.coerceIn(10, 255)
-                onAdjustWindowBrightness(clamped / 255f)
-                if (Settings.System.canWrite(context)) {
-                    try {
-                        Settings.System.putInt(
-                            context.contentResolver,
-                            Settings.System.SCREEN_BRIGHTNESS,
-                            clamped
-                        )
-                    } catch (_: Exception) {
-                    }
+        // Brightness SliderRow (`SliderRow` in `fyrtaskbar`)
+        brightnessSlider = FyrSliderBar(context) { fraction ->
+            val clamped = (fraction * 255f).roundToInt().coerceIn(10, 255)
+            onAdjustWindowBrightness(clamped / 255f)
+            if (Settings.System.canWrite(context)) {
+                try {
+                    Settings.System.putInt(
+                        context.contentResolver,
+                        Settings.System.SCREEN_BRIGHTNESS,
+                        clamped
+                    )
+                } catch (_: Exception) {
                 }
             }
-            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-        })
-
-        // Volume SliderRow
+        }
         cardSurface.addView(
-            createSliderRow(
-                "🔊",
-                volumeSlider,
-                trailingText = "›",
-                onTrailingClick = {
-                    close()
-                    val panelIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        Intent(Settings.Panel.ACTION_VOLUME)
-                    } else {
-                        Intent(Settings.ACTION_SOUND_SETTINGS)
-                    }
-                    context.startActivity(panelIntent.apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK })
-                }
-            ),
+            createSliderRow(brightnessIcon, brightnessSlider, trailing = null),
             LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-                topMargin = dp(10f)
+                topMargin = dp(20f)
             }
         )
-        val maxVol = audioManager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: 15
-        volumeSlider.max = max(1, maxVol)
-        volumeSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                if (!fromUser) return
-                audioManager?.setStreamVolume(AudioManager.STREAM_MUSIC, progress, 0)
+
+        // Volume SliderRow with trailing chevron (`SliderRow` in `fyrtaskbar`)
+        volumeSlider = FyrSliderBar(context) { fraction ->
+            val maxVol = max(1, audioManager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: 15)
+            val target = (fraction * maxVol).roundToInt().coerceIn(0, maxVol)
+            audioManager?.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+        }
+        val chevronBtn = wrapIconButton(volumeChevron, 28f, 18f) {
+            close()
+            val panelIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                Intent(Settings.Panel.ACTION_VOLUME)
+            } else {
+                Intent(Settings.ACTION_SOUND_SETTINGS)
             }
-            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-        })
-
-        // Fyr Accent Color Customizer Row
-        val accentHeader = TextView(context).apply {
-            text = "FYR ACCENT COLOR"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
-            typeface = Typeface.DEFAULT_BOLD
-            setPadding(0, dp(16f), 0, dp(8f))
-            letterSpacing = 0.08f
+            context.startActivity(panelIntent.apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK })
         }
-        cardSurface.addView(accentHeader)
-
-        accentSwatchesRow.apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        cardSurface.addView(accentSwatchesRow)
+        cardSurface.addView(
+            createSliderRow(volumeIcon, volumeSlider, trailing = chevronBtn),
+            LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(14f)
+            }
+        )
 
         val cardParams = LayoutParams(
             LayoutParams.MATCH_PARENT,
             LayoutParams.WRAP_CONTENT,
             Gravity.TOP
         ).apply {
-            setMargins(dp(14f), dp(36f), dp(14f), dp(14f))
+            setMargins(dp(14f), dp(42f), dp(14f), dp(14f))
         }
         addView(cardSurface, cardParams)
 
@@ -300,8 +252,7 @@ class FyrQuickSettingsSheet(
             val cm = cameraManager ?: return
             for (id in cm.cameraIdList) {
                 val chars = cm.getCameraCharacteristics(id)
-                val hasFlash = chars.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
-                if (hasFlash) {
+                if (chars.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true) {
                     torchCameraId = id
                     break
                 }
@@ -314,35 +265,55 @@ class FyrQuickSettingsSheet(
     fun applyTheme() {
         cardBg.apply {
             shape = GradientDrawable.RECTANGLE
-            cornerRadius = dp(24f).toFloat()
+            cornerRadius = dp(20f).toFloat()
             setColor(FyrThemeManager.panelBgColor)
-            setStroke(max(1, dp(1f)), FyrThemeManager.dividerColor)
+            setStroke(max(1, dp(1f)), FyrThemeManager.cardColor)
         }
         mediaCardBg.apply {
             shape = GradientDrawable.RECTANGLE
-            cornerRadius = dp(16f).toFloat()
+            cornerRadius = dp(14f).toFloat()
             setColor(FyrThemeManager.cardColor)
             setStroke(max(1, dp(1f)), FyrThemeManager.dividerColor)
         }
-        settingsPillBg.apply {
+        mediaArtBadgeBg.apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = dp(10f).toFloat()
-            setColor(FyrThemeManager.cardColor)
+            setColor(FyrThemeManager.accentWithAlpha(0.22f))
         }
-        batteryLabel.setTextColor(FyrThemeManager.textColor)
-        settingsBtn.setTextColor(FyrThemeManager.textColor)
+        playCircleBg.apply {
+            shape = GradientDrawable.OVAL
+            setColor(FyrThemeManager.accentColor)
+        }
+
         mediaTitle.setTextColor(FyrThemeManager.textColor)
+        mediaSubtitle.setTextColor(FyrThemeManager.textColorMuted)
+        mediaNoteIcon.setTint(FyrThemeManager.accentColor)
+        prevIcon.setTint(FyrThemeManager.textColor)
+        nextIcon.setTint(FyrThemeManager.textColor)
+
+        brightnessIcon.setTint(FyrThemeManager.textColorMuted)
+        volumeIcon.setTint(FyrThemeManager.textColorMuted)
+        volumeChevron.setTint(FyrThemeManager.textColor)
+
+        val activeTrack = FyrThemeManager.accentWithAlpha(0.50f)
+        val inactiveTrack = FyrThemeManager.hoverColor
+        brightnessSlider.activeTrackColor = activeTrack
+        brightnessSlider.inactiveTrackColor = inactiveTrack
+        brightnessSlider.thumbColor = FyrThemeManager.textColor
+        volumeSlider.activeTrackColor = activeTrack
+        volumeSlider.inactiveTrackColor = inactiveTrack
+        volumeSlider.thumbColor = FyrThemeManager.textColor
 
         rebuildToggleRows()
-        rebuildAccentSwatches()
     }
 
     fun open() {
         isOpen = true
+        onVisibilityChanged(true)
         refreshSystemState()
         applyTheme()
         visibility = View.VISIBLE
-        cardSurface.translationY = -dp(420f).toFloat()
+        cardSurface.translationY = -dp(360f).toFloat()
         alpha = 0f
         animate().alpha(1f).setDuration(150L).start()
         cardSurface.animate()
@@ -355,8 +326,9 @@ class FyrQuickSettingsSheet(
     fun close() {
         if (!isOpen) return
         isOpen = false
+        onVisibilityChanged(false)
         cardSurface.animate()
-            .translationY(-dp(380f).toFloat())
+            .translationY(-dp(320f).toFloat())
             .setDuration(140L)
             .start()
         animate()
@@ -367,19 +339,21 @@ class FyrQuickSettingsSheet(
     }
 
     private fun refreshSystemState() {
-        val bm = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
-        val pct = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 100
-        batteryLabel.text = "⚡ $pct%  •  Fyr Quick Settings"
-
         val curBrightness = try {
             Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS)
         } catch (_: Exception) {
-            140
+            165
         }
-        brightnessSlider.progress = curBrightness.coerceIn(0, 255)
+        brightnessSlider.value = (curBrightness / 255f).coerceIn(0f, 1f)
 
-        val curVol = audioManager?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: 7
-        volumeSlider.progress = curVol
+        val maxVol = max(1, audioManager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: 15)
+        val curVol = audioManager?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: (maxVol / 2)
+        volumeSlider.value = (curVol.toFloat() / maxVol.toFloat()).coerceIn(0f, 1f)
+
+        val isPlaying = audioManager?.isMusicActive == true
+        mediaCard.visibility = if (isPlaying) View.VISIBLE else View.GONE
+        playPauseIcon.icon = if (isPlaying) FyrIcon.PAUSE else FyrIcon.PLAY
+        playPauseIcon.invalidate()
     }
 
     private fun rebuildToggleRows() {
@@ -423,116 +397,89 @@ class FyrQuickSettingsSheet(
         }
 
         // Row 1: Wi-Fi, Bluetooth, Airplane, Flashlight
-        togglesRow1.addView(
-            createQuickToggle(
-                iconText = "🛜",
-                label = "Wi-Fi",
-                active = wifiOn,
-                onTap = { toggleWifi() },
-                onLongPress = { openIntent(Settings.ACTION_WIFI_SETTINGS) }
-            ),
-            LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+        addToggleCell(
+            togglesRow1,
+            icon = FyrIcon.WIFI,
+            description = "Wi-Fi",
+            active = wifiOn,
+            onTap = { toggleWifi() },
+            onLongPress = { openIntent(Settings.ACTION_WIFI_SETTINGS) }
         )
-        togglesRow1.addView(
-            createQuickToggle(
-                iconText = "ᛒ",
-                label = "Bluetooth",
-                active = btOn,
-                onTap = { openIntent(Settings.ACTION_BLUETOOTH_SETTINGS) },
-                onLongPress = { openIntent(Settings.ACTION_BLUETOOTH_SETTINGS) }
-            ),
-            LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+        addToggleCell(
+            togglesRow1,
+            icon = FyrIcon.BLUETOOTH,
+            description = "Bluetooth",
+            active = btOn,
+            onTap = { openIntent(Settings.ACTION_BLUETOOTH_SETTINGS) },
+            onLongPress = { openIntent(Settings.ACTION_BLUETOOTH_SETTINGS) }
         )
-        togglesRow1.addView(
-            createQuickToggle(
-                iconText = "✈",
-                label = "Airplane",
-                active = airplaneOn,
-                onTap = { openIntent(Settings.ACTION_AIRPLANE_MODE_SETTINGS) }
-            ),
-            LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+        addToggleCell(
+            togglesRow1,
+            icon = FyrIcon.AIRPLANE,
+            description = "Airplane",
+            active = airplaneOn,
+            onTap = { openIntent(Settings.ACTION_AIRPLANE_MODE_SETTINGS) }
         )
-        togglesRow1.addView(
-            createQuickToggle(
-                iconText = "🔦",
-                label = "Flashlight",
-                active = isTorchOn,
-                onTap = { toggleTorch() }
-            ),
-            LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+        addToggleCell(
+            togglesRow1,
+            icon = FyrIcon.FLASHLIGHT,
+            description = "Flashlight",
+            active = isTorchOn,
+            onTap = { toggleTorch() }
         )
 
-        // Row 2: Auto-Rotate, Do Not Disturb, Dark/Light Mode, Hotspot/Night
-        togglesRow2.addView(
-            createQuickToggle(
-                iconText = "⟳",
-                label = "Auto-Rotate",
-                active = autoRotateOn,
-                onTap = { toggleAutoRotate(autoRotateOn) }
-            ),
-            LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+        // Row 2: Auto-Rotate, Do Not Disturb, Dark/Light Mode (long-press cycles Fyr accent), Hotspot
+        addToggleCell(
+            togglesRow2,
+            icon = FyrIcon.ROTATE,
+            description = "Auto-Rotate",
+            active = autoRotateOn,
+            onTap = { toggleAutoRotate(autoRotateOn) }
         )
-        togglesRow2.addView(
-            createQuickToggle(
-                iconText = "🌙",
-                label = "DND",
-                active = dndOn,
-                onTap = { toggleDnd(dndOn) }
-            ),
-            LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+        addToggleCell(
+            togglesRow2,
+            icon = FyrIcon.DND,
+            description = "Do Not Disturb",
+            active = dndOn,
+            onTap = { toggleDnd(dndOn) }
         )
-        togglesRow2.addView(
-            createQuickToggle(
-                iconText = if (FyrThemeManager.isDark) "◑" else "☀",
-                label = if (FyrThemeManager.isDark) "Dark Mode" else "Light Mode",
-                active = FyrThemeManager.isDark,
-                onTap = {
-                    FyrThemeManager.toggleThemeMode()
-                    onThemeChanged()
-                }
-            ),
-            LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+        addToggleCell(
+            togglesRow2,
+            icon = if (FyrThemeManager.isDark) FyrIcon.DARK_MODE else FyrIcon.LIGHT_MODE,
+            description = if (FyrThemeManager.isDark) "Dark Mode" else "Light Mode",
+            active = FyrThemeManager.isDark,
+            onTap = {
+                FyrThemeManager.toggleThemeMode()
+                onThemeChanged()
+            },
+            onLongPress = { cycleAccentPreset() }
         )
-        togglesRow2.addView(
-            createQuickToggle(
-                iconText = "📡",
-                label = "Hotspot",
-                active = false,
-                onTap = { openIntent(Settings.ACTION_WIRELESS_SETTINGS) }
-            ),
-            LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+        addToggleCell(
+            togglesRow2,
+            icon = FyrIcon.HOTSPOT,
+            description = "Hotspot",
+            active = false,
+            onTap = { openIntent(Settings.ACTION_WIRELESS_SETTINGS) },
+            onLongPress = { openIntent(Settings.ACTION_ACCESSIBILITY_SETTINGS) }
         )
     }
 
-    private fun createQuickToggle(
-        iconText: String,
-        label: String,
+    private fun addToggleCell(
+        row: LinearLayout,
+        icon: FyrIcon,
+        description: String,
         active: Boolean,
         onTap: () -> Unit,
         onLongPress: (() -> Unit)? = null
-    ): View {
-        val col = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-        }
-
-        val circle = TextView(context).apply {
-            text = iconText
-            gravity = Gravity.CENTER
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
-            setTextColor(
-                if (active) FyrThemeManager.textColor else FyrThemeManager.textColorMuted
-            )
+    ) {
+        val wrapper = FrameLayout(context)
+        val circle = FrameLayout(context).apply {
+            contentDescription = description
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 setColor(
-                    if (active) FyrThemeManager.accentWithAlpha(0.32f)
+                    if (active) FyrThemeManager.accentWithAlpha(0.30f)
                     else FyrThemeManager.cardColor
-                )
-                setStroke(
-                    max(1, dp(1f)),
-                    if (active) FyrThemeManager.accentWithAlpha(0.65f)
-                    else FyrThemeManager.dividerColor
                 )
             }
             setOnClickListener { onTap() }
@@ -543,91 +490,66 @@ class FyrQuickSettingsSheet(
                 }
             }
         }
-
-        val lbl = TextView(context).apply {
-            text = label
-            gravity = Gravity.CENTER
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
-            setTextColor(
-                if (active) FyrThemeManager.textColor else FyrThemeManager.textColorMuted
-            )
-            setPadding(0, dp(5f), 0, 0)
-            maxLines = 1
-        }
-
-        col.addView(circle, LinearLayout.LayoutParams(dp(56f), dp(56f)))
-        col.addView(lbl)
-        return col
+        val iconView = FyrIconView(
+            context = context,
+            icon = icon,
+            tint = if (active) FyrThemeManager.textColor else FyrThemeManager.textColorMuted
+        )
+        circle.addView(iconView, LayoutParams(dp(24f), dp(24f), Gravity.CENTER))
+        wrapper.addView(circle, LayoutParams(dp(58f), dp(58f), Gravity.CENTER))
+        row.addView(wrapper, LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
     }
 
-    private fun createMediaControlBtn(symbol: String, onTap: () -> Unit): View {
-        return TextView(context).apply {
-            text = symbol
-            gravity = Gravity.CENTER
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-            setTextColor(FyrThemeManager.textColor)
-            setPadding(dp(10f), dp(4f), dp(10f), dp(4f))
+    private fun wrapIconButton(
+        iconView: FyrIconView,
+        boxDp: Float,
+        iconDp: Float,
+        onTap: () -> Unit
+    ): View {
+        return FrameLayout(context).apply {
             setOnClickListener { onTap() }
+            addView(iconView, LayoutParams(dp(iconDp), dp(iconDp), Gravity.CENTER))
+            layoutParams = LinearLayout.LayoutParams(dp(boxDp), dp(boxDp))
         }
     }
 
     private fun createSliderRow(
-        iconSymbol: String,
-        slider: SeekBar,
-        trailingText: String?,
-        onTrailingClick: (() -> Unit)? = null
+        iconView: FyrIconView,
+        slider: FyrSliderBar,
+        trailing: View?
     ): View {
         val row = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val icon = TextView(context).apply {
-            text = iconSymbol
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-            setTextColor(FyrThemeManager.textColorMuted)
-            setPadding(0, 0, dp(10f), 0)
-        }
-        row.addView(icon)
+        row.addView(
+            iconView,
+            LinearLayout.LayoutParams(dp(20f), dp(20f)).apply {
+                rightMargin = dp(14f)
+            }
+        )
         row.addView(
             slider,
-            LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+            LinearLayout.LayoutParams(0, dp(32f), 1f)
         )
-        if (trailingText != null) {
-            val trail = TextView(context).apply {
-                text = trailingText
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
-                setTextColor(FyrThemeManager.textColor)
-                setPadding(dp(10f), dp(2f), dp(4f), dp(2f))
-                setOnClickListener { onTrailingClick?.invoke() }
-            }
-            row.addView(trail)
+        if (trailing != null) {
+            row.addView(
+                trailing,
+                LinearLayout.LayoutParams(dp(28f), dp(28f)).apply {
+                    leftMargin = dp(6f)
+                }
+            )
         }
         return row
     }
 
-    private fun rebuildAccentSwatches() {
-        accentSwatchesRow.removeAllViews()
-        for (preset in FyrThemeManager.ACCENT_PRESETS) {
-            val selected = preset.color == FyrThemeManager.accentColor
-            val swatch = View(context).apply {
-                background = GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
-                    setColor(preset.color)
-                    setStroke(
-                        if (selected) dp(2.5f) else dp(1f),
-                        if (selected) Color.WHITE else 0x44FFFFFF
-                    )
-                }
-                setOnClickListener {
-                    FyrThemeManager.setAccent(preset.color)
-                    onThemeChanged()
-                }
-            }
-            val lp = LinearLayout.LayoutParams(dp(26f), dp(26f)).apply {
-                rightMargin = dp(10f)
-            }
-            accentSwatchesRow.addView(swatch, lp)
-        }
+    private fun cycleAccentPreset() {
+        val presets = FyrThemeManager.ACCENT_PRESETS
+        val curIdx = presets.indexOfFirst { it.color == FyrThemeManager.accentColor }
+        val next = presets[(curIdx + 1) % presets.size]
+        FyrThemeManager.setAccent(next.color)
+        onThemeChanged()
+        Toast.makeText(context, "Accent: ${next.name}", Toast.LENGTH_SHORT).show()
     }
 
     private fun toggleWifi() {

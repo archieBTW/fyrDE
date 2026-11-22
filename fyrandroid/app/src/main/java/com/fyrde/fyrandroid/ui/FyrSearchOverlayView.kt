@@ -5,7 +5,6 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -35,11 +34,12 @@ import com.fyrde.fyrandroid.theme.FyrThemeManager
 import kotlin.math.max
 
 /**
- * Custom Search & App Drawer styled identically to `fyrsearch`:
- * - Slides up on upward swipe from the home screen
- * - Immediately autofocuses the pill-shaped search input and raises the soft keyboard
- * - Evaluates inline calculator math & Fyr theme commands (`:dark`, `:light`, `:accent cyan`)
- * - Renders a responsive squircle app grid with recycled views for minimal memory/CPU overhead
+ * Custom Search & App Drawer modeled directly on desktop `fyrsearch/lib/main.dart`:
+ * - Translucent frosted backdrop letting the blurred wallpaper glow through
+ * - Floating pill search bar (`50dp` radius, subtle `dividerColor` hairline border,
+ *   clean vector magnifying glass icon, `"Type to search..."` placeholder)
+ * - Clean floating app icon grid directly over the blurred wallpaper (no card boxes)
+ * - Inline calculator math & Fyr theme commands (`:dark`, `:light`, `:accent cyan`)
  */
 @SuppressLint("ViewConstructor")
 class FyrSearchOverlayView(
@@ -47,7 +47,8 @@ class FyrSearchOverlayView(
     private val repo: AppRepository,
     private val onLaunchApp: (AppEntry) -> Unit,
     private val onAppLongPress: (View, AppEntry) -> Unit,
-    private val onThemeChanged: () -> Unit
+    private val onThemeChanged: () -> Unit,
+    private val onVisibilityChanged: (Boolean) -> Unit = {}
 ) : FrameLayout(context) {
 
     private val density = resources.displayMetrics.density
@@ -55,8 +56,10 @@ class FyrSearchOverlayView(
 
     private val searchPillBg = GradientDrawable()
     private val inlineCardBg = GradientDrawable()
+    private val searchIcon = FyrIconView(context, FyrIcon.SEARCH, FyrThemeManager.textColor)
+    private val clearIcon = FyrIconView(context, FyrIcon.CLOSE, FyrThemeManager.textColorMuted)
+    private val clearBtn: FrameLayout
     private val searchInput: EditText
-    private val clearBtn: TextView
     private val inlineCard: LinearLayout
     private val inlineTitle: TextView
     private val inlineSubtitle: TextView
@@ -79,46 +82,26 @@ class FyrSearchOverlayView(
         val contentColumn = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(20f), dp(48f), dp(20f), dp(16f))
+            setPadding(dp(22f), dp(72f), dp(22f), dp(20f))
         }
 
-        // Top drag handle bar
-        val dragPill = View(context).apply {
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(3f).toFloat()
-                setColor(0x55FFFFFF)
-            }
-        }
-        contentColumn.addView(
-            dragPill,
-            LinearLayout.LayoutParams(dp(40f), dp(5f)).apply {
-                bottomMargin = dp(14f)
-            }
-        )
-
-        // Pill-shaped FyrSearch bar (`BorderRadius.circular(50)`)
+        // Frosted floating pill search bar matching `fyrsearch/lib/main.dart` (`BorderRadius.circular(50)`)
         val searchRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(20f), dp(6f), dp(16f), dp(6f))
+            setPadding(dp(20f), dp(6f), dp(14f), dp(6f))
             background = searchPillBg
-        }
-
-        val searchIcon = TextView(context).apply {
-            text = "⌕"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
-            setPadding(0, 0, dp(12f), 0)
+            elevation = dp(12f).toFloat()
         }
 
         searchInput = EditText(context).apply {
-            hint = "Type to search apps, math, or web..."
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16.5f)
+            hint = "Type to search..."
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
             setSingleLine(true)
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
             imeOptions = EditorInfo.IME_ACTION_GO
             background = null
-            setPadding(0, dp(10f), 0, dp(10f))
+            setPadding(0, dp(12f), 0, dp(12f))
             setOnEditorActionListener { _, actionId, event ->
                 if (actionId == EditorInfo.IME_ACTION_GO ||
                     actionId == EditorInfo.IME_ACTION_DONE ||
@@ -139,35 +122,39 @@ class FyrSearchOverlayView(
             })
         }
 
-        clearBtn = TextView(context).apply {
-            text = "✕"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-            setPadding(dp(10f), dp(6f), dp(6f), dp(6f))
+        clearBtn = FrameLayout(context).apply {
             visibility = View.GONE
             setOnClickListener {
                 searchInput.setText("")
                 searchInput.requestFocus()
             }
+            addView(clearIcon, LayoutParams(dp(16f), dp(16f), Gravity.CENTER))
         }
 
-        searchRow.addView(searchIcon)
+        searchRow.addView(
+            searchIcon,
+            LinearLayout.LayoutParams(dp(22f), dp(22f)).apply {
+                rightMargin = dp(14f)
+            }
+        )
         searchRow.addView(
             searchInput,
             LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
         )
-        searchRow.addView(clearBtn)
+        searchRow.addView(clearBtn, LinearLayout.LayoutParams(dp(32f), dp(32f)))
 
         contentColumn.addView(
             searchRow,
             LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-                bottomMargin = dp(12f)
+                bottomMargin = dp(24f)
             }
         )
 
-        // Inline Calculator / Fyr Command Answer Card
+        // Subtle frosted inline calculator / Fyr command answer pill (only visible when typing math/commands)
         inlineCard = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(18f), dp(12f), dp(18f), dp(12f))
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(20f), dp(12f), dp(20f), dp(12f))
             background = inlineCardBg
             visibility = View.GONE
             setOnClickListener {
@@ -176,29 +163,33 @@ class FyrSearchOverlayView(
             }
         }
         inlineTitle = TextView(context).apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
             typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
         }
         inlineSubtitle = TextView(context).apply {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            gravity = Gravity.END
         }
-        inlineCard.addView(inlineTitle)
+        inlineCard.addView(
+            inlineTitle,
+            LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+        )
         inlineCard.addView(inlineSubtitle)
         contentColumn.addView(
             inlineCard,
             LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-                bottomMargin = dp(12f)
+                bottomMargin = dp(18f)
             }
         )
 
-        // App Drawer GridView (recycled cells for low memory footprint)
+        // Clean floating app icon grid directly over blurred wallpaper (matching `screenshots/search.png`)
         appGridView = GridView(context).apply {
             numColumns = 4
-            verticalSpacing = dp(14f)
-            horizontalSpacing = dp(8f)
+            verticalSpacing = dp(20f)
+            horizontalSpacing = dp(10f)
             stretchMode = GridView.STRETCH_COLUMN_WIDTH
             clipToPadding = false
-            setPadding(0, dp(6f), 0, dp(24f))
+            setPadding(0, dp(4f), 0, dp(24f))
             adapter = gridAdapter
         }
         contentColumn.addView(
@@ -206,7 +197,7 @@ class FyrSearchOverlayView(
             LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f)
         )
 
-        // Web search fallback button when query has no local app matches
+        // Web search fallback when query has no local app matches
         emptyWebSearchBtn = TextView(context).apply {
             gravity = Gravity.CENTER
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
@@ -236,25 +227,27 @@ class FyrSearchOverlayView(
     }
 
     fun applyTheme() {
-        setBackgroundColor(FyrThemeManager.searchBackdropColor)
+        // Translucent frosted scrim letting blurred wallpaper show through like desktop `fyrSearch`
+        setBackgroundColor(if (FyrThemeManager.isDark) 0x5C121018 else 0x88F4F4F8.toInt())
         searchPillBg.apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = dp(50f).toFloat()
-            setColor(FyrThemeManager.panelBgColor)
-            setStroke(max(2, dp(1.5f)), FyrThemeManager.accentWithAlpha(0.65f))
+            setColor(if (FyrThemeManager.isDark) 0x6E181620 else 0xCCF4F4F8.toInt())
+            setStroke(max(1, dp(1f)), FyrThemeManager.dividerColor)
         }
         inlineCardBg.apply {
             shape = GradientDrawable.RECTANGLE
-            cornerRadius = dp(20f).toFloat()
-            setColor(FyrThemeManager.accentWithAlpha(0.22f))
-            setStroke(max(1, dp(1f)), FyrThemeManager.accentWithAlpha(0.55f))
+            cornerRadius = dp(24f).toFloat()
+            setColor(if (FyrThemeManager.isDark) 0x7A1E1B28 else 0xCCF4F4F8.toInt())
+            setStroke(max(1, dp(1f)), FyrThemeManager.dividerColor)
         }
+        searchIcon.setTint(FyrThemeManager.textColor)
+        clearIcon.setTint(FyrThemeManager.textColorMuted)
         searchInput.setTextColor(FyrThemeManager.textColor)
         searchInput.setHintTextColor(FyrThemeManager.textColorMuted)
-        clearBtn.setTextColor(FyrThemeManager.textColorMuted)
         inlineTitle.setTextColor(FyrThemeManager.textColor)
         inlineSubtitle.setTextColor(FyrThemeManager.textColorMuted)
-        emptyWebSearchBtn.setTextColor(FyrThemeManager.accentColor)
+        emptyWebSearchBtn.setTextColor(FyrThemeManager.textColor)
         gridAdapter.notifyDataSetChanged()
     }
 
@@ -263,17 +256,15 @@ class FyrSearchOverlayView(
         updateFilter(searchInput.text?.toString() ?: "")
     }
 
-    /**
-     * Slides the FyrSearch drawer up and immediately focuses the search input + opens the soft keyboard.
-     */
     fun openAndFocus() {
         isOpen = true
+        onVisibilityChanged(true)
         applyTheme()
         searchInput.setText("")
         updateFilter("")
         visibility = View.VISIBLE
         alpha = 0f
-        translationY = dp(64f).toFloat()
+        translationY = dp(40f).toFloat()
         animate()
             .alpha(1f)
             .translationY(0f)
@@ -292,11 +283,12 @@ class FyrSearchOverlayView(
     fun close() {
         if (!isOpen) return
         isOpen = false
+        onVisibilityChanged(false)
         val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
         imm?.hideSoftInputFromWindow(searchInput.windowToken, 0)
         animate()
             .alpha(0f)
-            .translationY(dp(48f).toFloat())
+            .translationY(dp(32f).toFloat())
             .setDuration(140L)
             .withEndAction {
                 visibility = View.GONE
@@ -377,7 +369,7 @@ class FyrSearchOverlayView(
             val cell = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
-                setPadding(dp(6f), dp(8f), dp(6f), dp(8f))
+                setPadding(dp(4f), dp(6f), dp(4f), dp(6f))
             }
             val icon = SquircleIconView(context, app, repo)
             val label = TextView(context).apply {
@@ -387,7 +379,8 @@ class FyrSearchOverlayView(
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
                 gravity = Gravity.CENTER
-                setPadding(dp(2f), dp(6f), dp(2f), 0)
+                setPadding(dp(2f), dp(7f), dp(2f), 0)
+                setShadowLayer(4f, 0f, 1f, 0x88000000.toInt())
             }
             cell.addView(icon, LinearLayout.LayoutParams(dp(56f), dp(56f)))
             cell.addView(

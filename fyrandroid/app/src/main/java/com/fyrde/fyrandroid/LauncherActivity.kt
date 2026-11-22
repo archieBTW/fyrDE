@@ -5,7 +5,10 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.RenderEffect
+import android.graphics.Shader
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.View
@@ -78,7 +81,8 @@ class LauncherActivity : Activity() {
             repo = repo,
             onLaunchApp = { app -> launchApp(app) },
             onAppLongPress = { anchor, app -> showAppContextMenu(anchor, app) },
-            onThemeChanged = { themeListener() }
+            onThemeChanged = { themeListener() },
+            onVisibilityChanged = { updateHomeBlur() }
         )
 
         quickSettingsSheet = FyrQuickSettingsSheet(
@@ -88,7 +92,8 @@ class LauncherActivity : Activity() {
                 val lp = window.attributes
                 lp.screenBrightness = brightness.coerceIn(0.05f, 1.0f)
                 window.attributes = lp
-            }
+            },
+            onVisibilityChanged = { updateHomeBlur() }
         )
 
         root.addView(
@@ -191,6 +196,16 @@ class LauncherActivity : Activity() {
     private fun openQuickSettings() {
         if (searchOverlay.isOpen) searchOverlay.close()
         quickSettingsSheet.open()
+    }
+
+    private fun updateHomeBlur() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val shouldBlur = searchOverlay.isOpen || quickSettingsSheet.isOpen
+            homeGridView.setRenderEffect(
+                if (shouldBlur) RenderEffect.createBlurEffect(28f, 28f, Shader.TileMode.CLAMP)
+                else null
+            )
+        }
     }
 
     private fun launchApp(app: AppEntry) {

@@ -215,6 +215,13 @@ void main() {
       );
       expect(find.text('fyrpak'), findsOneWidget);
       expect(find.text('fyrAndroid'), findsOneWidget);
+
+      // Category filter pills wrap cleanly instead of hiding inside a horizontal scroll view.
+      final firstPill = find.byKey(const Key('category-tab-shell'));
+      expect(
+        find.ancestor(of: firstPill, matching: find.byType(Wrap)),
+        findsAtLeastNWidgets(1),
+      );
     },
   );
 }

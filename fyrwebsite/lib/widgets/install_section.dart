@@ -189,74 +189,72 @@ class _InstallSectionState extends State<InstallSection> {
                       child: Row(
                         children: [
                           Expanded(
-                            child: SingleChildScrollView(
-                              scrollDirection: Axis.horizontal,
-                              child: Row(
-                                children: List.generate(_tabs.length, (i) {
-                                  final tab = _tabs[i];
-                                  final selected = i == _tabIndex;
-                                  return Padding(
-                                    padding: const EdgeInsets.only(right: 8),
-                                    child: MouseRegion(
-                                      cursor: SystemMouseCursors.click,
-                                      child: GestureDetector(
-                                        key: Key('install-tab-${tab.id}'),
-                                        onTap: () =>
-                                            setState(() => _tabIndex = i),
-                                        child: AnimatedContainer(
-                                          duration:
-                                              const Duration(milliseconds: 180),
-                                          padding: EdgeInsets.symmetric(
-                                            horizontal: isMobile ? 10 : 13,
-                                            vertical: 7,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            borderRadius:
-                                                BorderRadius.circular(10),
-                                            color: selected
-                                                ? FyrColors.accentVibrant
-                                                    .withValues(alpha: 0.24)
-                                                : Colors.white
-                                                    .withValues(alpha: 0.04),
-                                            border: Border.all(
-                                              color: selected
-                                                  ? FyrColors.accent
-                                                      .withValues(alpha: 0.72)
-                                                  : FyrColors.borderSubtle,
-                                            ),
-                                          ),
-                                          child: Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              Icon(
-                                                tab.icon,
-                                                size: 14,
-                                                color: selected
-                                                    ? FyrColors.accentCyan
-                                                    : Colors.white54,
-                                              ),
-                                              const SizedBox(width: 6),
-                                              Text(
-                                                tab.label,
-                                                style: FyrFonts.mono(
-                                                  fontSize:
-                                                      isMobile ? 11.5 : 12,
-                                                  fontWeight: selected
-                                                      ? FontWeight.w700
-                                                      : FontWeight.w500,
-                                                  color: selected
-                                                      ? Colors.white
-                                                      : Colors.white60,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
+                            child: Wrap(
+                              alignment: WrapAlignment.center,
+                              runAlignment: WrapAlignment.center,
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: List.generate(_tabs.length, (i) {
+                                final tab = _tabs[i];
+                                final selected = i == _tabIndex;
+                                return MouseRegion(
+                                  cursor: SystemMouseCursors.click,
+                                  child: GestureDetector(
+                                    key: Key('install-tab-${tab.id}'),
+                                    onTap: () =>
+                                        setState(() => _tabIndex = i),
+                                    child: AnimatedContainer(
+                                      duration:
+                                          const Duration(milliseconds: 180),
+                                      padding: EdgeInsets.symmetric(
+                                        horizontal: isMobile ? 10 : 13,
+                                        vertical: 7,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        borderRadius:
+                                            BorderRadius.circular(10),
+                                        color: selected
+                                            ? FyrColors.accentVibrant
+                                                .withValues(alpha: 0.24)
+                                            : Colors.white
+                                                .withValues(alpha: 0.04),
+                                        border: Border.all(
+                                          color: selected
+                                              ? FyrColors.accent
+                                                  .withValues(alpha: 0.72)
+                                              : FyrColors.borderSubtle,
                                         ),
                                       ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            tab.icon,
+                                            size: 14,
+                                            color: selected
+                                                ? FyrColors.accentCyan
+                                                : Colors.white54,
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Text(
+                                            tab.label,
+                                            style: FyrFonts.mono(
+                                              fontSize:
+                                                  isMobile ? 11.5 : 12,
+                                              fontWeight: selected
+                                                  ? FontWeight.w700
+                                                  : FontWeight.w500,
+                                              color: selected
+                                                  ? Colors.white
+                                                  : Colors.white60,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
                                     ),
-                                  );
-                                }),
-                              ),
+                                  ),
+                                );
+                              }),
                             ),
                           ),
                           if (!isMobile) ...[

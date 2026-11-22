@@ -142,19 +142,32 @@ class FyrHomeGridView(
         clockCol.addView(headerTimeView)
         clockCol.addView(headerDateView)
 
-        val qsPill = TextView(context).apply {
-            text = "Quick Settings ▾"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            typeface = Typeface.DEFAULT_BOLD
-            setPadding(dp(14f), dp(8f), dp(14f), dp(8f))
+        val qsTrigger = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12f), dp(8f), dp(12f), dp(8f))
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(50f).toFloat()
+                setColor(0x55181620)
+                setStroke(max(1, dp(1f)), 0x26FFFFFF)
+            }
             setOnClickListener { onSwipeDownQuickSettings() }
         }
+        qsTrigger.addView(
+            FyrIconView(context, FyrIcon.WIFI, Color.WHITE),
+            LinearLayout.LayoutParams(dp(15f), dp(15f)).apply { rightMargin = dp(8f) }
+        )
+        qsTrigger.addView(
+            FyrIconView(context, FyrIcon.BLUETOOTH, 0xCCFFFFFF.toInt()),
+            LinearLayout.LayoutParams(dp(15f), dp(15f))
+        )
 
         headerRow.addView(
             clockCol,
             LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
         )
-        headerRow.addView(qsPill)
+        headerRow.addView(qsTrigger)
         rootColumn.addView(
             headerRow,
             LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
@@ -183,14 +196,25 @@ class FyrHomeGridView(
             setPadding(0, 0, 0, dp(8f))
         }
 
-        val searchHintPill = TextView(context).apply {
-            text = "⌕  Search"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            setPadding(dp(16f), dp(6f), dp(16f), dp(6f))
+        val searchHintPill = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16f), dp(7f), dp(18f), dp(7f))
             background = searchPillBackground
             setOnClickListener { onSwipeUpSearch() }
         }
+        searchHintPill.addView(
+            FyrIconView(context, FyrIcon.SEARCH, 0xCCFFFFFF.toInt()),
+            LinearLayout.LayoutParams(dp(14f), dp(14f)).apply { rightMargin = dp(7f) }
+        )
+        searchHintPill.addView(
+            TextView(context).apply {
+                text = "Search"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                setTextColor(0xCCFFFFFF.toInt())
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            }
+        )
 
         bottomIndicatorCol.addView(pageDotsContainer)
         bottomIndicatorCol.addView(searchHintPill)
