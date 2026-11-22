@@ -36,8 +36,9 @@ chmod +x install.sh
 | `-s` | Reinstall **Sway configuration** and scripts. |
 | `-l` | Reinstall **SDDM theme** and configuration. |
 | `-t` | Reinstall **GTK and icon themes**. |
-| `-d` | Install **system dependencies** only. |
-| `-f` | Install **fyr_fetch** tool and add to shell config. |
+| `-d` | Install **system dependencies** only (uses `fyrpak` by default; `install.yay.sh.bak` kept as a `yay` fallback). |
+| `-p` | Build and install **fyrpak** (native Go package manager & AUR helper). |
+| `-f` | Install **fyrfetch** tool and add to PATH & shell config. |
 | `-z` | Setup **ZSH and Oh-My-Zsh** environment. |
 | `-h` | Show the help message. |
 
@@ -155,7 +156,8 @@ sway
   ![Monitor](screenshots/fyrmonitor.png)
 - **fyrDisks**: Disk, partition, LUKS encryption, and USB ISO flasher utility.
   ![Disks](screenshots/fyrdisks.png)
-- **fyr_fetch**: A custom system information tool (like neofetch).
+- **fyrpak**: Native Go package manager, AUR helper (`yay`-compatible `-Syu`, `-S`, `-Ss`, `-Si`, `-R`, `-Q`, `-Yc`, `-Ps`, `-G`), and built-in fyrDE updater (`fyrpak fyr update`, `fyrpak fyr status`, `fyrpak fyr doctor`, `fyrpak fyr clean`).
+- **fyrfetch**: A custom system information tool (like neofetch).
 
 ### Productivity & Media
 - **Goose** (`fyrBrowser`): A CEF-based web browser designed for fyrDE.

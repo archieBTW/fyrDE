@@ -95,11 +95,35 @@ usage() {
     echo "  -l          Reinstall SDDM theme and configuration"
     echo "  -t          Reinstall GTK and icon themes"
     echo "  -d          Install system dependencies only"
+    echo "  -p          Build and install fyrpak (Go package manager & AUR helper)"
     echo "  -f          Install Fyr Fetch tool and add to zshrc"
     echo "  -z          Setup ZSH and Oh-My-Zsh"
     echo "  -H          Hide redundant dependency apps (mpv, foot, etc.)"
     echo "  -F          Force full installation (default if no flags provided)"
     echo "  -h          Show this help message"
+}
+
+install_fyrpak() {
+    next_step "Building and installing fyrpak..."
+    if [ ! -d "./fyrpak" ]; then
+        echo "fyrpak directory not found."
+        return 1
+    fi
+    if ! command -v go &> /dev/null; then
+        if [ "$OS" = "arch" ] || [ "$OS" = "manjaro" ] || [ "$OS" = "endeavouros" ]; then
+            sudo pacman -S --needed --noconfirm go
+        fi
+    fi
+    if ! command -v go &> /dev/null; then
+        echo "Go compiler not found; cannot build fyrpak."
+        return 1
+    fi
+    echo "Building fyrpak (Go package manager & AUR helper)..."
+    mkdir -p "$HOME/.local/bin" "$HOME/.config/fyr"
+    pwd > "$HOME/.config/fyr/repo_path"
+    (cd ./fyrpak && go build -trimpath -ldflags="-s -w" -o "$HOME/.local/bin/fyrpak" .)
+    sudo install -Dm755 "$HOME/.local/bin/fyrpak" /usr/local/bin/fyrpak
+    echo "fyrpak installed to /usr/local/bin/fyrpak and ~/.local/bin/fyrpak"
 }
 
 install_deps() {
@@ -115,16 +139,12 @@ install_deps() {
         echo "Updating system..."
         sudo pacman -Syu --noconfirm
 
-        echo "Installing base-devel and git for building packages..."
-        sudo pacman -S --needed --noconfirm base-devel git
+        echo "Installing base-devel, git, and go for building packages..."
+        sudo pacman -S --needed --noconfirm base-devel git go
 
-        if ! command -v yay &> /dev/null; then
-            echo "yay could not be found. Installing yay..."
-            git clone https://aur.archlinux.org/yay.git /tmp/yay
-            cd /tmp/yay
-            makepkg -si --noconfirm
-            cd -
-            rm -rf /tmp/yay
+        if ! command -v fyrpak &> /dev/null; then
+            echo "fyrpak could not be found. Building and installing fyrpak..."
+            install_fyrpak
         fi
 
         deps=( 
@@ -139,7 +159,7 @@ install_deps() {
             "wlroots0.20" "scenefx"
         )
         sudo pacman -S --needed --noconfirm "${deps[@]}"
-        yay -S --needed --noconfirm xdg-desktop-portal-termfilechooser-hunkyburrito-git
+        fyrpak -S --needed --noconfirm xdg-desktop-portal-termfilechooser-hunkyburrito-git
 
     elif [ "$OS" = "ubuntu" ] || [ "$OS" = "debian" ]; then
         echo "Updating system..."
@@ -1177,6 +1197,11 @@ done
 echo ""
 EOF
     chmod +x ~/.config/fyr/fyr_fetch
+    mkdir -p "$HOME/.local/bin"
+    ln -sf "$HOME/.config/fyr/fyr_fetch" "$HOME/.local/bin/fyrfetch"
+    ln -sf "$HOME/.config/fyr/fyr_fetch" "$HOME/.local/bin/fyr_fetch"
+    sudo ln -sf "$HOME/.config/fyr/fyr_fetch" /usr/local/bin/fyrfetch
+    sudo ln -sf "$HOME/.config/fyr/fyr_fetch" /usr/local/bin/fyr_fetch
     
     if [ -f "$HOME/.zshrc" ]; then
         if ! grep -q "fyr_fetch" "$HOME/.zshrc"; then
@@ -1828,6 +1853,7 @@ INSTALL_SDDM=false
 INSTALL_THEMES=false
 INSTALL_ZSH=false
 INSTALL_FETCH=false
+INSTALL_FYRPAK=false
 HIDE_REDUNDANT=false
 INSTALL_GRAPHICS=false
 
@@ -1853,7 +1879,7 @@ setup_zsh() {
 
 APP_TO_REINSTALL=""
 
-while getopts "a:wcsltdhfFzHg" opt; do
+while getopts "a:wcsltdhfFzHgp" opt; do
     case $opt in
         a) APP_TO_REINSTALL="$OPTARG"
            if [ ! -d "./$APP_TO_REINSTALL" ]; then
@@ -1871,6 +1897,7 @@ while getopts "a:wcsltdhfFzHg" opt; do
         d) INSTALL_DEPS=true; MODULAR=true ;;
         z) INSTALL_ZSH=true; MODULAR=true ;;
         f) INSTALL_FETCH=true; MODULAR=true ;;
+        p) INSTALL_FYRPAK=true; MODULAR=true ;;
         g) INSTALL_GRAPHICS=true; MODULAR=true ;;
         H) HIDE_REDUNDANT=true; MODULAR=true ;;
         F) MODULAR=false ;;
@@ -1881,8 +1908,9 @@ done
 
 if [ "$MODULAR" = "false" ]; then
     echo "Starting full installation..."
-    TOTAL_STEPS=$(( 10 + ${#flutter_apps[@]} ))
+    TOTAL_STEPS=$(( 11 + ${#flutter_apps[@]} ))
     install_deps
+    install_fyrpak
     setup_zsh
     install_flutter
     build_swayfx
@@ -1898,6 +1926,7 @@ else
     # Calculate steps
     TOTAL_STEPS=0
     [ "$INSTALL_DEPS" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
+    [ "$INSTALL_FYRPAK" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
     [ "$INSTALL_ZSH" = "true" ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
     [ -n "$APP_TO_REINSTALL" ] && TOTAL_STEPS=$((TOTAL_STEPS + 2)) # flutter + app
     [ "$INSTALL_GRAPHICS" = "true" ] && [ "$APP_TO_REINSTALL" != "fyrgraphics" ] && TOTAL_STEPS=$((TOTAL_STEPS + 2))
@@ -1911,6 +1940,7 @@ else
     if [ "$TOTAL_STEPS" -eq 0 ]; then TOTAL_STEPS=1; fi
 
     if [ "$INSTALL_DEPS" = "true" ]; then install_deps; fi
+    if [ "$INSTALL_FYRPAK" = "true" ]; then install_fyrpak; fi
     if [ "$INSTALL_ZSH" = "true" ]; then setup_zsh; fi
     if [ -n "$APP_TO_REINSTALL" ]; then
         install_flutter
