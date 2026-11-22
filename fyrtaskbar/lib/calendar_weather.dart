@@ -571,12 +571,10 @@ class _CalendarMenuPopupState extends State<CalendarMenuPopup>
                                     margin: const EdgeInsets.only(bottom: 10),
                                     padding: const EdgeInsets.all(8),
                                     decoration: BoxDecoration(
-                                      color: FyrTheme.cardColor.withOpacity(
-                                        0.35,
-                                      ),
+                                      color: FyrTheme.cardColor,
                                       borderRadius: BorderRadius.circular(12),
                                       border: Border.all(
-                                        color: FyrTheme.cardColor,
+                                        color: FyrTheme.dividerColor,
                                       ),
                                     ),
                                     child: Column(

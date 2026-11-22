@@ -282,24 +282,39 @@ class _ActionPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = FyrTheme.isDark;
     final fg = danger
         ? Colors.redAccent
         : (accent ? FyrTheme.accentColor : FyrTheme.textColor);
     final bg = danger
-        ? Colors.redAccent.withOpacity(0.14)
+        ? Colors.redAccent.withValues(alpha: 0.14)
         : (accent
-              ? FyrTheme.accentColor.withOpacity(0.2)
-              : FyrTheme.cardColor.withOpacity(0.8));
+              ? FyrTheme.accentColor.withValues(alpha: 0.22)
+              : (isDark
+                    ? Colors.white.withValues(alpha: 0.08)
+                    : Colors.black.withValues(alpha: 0.06)));
+    final borderColor = danger
+        ? Colors.redAccent.withValues(alpha: 0.32)
+        : (accent
+              ? FyrTheme.accentColor.withValues(alpha: 0.48)
+              : FyrTheme.dividerColor);
 
     final child = Material(
       color: bg,
-      borderRadius: BorderRadius.circular(8),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(9),
+        side: BorderSide(color: borderColor, width: 1),
+      ),
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
+        hoverColor: danger
+            ? Colors.redAccent.withValues(alpha: 0.18)
+            : FyrTheme.hoverColor,
+        borderRadius: BorderRadius.circular(9),
         child: Padding(
           padding: EdgeInsets.symmetric(
-            horizontal: label.isEmpty ? 8 : 6,
+            horizontal: label.isEmpty ? 9 : 7,
             vertical: 7,
           ),
           child: Row(
@@ -308,11 +323,11 @@ class _ActionPill extends StatelessWidget {
             children: [
               Icon(icon, size: 14, color: fg),
               if (label.isNotEmpty) ...[
-                const SizedBox(width: 4),
+                const SizedBox(width: 5),
                 Text(
                   label,
                   style: TextStyle(
-                    fontSize: 11,
+                    fontSize: 11.5,
                     fontWeight: FontWeight.w600,
                     color: fg,
                   ),

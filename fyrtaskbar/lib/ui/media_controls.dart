@@ -20,7 +20,9 @@ class TaskbarMediaPill extends StatelessWidget {
           constraints: const BoxConstraints(maxWidth: 230),
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
           decoration: BoxDecoration(
-            color: FyrTheme.cardColor.withOpacity(0.55),
+            color: FyrTheme.isDark
+                ? Colors.white.withValues(alpha: 0.08)
+                : Colors.black.withValues(alpha: 0.06),
             borderRadius: BorderRadius.circular(18),
             border: Border.all(
               color: player.isPlaying
@@ -136,7 +138,9 @@ class QuickSettingsMediaCard extends StatelessWidget {
             return Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: FyrTheme.cardColor.withOpacity(0.75),
+                color: FyrTheme.isDark
+                    ? Colors.white.withValues(alpha: 0.07)
+                    : Colors.black.withValues(alpha: 0.05),
                 borderRadius: BorderRadius.circular(14),
                 border: Border.all(
                   color: FyrTheme.textColor.withOpacity(0.08),
