@@ -119,6 +119,34 @@ static void close_anim_complete_callback(void *data) {
 	container_destroy(con);
 }
 
+static void sync_container_global_coords(struct sway_container *con) {
+	if (con->view) {
+		wlr_scene_node_coords(&con->scene_tree->node,
+			&con->animation_state.current_global_x,
+			&con->animation_state.current_global_y);
+	} else if (con->current.children) {
+		for (int i = 0; i < con->current.children->length; i++) {
+			sync_container_global_coords(con->current.children->items[i]);
+		}
+	}
+}
+
+static void sync_workspace_global_coords(struct sway_workspace *ws) {
+	if (!ws) {
+		return;
+	}
+	if (ws->current.tiling) {
+		for (int i = 0; i < ws->current.tiling->length; i++) {
+			sync_container_global_coords(ws->current.tiling->items[i]);
+		}
+	}
+	if (ws->current.floating) {
+		for (int i = 0; i < ws->current.floating->length; i++) {
+			sync_container_global_coords(ws->current.floating->items[i]);
+		}
+	}
+}
+
 static void workspace_slide_update_callback(void *data) {
 	struct sway_workspace *ws = data;
 	if (!ws || !ws->output) {
@@ -142,6 +170,8 @@ static void workspace_slide_update_callback(void *data) {
 				floater->current.x + offset_x, floater->current.y);
 		}
 	}
+
+	sync_workspace_global_coords(ws);
 }
 
 static void workspace_slide_complete_callback(void *data) {
@@ -165,6 +195,8 @@ static void workspace_slide_complete_callback(void *data) {
 				floater->current.x, floater->current.y);
 		}
 	}
+
+	sync_workspace_global_coords(ws);
 
 	if (output->current.active_workspace != ws) {
 		wlr_scene_node_set_enabled(&ws->layers.tiling->node, false);
@@ -1078,6 +1110,7 @@ static void arrange_output(struct sway_output *output, int width, int height) {
 								floater->current.x + offset_x, floater->current.y);
 						}
 					}
+					sync_workspace_global_coords(child);
 				}
 			}
 		} else if (animating && !activated) {
@@ -1100,6 +1133,7 @@ static void arrange_output(struct sway_output *output, int width, int height) {
 							floater->current.x + offset_x, floater->current.y);
 					}
 				}
+				sync_workspace_global_coords(child);
 			}
 		} else {
 			wlr_scene_node_set_position(&child->layers.tiling->node,
