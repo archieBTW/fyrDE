@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Devign
+GenericName=UI/UX Vector Design Studio
+Comment=Figma-style vector interface design & prototyping studio for fyrDE
+Exec=/usr/local/bin/devign %f
+Icon=devign
+Terminal=false
+Type=Application
+Categories=Graphics;2DGraphics;VectorGraphics;Development;Design;
+MimeType=application/x-devign;image/svg+xml;
+Keywords=figma;design;ui;ux;vector;prototype;wireframe;devign;

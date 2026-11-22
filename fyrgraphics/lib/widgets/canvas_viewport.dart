@@ -331,6 +331,28 @@ class CanvasViewportState extends State<CanvasViewport>
           smudge: ctrl.activeTool == ToolType.smudge,
         );
         break;
+      case ToolType.dodge:
+      case ToolType.burn:
+      case ToolType.sponge:
+        _lastStrokeCanvas = canvasPos;
+        ctrl.paintToneSegment(
+          canvasPos,
+          canvasPos,
+          mode: ctrl.activeTool == ToolType.dodge
+              ? 'dodge'
+              : (ctrl.activeTool == ToolType.burn
+                  ? 'burn'
+                  : (ctrl.spongeDesaturate ? 'desaturate' : 'saturate')),
+        );
+        break;
+      case ToolType.sharpenBrush:
+        _lastStrokeCanvas = canvasPos;
+        ctrl.paintSharpenSegment(canvasPos, canvasPos);
+        break;
+      case ToolType.healingBrush:
+        _lastStrokeCanvas = canvasPos;
+        ctrl.paintSpotHeal(canvasPos);
+        break;
       case ToolType.eyedropper:
         ctrl.sampleEyedropper(canvasPos);
         break;
@@ -429,6 +451,31 @@ class CanvasViewportState extends State<CanvasViewport>
           smudge: ctrl.activeTool == ToolType.smudge,
         );
         _lastStrokeCanvas = canvasPos;
+        break;
+      case ToolType.dodge:
+      case ToolType.burn:
+      case ToolType.sponge:
+        ctrl.paintToneSegment(
+          _lastStrokeCanvas ?? prev,
+          canvasPos,
+          mode: ctrl.activeTool == ToolType.dodge
+              ? 'dodge'
+              : (ctrl.activeTool == ToolType.burn
+                  ? 'burn'
+                  : (ctrl.spongeDesaturate ? 'desaturate' : 'saturate')),
+        );
+        _lastStrokeCanvas = canvasPos;
+        break;
+      case ToolType.sharpenBrush:
+        ctrl.paintSharpenSegment(_lastStrokeCanvas ?? prev, canvasPos);
+        _lastStrokeCanvas = canvasPos;
+        break;
+      case ToolType.healingBrush:
+        if ((canvasPos - (_lastStrokeCanvas ?? prev)).distance >=
+            max(4.0, ctrl.brushSize * 0.25)) {
+          ctrl.paintSpotHeal(canvasPos);
+          _lastStrokeCanvas = canvasPos;
+        }
         break;
       case ToolType.eyedropper:
         ctrl.sampleEyedropper(canvasPos);
@@ -534,6 +581,21 @@ class CanvasViewportState extends State<CanvasViewport>
       case ToolType.blurBrush:
         await ctrl.commitStrokeHistory('Blur Brush');
         break;
+      case ToolType.dodge:
+        await ctrl.commitStrokeHistory('Dodge');
+        break;
+      case ToolType.burn:
+        await ctrl.commitStrokeHistory('Burn');
+        break;
+      case ToolType.sponge:
+        await ctrl.commitStrokeHistory('Sponge');
+        break;
+      case ToolType.sharpenBrush:
+        await ctrl.commitStrokeHistory('Sharpen Brush');
+        break;
+      case ToolType.healingBrush:
+        await ctrl.commitStrokeHistory('Spot Heal');
+        break;
       case ToolType.rectSelect:
         if (start != null && end != null) {
           ctrl.applyRectSelection(Rect.fromPoints(start, end));
@@ -600,18 +662,67 @@ class _CanvasPainter extends CustomPainter {
     canvas.clipRect(docRect);
     _drawCheckerboard(canvas, docRect, doc.zoom);
 
-    // Layers composited in order
-    for (final layer in doc.layers) {
-      if (!layer.visible || layer.opacity <= 0.0) continue;
-      final img = layer.cachedImage;
-      if (img == null) continue;
-      final paint = Paint()
-        ..color = Color.fromRGBO(255, 255, 255, layer.opacity)
-        ..blendMode = layer.blendMode.uiBlendMode
-        ..filterQuality =
-            doc.zoom >= 2.0 ? FilterQuality.none : FilterQuality.medium;
-      canvas.drawImage(img, Offset(layer.offsetX, layer.offsetY), paint);
+    // Layers composited in order (supporting Clipping Masks!)
+    int i = 0;
+    while (i < doc.layers.length) {
+      final baseLayer = doc.layers[i];
+      // Collect any immediately following clipping-masked layers
+      final clipped = <RasterLayer>[];
+      int j = i + 1;
+      while (j < doc.layers.length && doc.layers[j].clippingMask) {
+        clipped.add(doc.layers[j]);
+        j++;
+      }
+
+      if (baseLayer.visible &&
+          baseLayer.opacity > 0.0 &&
+          baseLayer.cachedImage != null) {
+        if (clipped.isEmpty) {
+          final paint = Paint()
+            ..color = Color.fromRGBO(255, 255, 255, baseLayer.opacity)
+            ..blendMode = baseLayer.blendMode.uiBlendMode
+            ..filterQuality =
+                doc.zoom >= 2.0 ? FilterQuality.none : FilterQuality.medium;
+          canvas.drawImage(
+            baseLayer.cachedImage!,
+            Offset(baseLayer.offsetX, baseLayer.offsetY),
+            paint,
+          );
+        } else {
+          canvas.saveLayer(
+            docRect,
+            Paint()..blendMode = baseLayer.blendMode.uiBlendMode,
+          );
+          canvas.drawImage(
+            baseLayer.cachedImage!,
+            Offset(baseLayer.offsetX, baseLayer.offsetY),
+            Paint()
+              ..color = Color.fromRGBO(255, 255, 255, baseLayer.opacity)
+              ..filterQuality =
+                  doc.zoom >= 2.0 ? FilterQuality.none : FilterQuality.medium,
+          );
+          for (final cl in clipped) {
+            if (!cl.visible || cl.opacity <= 0.0 || cl.cachedImage == null) {
+              continue;
+            }
+            canvas.drawImage(
+              cl.cachedImage!,
+              Offset(cl.offsetX, cl.offsetY),
+              Paint()
+                ..color = Color.fromRGBO(255, 255, 255, cl.opacity)
+                ..blendMode = BlendMode.srcATop
+                ..filterQuality =
+                    doc.zoom >= 2.0 ? FilterQuality.none : FilterQuality.medium,
+            );
+          }
+          canvas.restore();
+        }
+      }
+      i = j;
     }
+
+    // Composition Guides & Custom Guides
+    _drawGuidesAndSymmetry(canvas, docRect);
 
     // Pixel Grid at high zoom
     if (doc.showGrid && doc.zoom >= 4.0) {
@@ -648,6 +759,79 @@ class _CanvasPainter extends CustomPainter {
     _drawActiveOverlays(canvas);
 
     canvas.restore();
+  }
+
+  void _drawGuidesAndSymmetry(Canvas canvas, Rect docRect) {
+    final sw = 1.0 / doc.zoom;
+    final guidePaint = Paint()
+      ..color = Colors.cyanAccent.withValues(alpha: 0.55)
+      ..strokeWidth = sw;
+
+    // Composition overlays
+    if (doc.compositionGuide == CompositionGuide.ruleOfThirds) {
+      for (final f in [1 / 3, 2 / 3]) {
+        canvas.drawLine(Offset(docRect.width * f, 0),
+            Offset(docRect.width * f, docRect.height), guidePaint);
+        canvas.drawLine(Offset(0, docRect.height * f),
+            Offset(docRect.width, docRect.height * f), guidePaint);
+      }
+    } else if (doc.compositionGuide == CompositionGuide.goldenRatio) {
+      for (final f in [0.382, 0.618]) {
+        canvas.drawLine(Offset(docRect.width * f, 0),
+            Offset(docRect.width * f, docRect.height), guidePaint);
+        canvas.drawLine(Offset(0, docRect.height * f),
+            Offset(docRect.width, docRect.height * f), guidePaint);
+      }
+    } else if (doc.compositionGuide == CompositionGuide.centerCrosshair) {
+      canvas.drawLine(Offset(docRect.width / 2, 0),
+          Offset(docRect.width / 2, docRect.height), guidePaint);
+      canvas.drawLine(Offset(0, docRect.height / 2),
+          Offset(docRect.width, docRect.height / 2), guidePaint);
+    }
+
+    // Custom H/V guides
+    for (final y in doc.hGuides) {
+      canvas.drawLine(Offset(0, y), Offset(docRect.width, y), guidePaint);
+    }
+    for (final x in doc.vGuides) {
+      canvas.drawLine(Offset(x, 0), Offset(x, docRect.height), guidePaint);
+    }
+
+    // Symmetry Axis Overlay
+    if (ctrl.isAdvancedMode && ctrl.symmetryMode != SymmetryMode.off) {
+      final symPaint = Paint()
+        ..color = FyrTheme.accentColor.withValues(alpha: 0.75)
+        ..strokeWidth = 1.4 / doc.zoom;
+      final cx = docRect.width / 2;
+      final cy = docRect.height / 2;
+      switch (ctrl.symmetryMode) {
+        case SymmetryMode.off:
+          break;
+        case SymmetryMode.vertical:
+          canvas.drawLine(Offset(cx, 0), Offset(cx, docRect.height), symPaint);
+          break;
+        case SymmetryMode.horizontal:
+          canvas.drawLine(Offset(0, cy), Offset(docRect.width, cy), symPaint);
+          break;
+        case SymmetryMode.quadrant:
+          canvas.drawLine(Offset(cx, 0), Offset(cx, docRect.height), symPaint);
+          canvas.drawLine(Offset(0, cy), Offset(docRect.width, cy), symPaint);
+          break;
+        case SymmetryMode.radial6:
+        case SymmetryMode.radial8:
+          final spokes = ctrl.symmetryMode == SymmetryMode.radial6 ? 6 : 8;
+          final r = max(docRect.width, docRect.height);
+          for (int k = 0; k < spokes; k++) {
+            final a = (2 * pi * k) / spokes;
+            canvas.drawLine(
+              Offset(cx, cy),
+              Offset(cx + cos(a) * r, cy + sin(a) * r),
+              symPaint,
+            );
+          }
+          break;
+      }
+    }
   }
 
   void _drawCheckerboard(Canvas canvas, Rect rect, double zoom) {

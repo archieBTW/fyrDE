@@ -4,16 +4,21 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:fyrtaskbar/calendar_weather.dart';
 import 'package:fyrtaskbar/fyr_theme.dart';
 import 'package:fyrtaskbar/phone_service.dart';
 import 'package:fyrtaskbar/services/app_service.dart';
+import 'package:fyrtaskbar/services/tray_service.dart';
 import 'package:fyrtaskbar/state/system_state.dart';
 import 'package:fyrtaskbar/ui/clock_widget.dart';
+import 'package:fyrtaskbar/ui/media_controls.dart';
 import 'package:fyrtaskbar/ui/notification_popup_overlay.dart';
 import 'package:fyrtaskbar/ui/phone_menu.dart';
 import 'package:fyrtaskbar/ui/quick_settings.dart';
+import 'package:fyrtaskbar/ui/screenshot_toast.dart';
 import 'package:fyrtaskbar/ui/start_menu.dart';
+import 'package:fyrtaskbar/ui/tray_menu_popup.dart';
 import 'package:fyrtaskbar/workspace_switcher.dart';
 import 'package:wayland_layer_shell/types.dart';
 import 'package:wayland_layer_shell/wayland_layer_shell.dart';
@@ -34,6 +39,7 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
     super.initState();
     AppService.getInstalledAppsSync();
     SystemState.activePopups.addListener(_onPopupsChanged);
+    SystemState.activeScreenshotToast.addListener(_onPopupsChanged);
     _appsSub = AppService.onAppsChanged.listen((_) {
       if (mounted) _precacheStartMenuIcons();
     });
@@ -66,6 +72,7 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
   void dispose() {
     _appsSub?.cancel();
     SystemState.activePopups.removeListener(_onPopupsChanged);
+    SystemState.activeScreenshotToast.removeListener(_onPopupsChanged);
     super.dispose();
   }
 
@@ -79,6 +86,9 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
   bool _isQuickSettingsOpen = false;
   bool _isCalendarOpen = false;
   bool _isPhoneMenuOpen = false;
+  TrayItem? _activeTrayItem;
+  List<TrayMenuEntry> _activeTrayEntries = const [];
+  double _trayMenuRight = 240;
 
   void _toggleStartMenu() async {
     setState(() {
@@ -87,6 +97,7 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
         _isQuickSettingsOpen = false;
         _isCalendarOpen = false;
         _isPhoneMenuOpen = false;
+        _activeTrayItem = null;
       }
     });
     _updateWindowSize();
@@ -99,6 +110,7 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
         _isStartMenuOpen = false;
         _isCalendarOpen = false;
         _isPhoneMenuOpen = false;
+        _activeTrayItem = null;
       }
     });
     _updateWindowSize();
@@ -111,6 +123,7 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
         _isStartMenuOpen = false;
         _isQuickSettingsOpen = false;
         _isPhoneMenuOpen = false;
+        _activeTrayItem = null;
       }
     });
     _updateWindowSize();
@@ -120,12 +133,14 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
     if (_isStartMenuOpen ||
         _isQuickSettingsOpen ||
         _isCalendarOpen ||
-        _isPhoneMenuOpen) {
+        _isPhoneMenuOpen ||
+        _activeTrayItem != null) {
       setState(() {
         _isStartMenuOpen = false;
         _isQuickSettingsOpen = false;
         _isCalendarOpen = false;
         _isPhoneMenuOpen = false;
+        _activeTrayItem = null;
       });
       _updateWindowSize();
     }
@@ -138,9 +153,71 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
         _isStartMenuOpen = false;
         _isQuickSettingsOpen = false;
         _isCalendarOpen = false;
+        _activeTrayItem = null;
       }
     });
     _updateWindowSize();
+  }
+
+  Future<void> _openTrayMenu(TrayItem item, Offset globalPos) async {
+    if (_activeTrayItem?.serviceKey == item.serviceKey) {
+      setState(() => _activeTrayItem = null);
+      _updateWindowSize();
+      return;
+    }
+    final entries = await TrayService.fetchMenu(item);
+    if (!mounted) return;
+    final rightOffset = (SystemState.screenWidth - globalPos.dx - 120)
+        .clamp(12.0, math.max(12.0, SystemState.screenWidth - 260.0))
+        .toDouble();
+    setState(() {
+      _isStartMenuOpen = false;
+      _isQuickSettingsOpen = false;
+      _isCalendarOpen = false;
+      _isPhoneMenuOpen = false;
+      _activeTrayItem = item;
+      _activeTrayEntries = entries;
+      _trayMenuRight = rightOffset;
+    });
+    _updateWindowSize();
+  }
+
+  Widget _buildTrayIcon(TrayItem item) {
+    if (item.resolvedIconFile != null) {
+      final path = item.resolvedIconFile!;
+      if (path.toLowerCase().endsWith('.svg')) {
+        return SvgPicture.file(
+          File(path),
+          width: 18,
+          height: 18,
+          fit: BoxFit.contain,
+        );
+      }
+      return Image.file(
+        File(path),
+        width: 18,
+        height: 18,
+        fit: BoxFit.contain,
+        errorBuilder: (_, __, ___) => Icon(
+          Icons.apps,
+          size: 16,
+          color: FyrTheme.textColor.withOpacity(0.85),
+        ),
+      );
+    }
+    if (item.pixmapImage != null) {
+      return RawImage(
+        image: item.pixmapImage,
+        width: 18,
+        height: 18,
+        fit: BoxFit.contain,
+      );
+    }
+    return Icon(
+      Icons.circle,
+      size: 10,
+      color: FyrTheme.accentColor,
+    );
   }
 
   bool _isOverlayLayer = false;
@@ -152,7 +229,9 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
         _isQuickSettingsOpen ||
         _isCalendarOpen ||
         _isPhoneMenuOpen ||
-        SystemState.activePopups.value.isNotEmpty;
+        _activeTrayItem != null ||
+        SystemState.activePopups.value.isNotEmpty ||
+        SystemState.activeScreenshotToast.value != null;
 
     if (expanded) {
       if (!_isOverlayLayer) {
@@ -223,7 +302,6 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                       ),
                     ),
                   ),
-                  const NotificationPopupOverlay(),
                   Positioned(
                     left: 0,
                     top: 0,
@@ -245,6 +323,7 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                           ),
                         ),
                         const WorkspaceSwitcher(),
+                        TaskbarMediaPill(onOpenDetails: _toggleQuickSettings),
                       ],
                     ),
                   ),
@@ -255,6 +334,71 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        ValueListenableBuilder<List<TrayItem>>(
+                          valueListenable: TrayService.items,
+                          builder: (context, trayItems, _) {
+                            if (trayItems.isEmpty) {
+                              return const SizedBox.shrink();
+                            }
+                            return Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                ...trayItems.map((item) {
+                                  return Tooltip(
+                                    message: item.displayLabel,
+                                    child: GestureDetector(
+                                      behavior: HitTestBehavior.opaque,
+                                      onTapUp: (details) async {
+                                        if (item.itemIsMenu &&
+                                            item.menuPath != null) {
+                                          await _openTrayMenu(
+                                            item,
+                                            details.globalPosition,
+                                          );
+                                        } else {
+                                          final ok = await TrayService.activate(
+                                            item,
+                                            details.globalPosition.dx.round(),
+                                            details.globalPosition.dy.round(),
+                                          );
+                                          if (!ok && item.menuPath != null) {
+                                            await _openTrayMenu(
+                                              item,
+                                              details.globalPosition,
+                                            );
+                                          }
+                                        }
+                                      },
+                                      onSecondaryTapUp: (details) async {
+                                        if (item.menuPath != null) {
+                                          await _openTrayMenu(
+                                            item,
+                                            details.globalPosition,
+                                          );
+                                        }
+                                      },
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                        ),
+                                        alignment: Alignment.center,
+                                        child: _buildTrayIcon(item),
+                                      ),
+                                    ),
+                                  );
+                                }),
+                                Container(
+                                  width: 1,
+                                  height: 18,
+                                  margin: const EdgeInsets.symmetric(
+                                    horizontal: 4,
+                                  ),
+                                  color: FyrTheme.textColor.withOpacity(0.15),
+                                ),
+                              ],
+                            );
+                          },
+                        ),
                         GestureDetector(
                           onTap: () async {
                             final home = Platform.environment['HOME'] ?? '';
@@ -593,6 +737,21 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                             ),
                           ),
                         ),
+                      if (_activeTrayItem != null)
+                        Positioned(
+                          top: 8,
+                          right: _trayMenuRight,
+                          child: GestureDetector(
+                            onTap: () {},
+                            child: TrayMenuPopup(
+                              item: _activeTrayItem!,
+                              entries: _activeTrayEntries,
+                              onClose: _closeMenus,
+                            ),
+                          ),
+                        ),
+                      const ScreenshotToastOverlay(),
+                      const NotificationPopupOverlay(),
                     ],
                   ),
                 ),

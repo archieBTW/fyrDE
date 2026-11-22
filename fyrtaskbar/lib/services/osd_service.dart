@@ -125,6 +125,24 @@ class OsdService {
     String line, {
     Future<void> Function(String method, Map<String, dynamic>? args)? invoker,
   }) async {
+    final trimmed = line.trim();
+    if (trimmed.toLowerCase().startsWith('screenshot ')) {
+      final rest = trimmed.substring('screenshot '.length).trim();
+      if (rest.isNotEmpty) {
+        String label = 'Screenshot saved';
+        String filePath = rest;
+        final sepIdx = rest.indexOf('|');
+        if (sepIdx > 0) {
+          label = rest.substring(0, sepIdx).trim();
+          filePath = rest.substring(sepIdx + 1).trim();
+        }
+        if (filePath.isNotEmpty) {
+          SystemState.showScreenshotPreview(filePath, label: label);
+        }
+      }
+      return;
+    }
+
     final payload = parseCommand(line);
     if (payload == null) return;
 

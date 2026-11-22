@@ -84,17 +84,58 @@ class _ClockWidgetState extends State<ClockWidget> {
             letterSpacing: 0.5,
           ),
         ),
-        ValueListenableBuilder<List<FyrNotification>>(
-          valueListenable: SystemState.notifications,
-          builder: (context, notifications, _) {
-            if (notifications.isEmpty) return const SizedBox.shrink();
-            return Padding(
-              padding: const EdgeInsets.only(left: 8.0),
-              child: Icon(
-                Icons.notifications_active,
-                color: FyrTheme.accentColor,
-                size: 14,
-              ),
+        ValueListenableBuilder<bool>(
+          valueListenable: SystemState.doNotDisturb,
+          builder: (context, dnd, _) {
+            return ValueListenableBuilder<List<FyrNotification>>(
+              valueListenable: SystemState.notifications,
+              builder: (context, notifications, _) {
+                if (!dnd && notifications.isEmpty) {
+                  return const SizedBox.shrink();
+                }
+                return Padding(
+                  padding: const EdgeInsets.only(left: 8.0),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        dnd
+                            ? Icons.notifications_off_outlined
+                            : Icons.notifications_active,
+                        color: dnd
+                            ? FyrTheme.textColorMuted
+                            : FyrTheme.accentColor,
+                        size: 14,
+                      ),
+                      if (notifications.isNotEmpty) ...[
+                        const SizedBox(width: 3),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 5,
+                            vertical: 1,
+                          ),
+                          decoration: BoxDecoration(
+                            color: dnd
+                                ? FyrTheme.textColorMuted.withOpacity(0.22)
+                                : FyrTheme.accentColor.withOpacity(0.22),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            '${notifications.length}',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: dnd
+                                  ? FyrTheme.textColorMuted
+                                  : FyrTheme.accentColor,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                );
+              },
             );
           },
         ),

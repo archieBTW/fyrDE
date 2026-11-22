@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:fyrtaskbar/fyr_theme.dart';
 import 'package:fyrtaskbar/state/system_state.dart';
+import 'package:fyrtaskbar/ui/media_controls.dart';
 import 'package:fyrtaskbar/ui/quick_toggle.dart';
 import 'package:fyrtaskbar/ui/screenshot_button.dart';
 import 'package:fyrtaskbar/ui/slider_row.dart';
@@ -175,13 +176,11 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
     final result = await Process.run('grim', args);
     if (result.exitCode == 0) {
       Process.run('canberra-gtk-play', ['-i', 'screen-capture']);
-      Process.run('sh', ['-c', 'wl-copy < "$filePath"']);
-      Process.run('notify-send', [
-        'Screenshot Taken',
-        'Saved to Pictures/screenshots',
-        '-i',
+      Process.run('sh', ['-c', 'wl-copy -t image/png < "$filePath"']);
+      SystemState.showScreenshotPreview(
         filePath,
-      ]);
+        label: cropped ? 'Region screenshot' : 'Full screenshot',
+      );
     }
   }
 
@@ -573,6 +572,59 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 14),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Quick Settings',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: FyrTheme.textColorMuted,
+                  letterSpacing: 0.4,
+                ),
+              ),
+              InkWell(
+                onTap: () {
+                  _runCmd('/opt/fyrsettings/fyrsettings', []);
+                  widget.onClose();
+                },
+                borderRadius: BorderRadius.circular(10),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: FyrTheme.cardColor.withOpacity(0.8),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.settings,
+                        size: 14,
+                        color: FyrTheme.textColor,
+                      ),
+                      const SizedBox(width: 5),
+                      Text(
+                        'Settings',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: FyrTheme.textColor,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
         Column(
           children: [
             Row(
@@ -653,20 +705,26 @@ class _QuickSettingsPopupState extends State<QuickSettingsPopup>
                     );
                   },
                 ),
-                QuickToggle(
-                  icon: Icons.settings,
-                  label: "Settings",
-                  isActive: false,
-                  onTap: () {
-                    _runCmd('/opt/fyrsettings/fyrsettings', []);
-                    widget.onClose();
+                ValueListenableBuilder<bool>(
+                  valueListenable: SystemState.doNotDisturb,
+                  builder: (context, dnd, _) {
+                    return QuickToggle(
+                      icon: dnd
+                          ? Icons.notifications_off
+                          : Icons.do_not_disturb_on_outlined,
+                      label: "Do Not Disturb",
+                      isActive: dnd,
+                      onTap: () => SystemState.toggleDoNotDisturb(),
+                    );
                   },
                 ),
               ],
             ),
           ],
         ),
-        SizedBox(height: 24),
+        const SizedBox(height: 16),
+        const QuickSettingsMediaCard(),
+        const SizedBox(height: 20),
         SliderRow(
           icon: Icons.light_mode,
           value: _brightness,

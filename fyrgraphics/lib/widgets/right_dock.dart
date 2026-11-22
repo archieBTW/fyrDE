@@ -2,6 +2,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import '../engine/pro_pixel_ops.dart';
 import '../fyr_theme.dart';
 import '../models/editor_types.dart';
 import '../state/editor_controller.dart';
@@ -23,18 +24,54 @@ class _RightDockState extends State<RightDock> {
     final ctrl = context.watch<EditorController>();
     if (!ctrl.showRightDock) return const SizedBox.shrink();
 
+    final isAdv = ctrl.isAdvancedMode;
+    final topTabs = isAdv
+        ? const ['Color', 'Harmonies', 'Histogram', 'Navigator']
+        : const ['Color'];
+    final bottomTabs = isAdv
+        ? const ['Layers', 'Brushes', 'History']
+        : const ['Layers'];
+
+    final safeTopTab = ctrl.topDockTab.clamp(0, topTabs.length - 1);
+    final safeBottomTab = ctrl.bottomDockTab.clamp(0, bottomTabs.length - 1);
+
+    Widget topContent() {
+      if (!isAdv) return _buildColorPanel(ctrl);
+      switch (safeTopTab) {
+        case 1:
+          return _buildHarmoniesPanel(ctrl);
+        case 2:
+          return _buildHistogramPanel(ctrl);
+        case 3:
+          return _buildNavigatorPanel(ctrl);
+        default:
+          return _buildColorPanel(ctrl);
+      }
+    }
+
+    Widget bottomContent() {
+      if (!isAdv) return _buildLayersPanel(context, ctrl);
+      switch (safeBottomTab) {
+        case 1:
+          return _buildBrushesPanel(ctrl);
+        case 2:
+          return _buildHistoryPanel(ctrl);
+        default:
+          return _buildLayersPanel(context, ctrl);
+      }
+    }
+
     return Container(
-      width: 288,
+      width: isAdv ? 296 : 264,
       decoration: BoxDecoration(
         color: FyrTheme.sidebarColor,
         border: Border(left: BorderSide(color: FyrTheme.dividerColor)),
       ),
       child: Column(
         children: [
-          // Top Pane: Color / Navigator
           _DockTabBar(
-            tabs: const ['Color', 'Navigator'],
-            activeIndex: ctrl.topDockTab,
+            tabs: topTabs,
+            activeIndex: safeTopTab,
             onSelect: (i) {
               ctrl.topDockTab = i;
               ctrl.refresh();
@@ -42,24 +79,19 @@ class _RightDockState extends State<RightDock> {
           ),
           SizedBox(
             height: 256,
-            child: ctrl.topDockTab == 0
-                ? _buildColorPanel(ctrl)
-                : _buildNavigatorPanel(ctrl),
+            child: topContent(),
           ),
           Divider(height: 1, color: FyrTheme.dividerColor),
-          // Bottom Pane: Layers / History
           _DockTabBar(
-            tabs: const ['Layers', 'History'],
-            activeIndex: ctrl.bottomDockTab,
+            tabs: bottomTabs,
+            activeIndex: safeBottomTab,
             onSelect: (i) {
               ctrl.bottomDockTab = i;
               ctrl.refresh();
             },
           ),
           Expanded(
-            child: ctrl.bottomDockTab == 0
-                ? _buildLayersPanel(context, ctrl)
-                : _buildHistoryPanel(ctrl),
+            child: bottomContent(),
           ),
         ],
       ),
@@ -301,6 +333,300 @@ class _RightDockState extends State<RightDock> {
   }
 
   // ---------------------------------------------------------------------------
+  // Color Harmonies & Curated Designer Palettes (Advanced)
+  // ---------------------------------------------------------------------------
+
+  Widget _buildHarmoniesPanel(EditorController ctrl) {
+    final harmonies = ProPixelOps.generateColorHarmonies(ctrl.foregroundColor);
+    return ListView(
+      padding: const EdgeInsets.all(10),
+      children: [
+        ...harmonies.entries.map((entry) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  entry.key,
+                  style: TextStyle(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w600,
+                    color: FyrTheme.textColorMuted,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: entry.value.map((c) {
+                    return Expanded(
+                      child: GestureDetector(
+                        onTap: () => ctrl.setForegroundColor(c, recordRecent: true),
+                        child: Container(
+                          height: 22,
+                          margin: const EdgeInsets.only(right: 4),
+                          decoration: BoxDecoration(
+                            color: c,
+                            borderRadius: BorderRadius.circular(5),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.16),
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ],
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Live RGB + Luminance Histogram (Advanced)
+  // ---------------------------------------------------------------------------
+
+  Widget _buildHistogramPanel(EditorController ctrl) {
+    final layer = ctrl.activeDoc?.activeLayer;
+    if (layer == null) return const SizedBox.shrink();
+    final hist = ProPixelOps.computeHistogram(layer.pixels);
+
+    return Padding(
+      padding: const EdgeInsets.all(10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'RGB & Luminance',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: FyrTheme.textColor,
+                ),
+              ),
+              Text(
+                '${layer.width}×${layer.height}',
+                style: TextStyle(fontSize: 10, color: FyrTheme.textColorMuted),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: CustomPaint(
+                size: Size.infinite,
+                painter: _HistogramPainter(hist: hist),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('Shadows',
+                  style: TextStyle(fontSize: 10, color: FyrTheme.textColorMuted)),
+              Text('Midtones',
+                  style: TextStyle(fontSize: 10, color: FyrTheme.textColorMuted)),
+              Text('Highlights',
+                  style: TextStyle(fontSize: 10, color: FyrTheme.textColorMuted)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Brush Studio Presets & Dynamics (Advanced)
+  // ---------------------------------------------------------------------------
+
+  Widget _buildBrushesPanel(EditorController ctrl) {
+    return ListView(
+      padding: const EdgeInsets.all(10),
+      children: [
+        Text(
+          'PRESETS',
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.bold,
+            color: FyrTheme.textColorMuted,
+            letterSpacing: 1.0,
+          ),
+        ),
+        const SizedBox(height: 6),
+        ...kBrushPresets.map((preset) {
+          final active = ctrl.activeBrushPreset == preset.kind;
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 5),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => ctrl.applyBrushPreset(preset),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                decoration: BoxDecoration(
+                  color: active
+                      ? FyrTheme.accentColor.withValues(alpha: 0.16)
+                      : FyrTheme.cardColor,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: active
+                        ? FyrTheme.accentColor
+                        : FyrTheme.dividerColor,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      preset.icon,
+                      size: 18,
+                      color: active
+                          ? FyrTheme.accentColor
+                          : FyrTheme.textColorMuted,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            preset.name,
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w600,
+                              color: FyrTheme.textColor,
+                            ),
+                          ),
+                          Text(
+                            preset.subtitle,
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: FyrTheme.textColorMuted,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Text(
+                      '${preset.size.round()}px',
+                      style: TextStyle(
+                          fontSize: 10, color: FyrTheme.textColorMuted),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }),
+        const SizedBox(height: 8),
+        Divider(height: 1, color: FyrTheme.dividerColor),
+        const SizedBox(height: 8),
+        Text(
+          'NIB & DYNAMICS',
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.bold,
+            color: FyrTheme.textColorMuted,
+            letterSpacing: 1.0,
+          ),
+        ),
+        const SizedBox(height: 6),
+        _miniSlider(
+          'Spacing',
+          '${(ctrl.brushSpacing * 100).round()}%',
+          ctrl.brushSpacing,
+          0.08,
+          1.0,
+          (v) {
+            ctrl.brushSpacing = v;
+            ctrl.refresh();
+          },
+        ),
+        _miniSlider(
+          'Scatter',
+          '${(ctrl.brushScatter * 100).round()}%',
+          ctrl.brushScatter,
+          0.0,
+          1.5,
+          (v) {
+            ctrl.brushScatter = v;
+            ctrl.refresh();
+          },
+        ),
+        _miniSlider(
+          'Roundness',
+          '${(ctrl.brushRoundness * 100).round()}%',
+          ctrl.brushRoundness,
+          0.15,
+          1.0,
+          (v) {
+            ctrl.brushRoundness = v;
+            ctrl.refresh();
+          },
+        ),
+        _miniSlider(
+          'Angle',
+          '${ctrl.brushAngleDeg.round()}°',
+          ctrl.brushAngleDeg,
+          -90,
+          90,
+          (v) {
+            ctrl.brushAngleDeg = v;
+            ctrl.refresh();
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _miniSlider(
+    String label,
+    String valText,
+    double val,
+    double min,
+    double max,
+    ValueChanged<double> onChanged,
+  ) {
+    return Column(
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(label,
+                style: TextStyle(fontSize: 11, color: FyrTheme.textColor)),
+            Text(valText,
+                style: TextStyle(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w600,
+                    color: FyrTheme.accentColor)),
+          ],
+        ),
+        SliderTheme(
+          data: SliderThemeData(
+            trackHeight: 2,
+            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
+            overlayShape: const RoundSliderOverlayShape(overlayRadius: 9),
+            activeTrackColor: FyrTheme.accentColor,
+            thumbColor: FyrTheme.accentColor,
+          ),
+          child: Slider(
+            value: val.clamp(min, max),
+            min: min,
+            max: max,
+            onChanged: onChanged,
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ---------------------------------------------------------------------------
   // Navigator Panel
   // ---------------------------------------------------------------------------
 
@@ -385,43 +711,52 @@ class _RightDockState extends State<RightDock> {
               children: [
                 Row(
                   children: [
-                    Expanded(
-                      flex: 5,
-                      child: Container(
-                        height: 28,
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                        decoration: BoxDecoration(
-                          color: FyrTheme.cardColor,
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: FyrTheme.dividerColor),
-                        ),
-                        child: DropdownButtonHideUnderline(
-                          child: DropdownButton<LayerBlendMode>(
-                            value: active.blendMode,
-                            isExpanded: true,
-                            isDense: true,
-                            style: TextStyle(
-                                fontSize: 11.5, color: FyrTheme.textColor),
-                            dropdownColor: FyrTheme.isDark
-                                ? const Color(0xFF1A1A1E)
-                                : Colors.white,
-                            items: LayerBlendMode.values
-                                .map((m) => DropdownMenuItem(
-                                      value: m,
-                                      child: Text(m.label,
-                                          overflow: TextOverflow.ellipsis),
-                                    ))
-                                .toList(),
-                            onChanged: (m) {
-                              if (m != null) {
-                                ctrl.setLayerBlendMode(
-                                    doc.activeLayerIndex, m);
-                              }
-                            },
+                    if (ctrl.isAdvancedMode)
+                      Expanded(
+                        flex: 5,
+                        child: Container(
+                          height: 28,
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          decoration: BoxDecoration(
+                            color: FyrTheme.cardColor,
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: FyrTheme.dividerColor),
+                          ),
+                          child: DropdownButtonHideUnderline(
+                            child: DropdownButton<LayerBlendMode>(
+                              value: active.blendMode,
+                              isExpanded: true,
+                              isDense: true,
+                              style: TextStyle(
+                                  fontSize: 11.5, color: FyrTheme.textColor),
+                              dropdownColor: FyrTheme.isDark
+                                  ? const Color(0xFF1A1A1E)
+                                  : Colors.white,
+                              items: LayerBlendMode.values
+                                  .map((m) => DropdownMenuItem(
+                                        value: m,
+                                        child: Text(m.label,
+                                            overflow: TextOverflow.ellipsis),
+                                      ))
+                                  .toList(),
+                              onChanged: (m) {
+                                if (m != null) {
+                                  ctrl.setLayerBlendMode(
+                                      doc.activeLayerIndex, m);
+                                }
+                              },
+                            ),
                           ),
                         ),
+                      )
+                    else
+                      Expanded(
+                        child: Text(
+                          'Layer Opacity',
+                          style: TextStyle(
+                              fontSize: 11, color: FyrTheme.textColorMuted),
+                        ),
                       ),
-                    ),
                     const SizedBox(width: 8),
                     Text(
                       '${(active.opacity * 100).round()}%',
@@ -432,6 +767,28 @@ class _RightDockState extends State<RightDock> {
                     ),
                   ],
                 ),
+                if (ctrl.isAdvancedMode) ...[
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      _layerToggleChip(
+                        icon: Icons.grid_4x4_rounded,
+                        label: 'Alpha Lock',
+                        active: active.alphaLock,
+                        onTap: () =>
+                            ctrl.toggleLayerAlphaLock(doc.activeLayerIndex),
+                      ),
+                      const SizedBox(width: 6),
+                      _layerToggleChip(
+                        icon: Icons.subdirectory_arrow_right_rounded,
+                        label: 'Clip Mask',
+                        active: active.clippingMask,
+                        onTap: () =>
+                            ctrl.toggleLayerClippingMask(doc.activeLayerIndex),
+                      ),
+                    ],
+                  ),
+                ],
                 SliderTheme(
                   data: SliderThemeData(
                     trackHeight: 2.5,
@@ -542,12 +899,27 @@ class _RightDockState extends State<RightDock> {
                             children: [
                               Row(
                                 children: [
+                                  if (layer.clippingMask)
+                                    Padding(
+                                      padding: const EdgeInsets.only(right: 3),
+                                      child: Icon(
+                                          Icons.subdirectory_arrow_right_rounded,
+                                          size: 12,
+                                          color: FyrTheme.accentColor),
+                                    ),
                                   if (layer.isTextLayer)
                                     Padding(
                                       padding: const EdgeInsets.only(right: 4),
                                       child: Icon(Icons.title_rounded,
                                           size: 12,
                                           color: FyrTheme.accentColor),
+                                    ),
+                                  if (layer.alphaLock)
+                                    Padding(
+                                      padding: const EdgeInsets.only(right: 4),
+                                      child: Icon(Icons.grid_4x4_rounded,
+                                          size: 11,
+                                          color: Colors.amberAccent),
                                     ),
                                   Expanded(
                                     child: Text(
@@ -626,6 +998,50 @@ class _RightDockState extends State<RightDock> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _layerToggleChip({
+    required IconData icon,
+    required String label,
+    required bool active,
+    required VoidCallback onTap,
+  }) {
+    return Expanded(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(6),
+        onTap: onTap,
+        child: Container(
+          height: 24,
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          decoration: BoxDecoration(
+            color: active
+                ? FyrTheme.accentColor.withValues(alpha: 0.2)
+                : FyrTheme.cardColor,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: active ? FyrTheme.accentColor : FyrTheme.dividerColor,
+            ),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon,
+                  size: 12,
+                  color: active ? FyrTheme.accentColor : FyrTheme.textColorMuted),
+              const SizedBox(width: 4),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  color: active ? FyrTheme.accentColor : FyrTheme.textColorMuted,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -741,6 +1157,40 @@ class _RightDockState extends State<RightDock> {
       },
     );
   }
+}
+
+class _HistogramPainter extends CustomPainter {
+  final HistogramData hist;
+  _HistogramPainter({required this.hist});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()..color = const Color(0xFF141418),
+    );
+
+    void drawChannel(List<int> bins, Color color) {
+      final path = Path()..moveTo(0, size.height);
+      final denom = max(1, hist.maxCount).toDouble();
+      for (int i = 0; i < 256; i++) {
+        final x = (i / 255.0) * size.width;
+        final h = (bins[i] / denom).clamp(0.0, 1.0) * (size.height - 6);
+        path.lineTo(x, size.height - h);
+      }
+      path.lineTo(size.width, size.height);
+      path.close();
+      canvas.drawPath(path, Paint()..color = color);
+    }
+
+    drawChannel(hist.luma, Colors.white.withValues(alpha: 0.2));
+    drawChannel(hist.r, Colors.redAccent.withValues(alpha: 0.35));
+    drawChannel(hist.g, Colors.greenAccent.withValues(alpha: 0.32));
+    drawChannel(hist.b, Colors.lightBlueAccent.withValues(alpha: 0.35));
+  }
+
+  @override
+  bool shouldRepaint(covariant _HistogramPainter old) => true;
 }
 
 class _DockTabBar extends StatelessWidget {
