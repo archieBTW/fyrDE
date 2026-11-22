@@ -8,6 +8,7 @@ import 'package:window_manager/window_manager.dart';
 import 'fyr_theme.dart';
 import 'models/db_models.dart';
 import 'state/db_controller.dart';
+import 'widgets/connection_wizard.dart';
 import 'widgets/data_browser_panel.dart';
 import 'widgets/db_navigator.dart';
 import 'widgets/er_diagram_canvas.dart';
@@ -139,6 +140,10 @@ class _DbShellState extends State<DbShell> {
     }
 
     final ctrl = context.read<DbController>();
+    if (ctrl.activeConnection == null) {
+      return KeyEventResult.ignored;
+    }
+
     final kb = HardwareKeyboard.instance;
     final isCtrl = kb.isControlPressed || kb.isMetaPressed;
     final key = event.logicalKey;
@@ -221,7 +226,7 @@ class _DbShellState extends State<DbShell> {
                               ),
                             ),
                             child: Text(
-                              'Drop .sqlite, .db, or .sql Files to Mount & Execute',
+                              'Drop .sqlite, .db, .duckdb, or .sql Files to Open',
                               style: GoogleFonts.outfit(
                                 fontSize: 16,
                                 fontWeight: FontWeight.w600,
@@ -242,6 +247,9 @@ class _DbShellState extends State<DbShell> {
   }
 
   Widget _buildActiveWorkspace(DbController ctrl) {
+    if (ctrl.activeConnection == null) {
+      return const ConnectionWizard(isModal: false);
+    }
     switch (ctrl.workspaceMode) {
       case DbWorkspaceMode.sqlEditor:
         return const SqlEditorPanel();
@@ -270,18 +278,22 @@ class _DbShellState extends State<DbShell> {
           Container(
             width: 6,
             height: 6,
-            decoration: const BoxDecoration(
-              color: Color(0xFF4ADE80),
+            decoration: BoxDecoration(
+              color: conn != null
+                  ? const Color(0xFF4ADE80)
+                  : FyrTheme.textColorMuted.withValues(alpha: 0.5),
               shape: BoxShape.circle,
             ),
           ),
           const SizedBox(width: 6),
           Text(
-            '${conn.name} • ${conn.driver.label}',
+            conn != null
+                ? '${conn.name} • ${conn.driver.label}'
+                : 'No active connection',
             style: GoogleFonts.jetBrainsMono(
               fontSize: 10.5,
               fontWeight: FontWeight.w600,
-              color: FyrTheme.textColor,
+              color: conn != null ? FyrTheme.textColor : FyrTheme.textColorMuted,
             ),
           ),
           const SizedBox(width: 14),
@@ -299,7 +311,9 @@ class _DbShellState extends State<DbShell> {
           else
             const Spacer(),
           Text(
-            'Selected: ${ctrl.selectedTableName}  •  Ctrl+Enter Run SQL  •  Ctrl+N New Tab',
+            conn != null
+                ? 'Selected: ${ctrl.selectedTableName ?? 'None'}  •  Ctrl+Enter Run SQL  •  Ctrl+N New Tab'
+                : 'Set up a connection to begin',
             style: GoogleFonts.jetBrainsMono(
               fontSize: 10,
               color: FyrTheme.textColorMuted,

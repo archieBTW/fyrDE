@@ -1,74 +1,211 @@
 import 'dart:io';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fyrwebsite/main.dart';
 
+Future<void> _scrollAndTap(WidgetTester tester, Finder finder) async {
+  expect(finder, findsOneWidget);
+  await Scrollable.ensureVisible(
+    tester.element(finder),
+    alignment: 0.4,
+    duration: Duration.zero,
+  );
+  await tester.pumpAndSettle();
+  await tester.tap(finder);
+  await tester.pumpAndSettle();
+}
+
 void main() {
-  test('fyrTools and fyrApps grids include all DE apps with existing compressed screenshots', () {
-    const coreGrid = AppGrid(category: 'core');
-    const systemGrid = AppGrid(category: 'system');
-    const prodGrid = AppGrid(category: 'productivity');
+  setUpAll(() {
+    FyrFonts.enableGoogleFonts = false;
+  });
 
-    final coreApps = coreGrid.getApps();
-    final systemApps = systemGrid.getApps();
-    final prodApps = prodGrid.getApps();
+  test('catalog includes all 44 Fyr apps and valid compressed screenshots', () {
+    final names = fyrAppsCatalog.map((app) => app.name).toSet();
 
-    final systemByName = {for (final app in systemApps) app['name']!: app};
-    final prodByName = {for (final app in prodApps) app['name']!: app};
-
-    for (final name in [
-      'Terminal',
+    for (final expected in const [
+      // Shell & Core
+      'fyrTaskbar',
+      'fyrDock',
+      'fyrSearch',
+      'fyrOverview',
+      'fyrWindowOverview',
+      'fyrClipboard',
+      'fyrEmoji',
+      'fyrHelp',
+      // System & Daily
       'fyrFiles',
-      'fyrStore',
-      'Settings',
+      'fyrTerm',
+      'fyrSettings',
       'fyrMonitor',
       'fyrDisks',
-      'FyrAV',
-      'FyrText',
-      'Calendar',
-      'Clock',
-      'Calculator',
-      'fyrHelp',
-      'fyrEmoji',
-    ]) {
-      expect(systemByName.containsKey(name), isTrue, reason: 'Missing $name in system grid');
-      expect(systemByName[name]!['desc'], startsWith('frickin sweet '));
-    }
-
-    for (final name in [
-      'Goose',
-      'FyrCode',
-      'fyrAPI',
-      'Music',
-      'Sound Booth',
-      'Journal',
+      'fyrAV',
+      'fyrStore',
       'fyrConnect',
-      'Photos',
-      'Watchbox',
-      'Camera',
-      'fyrVM',
+      'fyrBrowser',
+      'fyrJournal',
+      'fyrCalculator',
+      'fyrCalendar',
+      'fyrClock',
       'fyrTorrent',
+      // Creative Studio
       'fyrGraphics',
-      'fyrEmu',
+      'devign',
       'fyrDirector',
+      'fyrDAW',
+      'fyrPhotos',
+      'fyrCamera',
+      'fyrMusic',
+      'fyrVideo',
+      // Office Suite
       'fyrDocs',
       'fyrSheets',
       'fyrSlides',
+      'fyrPDF',
+      'fyrText',
+      // Dev & Virtualization
+      'fyrCode',
+      'fyrAPI',
       'fyrDB',
       'fyrPods',
+      'fyrVirt',
+      'fyrEmu',
+      // CLI & Mobile
+      'fyrpak',
+      'fyrAndroid',
+      'fyrfetch',
     ]) {
-      expect(prodByName.containsKey(name), isTrue, reason: 'Missing $name in productivity grid');
-      expect(prodByName[name]!['desc'], startsWith('frickin sweet '));
+      expect(names.contains(expected), isTrue, reason: 'Missing $expected');
     }
 
-    for (final app in [...coreApps, ...systemApps, ...prodApps]) {
-      final imgFile = File('assets/screenshots/${app['img']}');
-      expect(imgFile.existsSync(), isTrue, reason: 'Missing ${imgFile.path}');
-      expect(
-        imgFile.lengthSync(),
-        lessThan(800 * 1024),
-        reason: 'Expected ${imgFile.path} to be compressed (< 800 KB)',
-      );
+    for (final showcase in fyrDesktopShowcases) {
+      final file = File(showcase.assetPath);
+      expect(file.existsSync(), isTrue, reason: 'Missing ${file.path}');
+    }
+
+    for (final app in fyrAppsCatalog) {
+      for (final assetPath in app.allScreenshotAssets) {
+        final file = File(assetPath);
+        expect(file.existsSync(), isTrue, reason: 'Missing ${file.path}');
+        expect(
+          file.lengthSync(),
+          lessThan(800 * 1024),
+          reason: 'Expected ${file.path} to be compressed (< 800 KB)',
+        );
+      }
     }
   });
+
+  testWidgets(
+    'desktop viewport renders hero, switches app tabs, searches, and shows latest apps',
+    (tester) async {
+      tester.view.physicalSize = const Size(1440, 1200);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(const FyrWebsite());
+      await tester.pumpAndSettle();
+
+      // Hero & initial Shell & Core tab
+      expect(find.text('frick your RAM.'), findsOneWidget);
+      expect(find.text('Install Now'), findsOneWidget);
+      expect(find.text('Explore Suite'), findsOneWidget);
+      expect(find.text('fyrClipboard'), findsOneWidget);
+
+      // Switch Desktop Showcase preview pill
+      await _scrollAndTap(tester, find.text('Tiling'));
+      expect(find.text('fyrDE · tiling layout'), findsOneWidget);
+
+      // Switch to System & Daily -> verify fyrConnect
+      await _scrollAndTap(tester, find.byKey(const Key('category-tab-system')));
+      expect(find.text('fyrConnect'), findsOneWidget);
+
+      // Switch to Creative Studio -> verify devign
+      await _scrollAndTap(
+        tester,
+        find.byKey(const Key('category-tab-creative')),
+      );
+      expect(find.text('devign'), findsOneWidget);
+
+      // Switch to Office Suite -> verify fyrPDF
+      await _scrollAndTap(tester, find.byKey(const Key('category-tab-office')));
+      expect(find.text('fyrPDF'), findsOneWidget);
+
+      // Switch to Dev & Virt -> verify fyrCode & fyrDB
+      await _scrollAndTap(tester, find.byKey(const Key('category-tab-dev')));
+      expect(find.text('fyrCode'), findsOneWidget);
+      expect(find.text('fyrDB'), findsOneWidget);
+
+      // Switch to CLI & Mobile -> verify fyrpak & fyrAndroid
+      await _scrollAndTap(
+        tester,
+        find.byKey(const Key('category-tab-cliMobile')),
+      );
+      expect(find.text('fyrpak'), findsOneWidget);
+      expect(find.text('fyrAndroid'), findsOneWidget);
+
+      // Search across all categories
+      final searchField = find.byKey(const Key('app-explorer-search'));
+      await Scrollable.ensureVisible(
+        tester.element(searchField),
+        alignment: 0.4,
+        duration: Duration.zero,
+      );
+      await tester.pumpAndSettle();
+      await tester.enterText(searchField, 'fyrPDF');
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('app-card-fyrpdf')), findsOneWidget);
+
+      // Switch Install tabs
+      await _scrollAndTap(tester, find.byKey(const Key('install-tab-suites')));
+      expect(
+        find.text('./install_suite.sh --suite creative'),
+        findsOneWidget,
+      );
+
+      await _scrollAndTap(tester, find.byKey(const Key('install-tab-fyrpak')));
+      expect(find.text('fyrpak fyr update'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'mobile viewport renders cleanly without overflow and switches tabs',
+    (tester) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(const FyrWebsite());
+      await tester.pumpAndSettle();
+
+      expect(find.text('frick your RAM.'), findsOneWidget);
+      expect(find.text('fyrClipboard'), findsOneWidget);
+
+      // Tap System & Daily tab on mobile -> verify fyrConnect
+      await _scrollAndTap(tester, find.byKey(const Key('category-tab-system')));
+      expect(find.text('fyrConnect'), findsOneWidget);
+
+      // Tap Creative Studio tab on mobile -> verify devign
+      await _scrollAndTap(
+        tester,
+        find.byKey(const Key('category-tab-creative')),
+      );
+      expect(find.text('devign'), findsOneWidget);
+
+      // Tap Office Suite tab on mobile -> verify fyrPDF
+      await _scrollAndTap(tester, find.byKey(const Key('category-tab-office')));
+      expect(find.text('fyrPDF'), findsOneWidget);
+
+      // Tap CLI & Mobile tab on mobile -> verify fyrpak & fyrAndroid
+      await _scrollAndTap(
+        tester,
+        find.byKey(const Key('category-tab-cliMobile')),
+      );
+      expect(find.text('fyrpak'), findsOneWidget);
+      expect(find.text('fyrAndroid'), findsOneWidget);
+    },
+  );
 }

@@ -15,8 +15,9 @@ FLUTTER_VERSION="3.41.9"
 PKG_VERSION="1.0.0"
 
 CREATIVE_APPS=("fyrdaw" "fyrgraphics" "fyrdirector")
-OFFICE_APPS=("fyrdocs" "fyrsheets" "fyrslides")
+OFFICE_APPS=("fyrdocs" "fyrsheets" "fyrslides" "fyrpdf")
 DEV_APPS=("fyrcode" "fyrapi" "fyrdb" "fyrpods")
+PERSONAL_APPS=("fyrjournal")
 
 SUITE=""
 SINGLE_APP=""
@@ -32,8 +33,9 @@ Install or package standalone FyrDE app suites on Ubuntu/Debian, Arch, or Fedora
 
 Suites:
   creative    fyrdaw (Sound Booth), fyrgraphics, fyrdirector
-  office      fyrdocs, fyrsheets, fyrslides
+  office      fyrdocs, fyrsheets, fyrslides, fyrpdf
   dev         fyrcode, fyrapi, fyrdb, fyrpods
+  personal    fyrjournal (WSL-compatible)
   all         All suites combined
 
 Options:
@@ -110,7 +112,8 @@ install_deps() {
             echo "Installing Arch packages via pacman..."
             local deps=(
                 "base-devel" "clang" "cmake" "ninja" "pkgconf" "gtk3" "xz"
-                "glu" "curl" "git" "unzip" "zip" "xorg-server-xvfb"
+                "glu" "mesa" "libepoxy" "fontconfig" "ttf-dejavu" "xdg-user-dirs"
+                "curl" "git" "unzip" "zip" "xorg-server-xvfb"
                 "desktop-file-utils" "xdg-utils" "zenity"
             )
             if [[ "$suites_csv" == *creative* ]] || [[ "$suites_csv" == *all* ]]; then
@@ -241,7 +244,7 @@ deb_depends_for_app() {
         fyrdirector)
             echo "libgtk-3-0 | libgtk-3-0t64, libmpv2 | libmpv1, libepoxy0, ffmpeg, zenity"
             ;;
-        fyrgraphics|fyrdocs|fyrsheets|fyrslides|fyrcode|fyrapi|fyrdb|fyrpods)
+        fyrgraphics|fyrdocs|fyrsheets|fyrslides|fyrpdf|fyrcode|fyrapi|fyrdb|fyrpods|fyrjournal)
             echo "libgtk-3-0 | libgtk-3-0t64, zenity"
             ;;
         *)
@@ -258,6 +261,8 @@ deb_description_for_app() {
         fyrdocs)     echo "fyrDocs - ODT/DOCX word processor from FyrDE" ;;
         fyrsheets)   echo "fyrSheets - ODS/XLSX/CSV spreadsheet studio from FyrDE" ;;
         fyrslides)   echo "fyrSlides - ODP/PPTX presentation studio from FyrDE" ;;
+        fyrpdf)      echo "fyrPDF - Fast native PDF reader from FyrDE" ;;
+        fyrjournal)  echo "fyrJournal - Personal journal and notebook from FyrDE" ;;
         fyrcode)     echo "FyrCode - Agentic code editor and IDE from FyrDE" ;;
         fyrapi)      echo "FyrApi - REST and HTTP API client from FyrDE" ;;
         fyrdb)       echo "fyrDB - Universal database manager and SQL IDE from FyrDE" ;;
@@ -307,7 +312,11 @@ install_app_system() {
     sudo rm -rf "/opt/$app"
     sudo mkdir -p "/opt/$app" /usr/local/bin /usr/share/applications /usr/share/icons/hicolor/512x512/apps
     sudo cp -r "$bundle_dir"/* "/opt/$app/"
-    sudo ln -sf "/opt/$app/$app" "/usr/local/bin/$app"
+    if [ "$app" = "fyrjournal" ] && [ -f "$SCRIPT_DIR/fyrjournal/fyrjournal-wsl.sh" ] && grep -qiE "microsoft|wsl" /proc/version 2>/dev/null; then
+        sudo install -m 755 "$SCRIPT_DIR/fyrjournal/fyrjournal-wsl.sh" "/usr/local/bin/fyrjournal"
+    else
+        sudo ln -sf "/opt/$app/$app" "/usr/local/bin/$app"
+    fi
 
     local icon_src
     icon_src="$(icon_source_for_app "$app")"
@@ -397,8 +406,9 @@ EOF
 suite_for_app() {
     case "$1" in
         fyrdaw|fyrgraphics|fyrdirector) echo "creative" ;;
-        fyrdocs|fyrsheets|fyrslides)    echo "office" ;;
-        fyrcode|fyrapi|fyrdb|fyrpods)   echo "dev" ;;
+        fyrdocs|fyrsheets|fyrslides|fyrpdf) echo "office" ;;
+        fyrcode|fyrapi|fyrdb|fyrpods)       echo "dev" ;;
+        fyrjournal)                         echo "personal" ;;
         *) echo "" ;;
     esac
 }
@@ -467,8 +477,12 @@ else
             TARGET_APPS=("${DEV_APPS[@]}")
             DEP_SCOPE="dev"
             ;;
+        personal)
+            TARGET_APPS=("${PERSONAL_APPS[@]}")
+            DEP_SCOPE="personal"
+            ;;
         all)
-            TARGET_APPS=("${CREATIVE_APPS[@]}" "${OFFICE_APPS[@]}" "${DEV_APPS[@]}")
+            TARGET_APPS=("${CREATIVE_APPS[@]}" "${OFFICE_APPS[@]}" "${DEV_APPS[@]}" "${PERSONAL_APPS[@]}")
             DEP_SCOPE="all"
             ;;
         *)

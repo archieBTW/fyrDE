@@ -93,13 +93,21 @@ void main() {
       }
     });
 
-    test('DocsController supports block editing, tables, find/replace, and undo/redo', () {
+    test('DocsController starts with a clean blank document and supports editing, find/replace, and undo/redo', () {
       final ctrl = DocsController();
+      expect(ctrl.document.title, 'Untitled Document');
+      expect(ctrl.document.format, 'odt');
+      expect(ctrl.document.blocks.length, 1);
+      expect(ctrl.document.blocks.first.type, DocBlockType.paragraph);
+      expect(ctrl.document.blocks.first.text, isEmpty);
+      expect(ctrl.document.comments, isEmpty);
+      expect(ctrl.document.wordCount, 0);
+
       final initialCount = ctrl.document.blocks.length;
 
       final added = ctrl.addBlock(
         type: DocBlockType.paragraph,
-        text: 'Custom paragraph with Wayland protocol notes.',
+        text: 'Custom paragraph with Wayland protocol notes and Wayland tips.',
       );
       expect(ctrl.document.blocks.length, initialCount + 1);
 
@@ -108,7 +116,7 @@ void main() {
       expect(ctrl.selectedBlock?.bold, isTrue);
 
       final replaced = ctrl.replaceAll('Wayland', 'SwayFX Wayland');
-      expect(replaced, greaterThanOrEqualTo(2));
+      expect(replaced, 2);
 
       ctrl.undo();
       ctrl.undo();
@@ -117,6 +125,11 @@ void main() {
 
       ctrl.redo();
       expect(ctrl.document.blocks.length, initialCount + 1);
+
+      ctrl.newDocument();
+      expect(ctrl.document.title, 'Untitled Document');
+      expect(ctrl.document.blocks.length, 1);
+      expect(ctrl.document.blocks.first.text, isEmpty);
       ctrl.dispose();
     });
   });
@@ -139,6 +152,9 @@ void main() {
 
       expect(find.text('fyrDocs'), findsOneWidget);
       expect(find.text('fyrOffice'), findsOneWidget);
+      expect(find.text('Untitled Document.odt'), findsOneWidget);
+      expect(find.text('0 words'), findsOneWidget);
+      expect(find.text('fyrDE_Architecture_RFC.odt'), findsNothing);
       expect(find.text('Outline'), findsOneWidget);
       expect(find.text('Templates'), findsOneWidget);
       expect(find.text('Export PDF'), findsOneWidget);

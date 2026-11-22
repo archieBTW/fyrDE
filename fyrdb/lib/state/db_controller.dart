@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import '../engine/sql_engine.dart';
@@ -9,6 +10,9 @@ class PendingCellEdit {
   final String columnName;
   final dynamic oldValue;
   final dynamic newValue;
+  final bool isInsert;
+  final bool isDelete;
+  final Map<String, dynamic>? rowSnapshot;
 
   const PendingCellEdit({
     required this.tableName,
@@ -16,10 +20,16 @@ class PendingCellEdit {
     required this.columnName,
     required this.oldValue,
     required this.newValue,
+    this.isInsert = false,
+    this.isDelete = false,
+    this.rowSnapshot,
   });
 }
 
 class DbController extends ChangeNotifier {
+  final String configFilePath;
+  final bool persistConnections;
+
   final List<DbConnectionProfile> connections = [];
   final Map<String, List<DbTableSchema>> _schemasByConnection = {};
   final List<SqlQueryTab> openTabs = [];
@@ -31,9 +41,9 @@ class DbController extends ChangeNotifier {
   // Snapshot of table rows for full rollback support
   final Map<String, List<Map<String, dynamic>>> _tableSnapshots = {};
 
-  String activeConnectionId = 'conn_fyr_cloud';
+  String? activeConnectionId;
   int activeTabIndex = 0;
-  String selectedTableName = 'deployments';
+  String? selectedTableName;
   DbWorkspaceMode workspaceMode = DbWorkspaceMode.sqlEditor;
   DbBottomTab activeBottomTab = DbBottomTab.resultGrid;
 
@@ -43,22 +53,41 @@ class DbController extends ChangeNotifier {
   bool dataGridSortAsc = true;
   int? selectedDataRowIndex;
   bool autoCommit = true;
+  bool isConnecting = false;
   String? statusMessage;
 
-  DbController() {
-    _seedInitialConnectionsAndSchemas();
-    _seedInitialTabs();
-  }
-
-  DbConnectionProfile get activeConnection {
-    return connections.firstWhere(
-      (c) => c.id == activeConnectionId,
-      orElse: () => connections.first,
+  DbController({
+    String? configFilePath,
+    bool loadSaved = true,
+    this.persistConnections = true,
+  }) : configFilePath = configFilePath ?? defaultConfigPath {
+    if (loadSaved) {
+      loadSavedConnectionsSync();
+    }
+    _log(
+      connections.isEmpty
+          ? 'fyrDB ready — no saved connections configured yet'
+          : 'fyrDB ready — loaded ${connections.length} saved connection${connections.length == 1 ? '' : 's'}',
     );
   }
 
-  List<DbTableSchema> get activeSchemas =>
-      _schemasByConnection[activeConnectionId] ?? [];
+  static String get defaultConfigPath =>
+      SqlEngine.resolvePath('~/.config/fyrdb/connections.json');
+
+  DbConnectionProfile? get activeConnection {
+    final id = activeConnectionId;
+    if (id == null || connections.isEmpty) return null;
+    for (final c in connections) {
+      if (c.id == id) return c;
+    }
+    return null;
+  }
+
+  List<DbTableSchema> get activeSchemas {
+    final id = activeConnectionId;
+    if (id == null) return const [];
+    return _schemasByConnection[id] ?? const [];
+  }
 
   List<DbTableSchema> get activeTables =>
       activeSchemas.where((t) => !t.isView).toList();
@@ -85,28 +114,58 @@ class DbController extends ChangeNotifier {
   DbTableSchema? get selectedTable {
     final schemas = activeSchemas;
     if (schemas.isEmpty) return null;
-    for (final s in schemas) {
-      if (s.name == selectedTableName) return s;
+    if (selectedTableName != null) {
+      for (final s in schemas) {
+        if (s.name == selectedTableName) return s;
+      }
     }
     return schemas.first;
   }
 
-  SqlQueryTab get activeTab {
-    if (openTabs.isEmpty) {
-      openTabs.add(
-        SqlQueryTab(
-          id: 'tab_default',
-          title: 'query_01.sql',
-          connectionId: activeConnectionId,
-          sqlText: 'SELECT * FROM users;',
-        ),
-      );
-    }
+  SqlQueryTab? get activeTab {
+    if (openTabs.isEmpty) return null;
     activeTabIndex = activeTabIndex.clamp(0, openTabs.length - 1);
     return openTabs[activeTabIndex];
   }
 
   int get pendingEditCount => pendingCellEdits.length;
+
+  /// Loads saved connection profiles from `configFilePath` (no raw passwords stored).
+  void loadSavedConnectionsSync() {
+    try {
+      final file = File(configFilePath);
+      if (!file.existsSync()) return;
+      final content = file.readAsStringSync().trim();
+      if (content.isEmpty) return;
+      final decoded = jsonDecode(content);
+      if (decoded is List) {
+        connections.clear();
+        for (final item in decoded) {
+          if (item is Map<String, dynamic>) {
+            connections.add(DbConnectionProfile.fromJson(item));
+          }
+        }
+      }
+    } catch (e) {
+      _log('Warning: Failed to read saved connections from $configFilePath: $e');
+    }
+  }
+
+  /// Persists saved connections to `~/.config/fyrdb/connections.json` (excluding raw passwords).
+  Future<void> saveConnections() async {
+    if (!persistConnections) return;
+    try {
+      final file = File(configFilePath);
+      if (!file.parent.existsSync()) {
+        file.parent.createSync(recursive: true);
+      }
+      const encoder = JsonEncoder.withIndent('  ');
+      final payload = connections.map((c) => c.toJson()).toList();
+      await file.writeAsString(encoder.convert(payload));
+    } catch (e) {
+      _log('Warning: Failed to persist connections to $configFilePath: $e');
+    }
+  }
 
   void setWorkspaceMode(DbWorkspaceMode mode) {
     workspaceMode = mode;
@@ -132,27 +191,185 @@ class DbController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void selectConnection(String connectionId) {
-    final target = connections.firstWhere(
-      (c) => c.id == connectionId,
-      orElse: () => connections.first,
-    );
+  Future<void> selectConnection(String connectionId) async {
+    DbConnectionProfile? target;
+    for (final c in connections) {
+      if (c.id == connectionId) {
+        target = c;
+        break;
+      }
+    }
+    if (target == null) return;
+
+    isConnecting = true;
+    notifyListeners();
+
     target.isConnected = true;
     activeConnectionId = target.id;
-    final tables = activeSchemas;
-    if (tables.isNotEmpty &&
-        !tables.any((t) => t.name == selectedTableName)) {
-      selectedTableName = tables.first.name;
+    pendingCellEdits.clear();
+    _tableSnapshots.clear();
+    dataGridFilterWhere = '';
+    dataGridSortColumn = null;
+    selectedDataRowIndex = null;
+
+    // Introspect real schema if not already populated (e.g. from test/in-memory setup)
+    if (!_schemasByConnection.containsKey(target.id)) {
+      final introspected = await SqlEngine.introspectConnection(target);
+      _schemasByConnection[target.id] = introspected;
     }
+
+    final tables = activeSchemas;
+    if (tables.isNotEmpty) {
+      if (selectedTableName == null ||
+          !tables.any((t) => t.name == selectedTableName)) {
+        selectedTableName = tables.first.name;
+      }
+    } else {
+      selectedTableName = null;
+    }
+
+    _ensureTabForConnection(target);
+
+    isConnecting = false;
     statusMessage = 'Connected to ${target.name} (${target.driver.label})';
-    _log('Switched active connection to ${target.name} [${target.endpointSummary}]');
+    _log(
+      'Connected to ${target.name} [${target.endpointSummary}] — ${tables.length} object${tables.length == 1 ? '' : 's'}',
+    );
     notifyListeners();
   }
 
-  void addConnection(DbConnectionProfile profile, {List<DbTableSchema>? schemas}) {
+  Future<void> addConnection(
+    DbConnectionProfile profile, {
+    List<DbTableSchema>? schemas,
+    bool createFileIfMissing = false,
+  }) async {
+    if (createFileIfMissing) {
+      final resolved = SqlEngine.resolvePath(profile.databaseOrPath);
+      if (resolved.isNotEmpty &&
+          resolved != ':memory:' &&
+          !File(resolved).existsSync()) {
+        if (profile.driver == DbDriverType.sqlite) {
+          await SqlEngine.createSqliteFile(resolved);
+        } else if (profile.driver == DbDriverType.duckdb) {
+          await SqlEngine.createDuckDbFile(resolved);
+        }
+      }
+    }
+
     connections.add(profile);
-    _schemasByConnection[profile.id] = schemas ?? _buildDefaultStarterSchema();
-    selectConnection(profile.id);
+    if (schemas != null) {
+      _schemasByConnection[profile.id] = schemas;
+    }
+    await saveConnections();
+    await selectConnection(profile.id);
+  }
+
+  void disconnectConnection(String connectionId) {
+    for (final c in connections) {
+      if (c.id == connectionId) {
+        c.isConnected = false;
+        _log('Disconnected from ${c.name}');
+        statusMessage = 'Disconnected from ${c.name}';
+        break;
+      }
+    }
+    if (activeConnectionId == connectionId) {
+      activeConnectionId = null;
+      selectedTableName = null;
+      pendingCellEdits.clear();
+      _tableSnapshots.clear();
+      selectedDataRowIndex = null;
+    }
+    notifyListeners();
+  }
+
+  void disconnectActive() {
+    final id = activeConnectionId;
+    if (id != null) {
+      disconnectConnection(id);
+    }
+  }
+
+  Future<void> removeConnection(String connectionId) async {
+    String? removedName;
+    connections.removeWhere((c) {
+      if (c.id == connectionId) {
+        removedName = c.name;
+        return true;
+      }
+      return false;
+    });
+    _schemasByConnection.remove(connectionId);
+    openTabs.removeWhere((t) => t.connectionId == connectionId);
+    if (openTabs.isNotEmpty) {
+      activeTabIndex = activeTabIndex.clamp(0, openTabs.length - 1);
+    } else {
+      activeTabIndex = 0;
+    }
+
+    if (activeConnectionId == connectionId) {
+      activeConnectionId = null;
+      selectedTableName = null;
+      pendingCellEdits.clear();
+      _tableSnapshots.clear();
+      selectedDataRowIndex = null;
+    }
+
+    await saveConnections();
+    if (removedName != null) {
+      statusMessage = 'Removed connection "$removedName"';
+      _log('Removed saved connection "$removedName"');
+    }
+    notifyListeners();
+  }
+
+  Future<void> refreshActiveSchema() async {
+    final conn = activeConnection;
+    if (conn == null) return;
+    if (conn.driver == DbDriverType.sqlite &&
+        conn.databaseOrPath.trim() == ':memory:') {
+      return;
+    }
+    final refreshed = await SqlEngine.introspectConnection(conn);
+    _schemasByConnection[conn.id] = refreshed;
+    if (refreshed.isEmpty) {
+      selectedTableName = null;
+    } else if (selectedTableName == null ||
+        !refreshed.any((t) => t.name == selectedTableName)) {
+      selectedTableName = refreshed.first.name;
+    }
+    statusMessage =
+        'Refreshed schema for ${conn.name} (${refreshed.length} objects)';
+    _log(statusMessage!);
+    notifyListeners();
+  }
+
+  void _ensureTabForConnection(DbConnectionProfile conn) {
+    final existingIdx = openTabs.indexWhere((t) => t.connectionId == conn.id);
+    if (existingIdx >= 0) {
+      activeTabIndex = existingIdx;
+      return;
+    }
+    final tables = _schemasByConnection[conn.id] ?? const [];
+    final String starterSql;
+    if (conn.driver == DbDriverType.redis) {
+      starterSql = 'PING';
+    } else if (tables.isNotEmpty) {
+      starterSql = 'SELECT * FROM ${tables.first.name} LIMIT 50;';
+    } else {
+      starterSql =
+          '-- Connected to ${conn.name} (${conn.driver.label})\n-- Write a SQL statement below and press Ctrl+Enter to execute.\nSELECT 1 AS ok;';
+    }
+    final num = openTabs.length + 1;
+    openTabs.add(
+      SqlQueryTab(
+        id: 'tab_${DateTime.now().microsecondsSinceEpoch}_$num',
+        title: '${num.toString().padLeft(2, '0')}_query.sql',
+        connectionId: conn.id,
+        sqlText: starterSql,
+      ),
+    );
+    activeTabIndex = openTabs.length - 1;
   }
 
   void selectTable(String tableName, {DbWorkspaceMode? switchToMode}) {
@@ -172,13 +389,20 @@ class DbController extends ChangeNotifier {
   }
 
   void newSqlTab({String? title, String? initialSql}) {
+    final conn = activeConnection;
+    if (conn == null) return;
     final num = openTabs.length + 1;
+    final tbl = selectedTableName;
+    final defaultSql = conn.driver == DbDriverType.redis
+        ? 'INFO keyspace'
+        : (tbl != null
+            ? 'SELECT * FROM $tbl LIMIT 50;'
+            : '-- New query on ${conn.name}\nSELECT 1 AS result;');
     final tab = SqlQueryTab(
       id: 'tab_${DateTime.now().microsecondsSinceEpoch}_$num',
-      title: title ?? '0${num}_query.sql',
-      connectionId: activeConnectionId,
-      sqlText: initialSql ??
-          'SELECT id, username, role, plan_tier\nFROM users\nWHERE active = 1\nORDER BY id ASC;',
+      title: title ?? '${num.toString().padLeft(2, '0')}_query.sql',
+      connectionId: conn.id,
+      sqlText: initialSql ?? defaultSql,
     );
     openTabs.add(tab);
     activeTabIndex = openTabs.length - 1;
@@ -188,6 +412,7 @@ class DbController extends ChangeNotifier {
 
   void closeSqlTab(int index) {
     if (openTabs.length <= 1) return;
+    if (index < 0 || index >= openTabs.length) return;
     openTabs.removeAt(index);
     if (activeTabIndex >= openTabs.length) {
       activeTabIndex = openTabs.length - 1;
@@ -196,31 +421,152 @@ class DbController extends ChangeNotifier {
   }
 
   void updateActiveTabSql(String sql) {
-    activeTab.sqlText = sql;
+    final tab = activeTab;
+    if (tab != null) {
+      tab.sqlText = sql;
+    }
   }
 
   void insertSqlSnippet(String snippet) {
-    final current = activeTab.sqlText.trim();
-    activeTab.sqlText = current.isEmpty ? snippet : '$current\n\n$snippet';
+    final tab = activeTab;
+    if (tab == null) {
+      if (activeConnection != null) {
+        newSqlTab(initialSql: snippet);
+      }
+      return;
+    }
+    final current = tab.sqlText.trim();
+    tab.sqlText = current.isEmpty ? snippet : '$current\n\n$snippet';
     workspaceMode = DbWorkspaceMode.sqlEditor;
     notifyListeners();
   }
 
   void formatActiveSql() {
-    activeTab.sqlText = SqlEngine.formatSql(activeTab.sqlText);
-    statusMessage = 'Formatted SQL query in ${activeTab.title}';
+    final tab = activeTab;
+    if (tab == null) return;
+    tab.sqlText = SqlEngine.formatSql(tab.sqlText);
+    statusMessage = 'Formatted SQL query in ${tab.title}';
     notifyListeners();
   }
 
+  /// Synchronous in-memory SQL execution (used for `:memory:` databases and pure-Dart tests).
   QueryResult runSql(String sql, {String? connectionId}) {
-    final connId = connectionId ?? activeConnectionId;
-    final conn = connections.firstWhere(
-      (c) => c.id == connId,
-      orElse: () => activeConnection,
-    );
-    final schemas = _schemasByConnection[conn.id] ?? [];
+    final conn = _findConnection(connectionId ?? activeConnectionId);
+    if (conn == null) {
+      return QueryResult(
+        columns: const [],
+        rows: const [],
+        executionTimeMs: 0.1,
+        error: 'No active database connection.',
+        executedSql: sql,
+      );
+    }
+    final schemas = _schemasByConnection.putIfAbsent(conn.id, () => []);
     final result = SqlEngine.executeInMemory(sql, schemas);
+    _recordExecutionResult(conn, sql, result);
+    if (selectedTableName == null && schemas.isNotEmpty) {
+      selectedTableName = schemas.first.name;
+    }
+    notifyListeners();
+    return result;
+  }
 
+  /// Executes SQL against the real database engine (SQLite file on disk, remote CLI, or `:memory:`).
+  Future<QueryResult> executeSql(String sql, {String? connectionId}) async {
+    final conn = _findConnection(connectionId ?? activeConnectionId);
+    if (conn == null) {
+      return QueryResult(
+        columns: const [],
+        rows: const [],
+        executionTimeMs: 0.1,
+        error: 'No active database connection.',
+        executedSql: sql,
+      );
+    }
+
+    if (conn.readOnly && _isMutatingSql(sql)) {
+      final errRes = QueryResult(
+        columns: const [],
+        rows: const [],
+        executionTimeMs: 0.1,
+        error:
+            'Connection "${conn.name}" is in Read-Only mode. Mutating statements are blocked.',
+        executedSql: sql,
+      );
+      _recordExecutionResult(conn, sql, errRes);
+      notifyListeners();
+      return errRes;
+    }
+
+    QueryResult result;
+    if (conn.driver == DbDriverType.sqlite) {
+      final rawPath = conn.databaseOrPath.trim();
+      final resolved = SqlEngine.resolvePath(rawPath);
+      if (rawPath == ':memory:') {
+        final schemas = _schemasByConnection.putIfAbsent(conn.id, () => []);
+        result = SqlEngine.executeInMemory(sql, schemas);
+        if (selectedTableName == null && schemas.isNotEmpty) {
+          selectedTableName = schemas.first.name;
+        }
+      } else if (SqlEngine.hasSqliteCli && File(resolved).existsSync()) {
+        result = await SqlEngine.executeOnSqliteFile(resolved, sql);
+        if (result.isSuccess && _isMutatingSql(sql)) {
+          final refreshed = await SqlEngine.introspectSqliteFile(resolved);
+          _schemasByConnection[conn.id] = refreshed;
+          if (refreshed.isEmpty) {
+            selectedTableName = null;
+          } else if (selectedTableName == null ||
+              !refreshed.any((t) => t.name == selectedTableName)) {
+            selectedTableName = refreshed.first.name;
+          }
+        }
+      } else {
+        result = await SqlEngine.executeOnSqliteFile(resolved, sql);
+      }
+    } else {
+      result = await SqlEngine.executeOnProfile(conn, sql);
+      if (result.isSuccess && _isMutatingSql(sql)) {
+        final refreshed = await SqlEngine.introspectConnection(conn);
+        if (refreshed.isNotEmpty) {
+          _schemasByConnection[conn.id] = refreshed;
+          if (selectedTableName == null ||
+              !refreshed.any((t) => t.name == selectedTableName)) {
+            selectedTableName = refreshed.first.name;
+          }
+        }
+      }
+    }
+
+    _recordExecutionResult(conn, sql, result);
+    notifyListeners();
+    return result;
+  }
+
+  bool _isMutatingSql(String sql) {
+    final trimmed = sql.trimLeft().toUpperCase();
+    return trimmed.startsWith('INSERT') ||
+        trimmed.startsWith('UPDATE') ||
+        trimmed.startsWith('DELETE') ||
+        trimmed.startsWith('CREATE') ||
+        trimmed.startsWith('DROP') ||
+        trimmed.startsWith('ALTER') ||
+        trimmed.startsWith('REPLACE') ||
+        trimmed.startsWith('TRUNCATE');
+  }
+
+  DbConnectionProfile? _findConnection(String? id) {
+    if (id == null) return activeConnection;
+    for (final c in connections) {
+      if (c.id == id) return c;
+    }
+    return activeConnection;
+  }
+
+  void _recordExecutionResult(
+    DbConnectionProfile conn,
+    String sql,
+    QueryResult result,
+  ) {
     queryHistory.insert(
       0,
       QueryHistoryEntry(
@@ -243,38 +589,54 @@ class DbController extends ChangeNotifier {
       statusMessage = 'SQL Error: ${result.error}';
       _log('[${conn.name}] ERROR: ${result.error} — ${_oneLine(sql)}');
     }
-    notifyListeners();
-    return result;
   }
 
-  void runActiveQuery() {
+  Future<void> runActiveQuery() async {
+    final conn = activeConnection;
     final tab = activeTab;
+    if (conn == null || tab == null) return;
     tab.isRunning = true;
-    final res = runSql(tab.sqlText, connectionId: tab.connectionId);
+    notifyListeners();
+
+    final res = await executeSql(tab.sqlText, connectionId: conn.id);
     tab.lastResult = res;
     tab.isRunning = false;
     activeBottomTab = DbBottomTab.resultGrid;
     notifyListeners();
   }
 
-  void explainActiveQuery() {
+  Future<void> explainActiveQuery() async {
+    final conn = activeConnection;
     final tab = activeTab;
+    if (conn == null || tab == null) return;
     final raw = tab.sqlText.trim();
-    final explainSql = raw.toUpperCase().startsWith('EXPLAIN')
-        ? raw
-        : 'EXPLAIN QUERY PLAN $raw';
-    final res = runSql(explainSql, connectionId: tab.connectionId);
+    if (raw.isEmpty) return;
+
+    final explainPrefix =
+        conn.driver == DbDriverType.sqlite ? 'EXPLAIN QUERY PLAN ' : 'EXPLAIN ';
+    final explainSql =
+        raw.toUpperCase().startsWith('EXPLAIN') ? raw : '$explainPrefix$raw';
+    final res = await executeSql(explainSql, connectionId: conn.id);
+    final planSteps = res.explainPlan.isNotEmpty
+        ? res.explainPlan
+        : res.rows
+            .map((r) => r.values.map((v) => v?.toString() ?? '').join(' | '))
+            .where((s) => s.isNotEmpty)
+            .toList();
+
     tab.lastResult = QueryResult(
       columns: tab.lastResult?.columns ?? res.columns,
       rows: tab.lastResult?.rows ?? res.rows,
       affectedRows: res.affectedRows,
       executionTimeMs: res.executionTimeMs,
-      explainPlan: res.explainPlan,
+      explainPlan: planSteps,
+      error: res.error,
       executedSql: tab.sqlText,
     );
     activeBottomTab = DbBottomTab.executionPlan;
-    statusMessage =
-        'Explain Query Plan generated (${res.explainPlan.length} steps)';
+    statusMessage = res.isSuccess
+        ? 'Explain Query Plan generated (${planSteps.length} steps)'
+        : 'Explain error: ${res.error}';
     notifyListeners();
   }
 
@@ -316,7 +678,9 @@ class DbController extends ChangeNotifier {
   }
 
   void _ensureTableSnapshot(DbTableSchema table) {
-    final key = '$activeConnectionId:${table.name}';
+    final connId = activeConnectionId;
+    if (connId == null) return;
+    final key = '$connId:${table.name}';
     if (!_tableSnapshots.containsKey(key)) {
       _tableSnapshots[key] = table.rows
           .map((r) => Map<String, dynamic>.from(r))
@@ -330,11 +694,15 @@ class DbController extends ChangeNotifier {
     String columnName,
     dynamic newValue,
   ) {
-    final table = activeSchemas.firstWhere(
-      (t) => t.name == tableName,
-      orElse: () => selectedTable!,
-    );
-    if (rowIndex < 0 || rowIndex >= table.rows.length) return;
+    DbTableSchema? table;
+    for (final t in activeSchemas) {
+      if (t.name == tableName) {
+        table = t;
+        break;
+      }
+    }
+    table ??= selectedTable;
+    if (table == null || rowIndex < 0 || rowIndex >= table.rows.length) return;
     _ensureTableSnapshot(table);
 
     final oldVal = table.rows[rowIndex][columnName];
@@ -342,12 +710,14 @@ class DbController extends ChangeNotifier {
 
     final editKey = '$tableName:$rowIndex:$columnName';
     final existing = pendingCellEdits[editKey];
+    final rowSnap = Map<String, dynamic>.from(table.rows[rowIndex]);
     pendingCellEdits[editKey] = PendingCellEdit(
       tableName: tableName,
       rowIndex: rowIndex,
       columnName: columnName,
       oldValue: existing != null ? existing.oldValue : oldVal,
       newValue: newValue,
+      rowSnapshot: rowSnap,
     );
     table.rows[rowIndex][columnName] = newValue;
     statusMessage =
@@ -393,15 +763,16 @@ class DbController extends ChangeNotifier {
     table.rowCount = table.rows.length;
     selectedDataRowIndex = rowIdx;
 
-    if (pk != null) {
-      pendingCellEdits['${table.name}:$rowIdx:$pk'] = PendingCellEdit(
-        tableName: table.name,
-        rowIndex: rowIdx,
-        columnName: pk,
-        oldValue: null,
-        newValue: nextId,
-      );
-    }
+    final colKey = pk ?? (table.columns.isNotEmpty ? table.columns.first.name : 'row');
+    pendingCellEdits['${table.name}:$rowIdx:$colKey'] = PendingCellEdit(
+      tableName: table.name,
+      rowIndex: rowIdx,
+      columnName: colKey,
+      oldValue: null,
+      newValue: nextId,
+      isInsert: true,
+      rowSnapshot: Map<String, dynamic>.from(newRow),
+    );
     statusMessage = 'Inserted new row #$nextId into ${table.name}';
     notifyListeners();
   }
@@ -423,28 +794,84 @@ class DbController extends ChangeNotifier {
       columnName: pk,
       oldValue: removed[pk],
       newValue: 'DELETED',
+      isDelete: true,
+      rowSnapshot: Map<String, dynamic>.from(removed),
     );
     statusMessage = 'Removed row from ${table.name} (pending commit)';
     notifyListeners();
   }
 
-  void commitPendingChanges() {
+  Future<void> commitPendingChanges() async {
+    final conn = activeConnection;
+    if (conn == null) return;
     final count = pendingCellEdits.length;
+
+    // Persist staged edits to disk when connected to a real SQLite file
+    if (conn.driver == DbDriverType.sqlite &&
+        conn.databaseOrPath.trim() != ':memory:' &&
+        SqlEngine.hasSqliteCli) {
+      final resolved = SqlEngine.resolvePath(conn.databaseOrPath);
+      if (File(resolved).existsSync()) {
+        for (final edit in pendingCellEdits.values) {
+          DbTableSchema? table;
+          for (final t in activeSchemas) {
+            if (t.name == edit.tableName) {
+              table = t;
+              break;
+            }
+          }
+          if (table == null) continue;
+          final pk = table.primaryKeyColumn;
+          if (edit.isInsert && edit.rowSnapshot != null) {
+            final row = edit.rowIndex < table.rows.length
+                ? table.rows[edit.rowIndex]
+                : edit.rowSnapshot!;
+            final cols = row.keys.map((k) => '"$k"').join(', ');
+            final vals = row.values.map(_sqlVal).join(', ');
+            await SqlEngine.executeOnSqliteFile(
+              resolved,
+              'INSERT INTO "${table.name}" ($cols) VALUES ($vals);',
+            );
+          } else if (edit.isDelete && pk != null && edit.oldValue != null) {
+            await SqlEngine.executeOnSqliteFile(
+              resolved,
+              'DELETE FROM "${table.name}" WHERE "$pk" = ${_sqlVal(edit.oldValue)};',
+            );
+          } else if (pk != null &&
+              edit.rowSnapshot != null &&
+              edit.rowSnapshot![pk] != null) {
+            await SqlEngine.executeOnSqliteFile(
+              resolved,
+              'UPDATE "${table.name}" SET "${edit.columnName}" = ${_sqlVal(edit.newValue)} WHERE "$pk" = ${_sqlVal(edit.rowSnapshot![pk])};',
+            );
+          }
+        }
+      }
+    }
+
     pendingCellEdits.clear();
     _tableSnapshots.clear();
     statusMessage =
-        'COMMIT OK — $count change${count == 1 ? '' : 's'} persisted to ${activeConnection.name}';
-    _log('[${activeConnection.name}] COMMIT TRANSACTION ($count changes)');
+        'COMMIT OK — $count change${count == 1 ? '' : 's'} persisted to ${conn.name}';
+    _log('[${conn.name}] COMMIT TRANSACTION ($count changes)');
     notifyListeners();
   }
 
+  String _sqlVal(dynamic v) {
+    if (v == null) return 'NULL';
+    if (v is num) return v.toString();
+    if (v is bool) return v ? '1' : '0';
+    return "'${v.toString().replaceAll("'", "''")}'";
+  }
+
   void rollbackPendingChanges() {
+    final conn = activeConnection;
     final count = pendingCellEdits.length;
     for (final entry in _tableSnapshots.entries) {
-      final parts = entry.key.split(':');
-      if (parts.length == 2) {
-        final connId = parts[0];
-        final tblName = parts[1];
+      final sepIdx = entry.key.indexOf(':');
+      if (sepIdx > 0) {
+        final connId = entry.key.substring(0, sepIdx);
+        final tblName = entry.key.substring(sepIdx + 1);
         final schemas = _schemasByConnection[connId] ?? [];
         for (final t in schemas) {
           if (t.name == tblName) {
@@ -462,7 +889,9 @@ class DbController extends ChangeNotifier {
     _tableSnapshots.clear();
     statusMessage =
         'ROLLBACK OK — reverted $count uncommitted change${count == 1 ? '' : 's'}';
-    _log('[${activeConnection.name}] ROLLBACK TRANSACTION ($count changes reverted)');
+    if (conn != null) {
+      _log('[${conn.name}] ROLLBACK TRANSACTION ($count changes reverted)');
+    }
     notifyListeners();
   }
 
@@ -491,7 +920,8 @@ class DbController extends ChangeNotifier {
   }
 
   Future<void> openFiles(List<String> paths) async {
-    for (final path in paths) {
+    for (final rawPath in paths) {
+      final path = SqlEngine.resolvePath(rawPath);
       final lower = path.toLowerCase();
       final file = File(path);
       if (!file.existsSync()) continue;
@@ -499,43 +929,75 @@ class DbController extends ChangeNotifier {
       if (lower.endsWith('.sql')) {
         final content = file.readAsStringSync();
         final fileName = path.split('/').last;
-        newSqlTab(title: fileName, initialSql: content);
-        runActiveQuery();
-        statusMessage = 'Opened SQL script $fileName';
+        if (activeConnection != null) {
+          newSqlTab(title: fileName, initialSql: content);
+          await runActiveQuery();
+          statusMessage = 'Opened SQL script $fileName';
+        } else {
+          statusMessage =
+              'Connect to a database first before opening SQL script $fileName';
+        }
       } else if (lower.endsWith('.sqlite') ||
           lower.endsWith('.sqlite3') ||
           lower.endsWith('.db')) {
         final fileName = path.split('/').last;
-        final connId = 'conn_${DateTime.now().millisecondsSinceEpoch}';
+        // Reuse existing connection if same path is already saved
+        DbConnectionProfile? existing;
+        for (final c in connections) {
+          if (c.driver == DbDriverType.sqlite &&
+              SqlEngine.resolvePath(c.databaseOrPath) == path) {
+            existing = c;
+            break;
+          }
+        }
+        if (existing != null) {
+          _schemasByConnection.remove(existing.id);
+          await selectConnection(existing.id);
+          statusMessage =
+              'Opened SQLite database $fileName (${activeSchemas.length} objects)';
+        } else {
+          final connId = 'conn_${DateTime.now().microsecondsSinceEpoch}';
+          final profile = DbConnectionProfile(
+            id: connId,
+            name: fileName,
+            driver: DbDriverType.sqlite,
+            databaseOrPath: path,
+            isConnected: true,
+          );
+          final introspected = await SqlEngine.introspectSqliteFile(path);
+          await addConnection(profile, schemas: introspected);
+          statusMessage =
+              'Mounted SQLite database $fileName (${introspected.length} objects)';
+        }
+      } else if (lower.endsWith('.duckdb') || lower.endsWith('.ddb')) {
+        final fileName = path.split('/').last;
+        final connId = 'conn_${DateTime.now().microsecondsSinceEpoch}';
         final profile = DbConnectionProfile(
           id: connId,
           name: fileName,
-          driver: DbDriverType.sqlite,
+          driver: DbDriverType.duckdb,
           databaseOrPath: path,
           isConnected: true,
         );
-        var introspected = await SqlEngine.introspectSqliteFile(path);
-        if (introspected.isEmpty) {
-          introspected = _buildDefaultStarterSchema();
-        }
-        addConnection(profile, schemas: introspected);
+        await addConnection(profile);
         statusMessage =
-            'Mounted SQLite database $fileName (${introspected.length} objects)';
+            'Mounted DuckDB database $fileName (${activeSchemas.length} objects)';
       }
     }
     notifyListeners();
   }
 
   String exportResultAs(String format) {
-    final res = activeTab.lastResult;
+    final res = activeTab?.lastResult;
     if (res == null) return '';
+    final tableName = selectedTableName ?? 'query_results';
     switch (format.toLowerCase()) {
       case 'csv':
         return SqlEngine.exportToCsv(res);
       case 'json':
         return SqlEngine.exportToJson(res);
       case 'sql':
-        return SqlEngine.exportToSqlInserts(selectedTableName, res);
+        return SqlEngine.exportToSqlInserts(tableName, res);
       default:
         return SqlEngine.exportToCsv(res);
     }
@@ -549,985 +1011,4 @@ class DbController extends ChangeNotifier {
   }
 
   String _oneLine(String s) => s.replaceAll(RegExp(r'\s+'), ' ').trim();
-
-  void _seedInitialConnectionsAndSchemas() {
-    final prodConn = DbConnectionProfile(
-      id: 'conn_fyr_cloud',
-      name: 'fyr_cloud_prod',
-      driver: DbDriverType.sqlite,
-      databaseOrPath: '~/.local/share/fyrdb/fyr_cloud.sqlite',
-      username: 'fyr_admin',
-      sslEnabled: true,
-      colorTagHex: '#D040FF',
-      isConnected: true,
-    );
-
-    final duckConn = DbConnectionProfile(
-      id: 'conn_analytics_duckdb',
-      name: 'analytics_warehouse',
-      driver: DbDriverType.duckdb,
-      databaseOrPath: '~/.local/share/fyrdb/telemetry_olap.duckdb',
-      username: 'olap_reader',
-      colorTagHex: '#FACC15',
-      isConnected: true,
-    );
-
-    final pgConn = DbConnectionProfile(
-      id: 'conn_staging_pg',
-      name: 'staging_pg_cluster',
-      driver: DbDriverType.postgres,
-      host: '10.24.0.12',
-      port: 5432,
-      databaseOrPath: 'fyr_staging',
-      username: 'postgres',
-      sslEnabled: true,
-      colorTagHex: '#60A5FA',
-      isConnected: false,
-    );
-
-    connections.addAll([prodConn, duckConn, pgConn]);
-
-    _schemasByConnection[prodConn.id] = _buildFyrCloudProdSchema();
-    _schemasByConnection[duckConn.id] = _buildAnalyticsWarehouseSchema();
-    _schemasByConnection[pgConn.id] = _buildStagingPostgresSchema();
-
-    _log('Initialized fyrDB Engine v1.0 — 3 connections configured');
-    _log('Connected to fyr_cloud_prod (SQLite 3 • 5 tables, 2 views, 6 indexes, 2 triggers)');
-  }
-
-  void _seedInitialTabs() {
-    const tab1Sql = '''SELECT
-  u.username,
-  w.name AS workspace,
-  w.region,
-  d.service_name,
-  d.image_tag,
-  d.status,
-  d.replicas,
-  d.latency_ms
-FROM deployments d
-JOIN workspaces w ON d.workspace_id = w.id
-JOIN users u ON w.owner_id = u.id
-WHERE d.replicas >= 2
-ORDER BY d.latency_ms ASC;''';
-
-    const tab2Sql = '''SELECT
-  u.username,
-  u.role,
-  a.action,
-  a.ip_addr,
-  a.severity,
-  a.created_at
-FROM audit_logs a
-JOIN users u ON a.user_id = u.id
-ORDER BY a.id DESC
-LIMIT 8;''';
-
-    const tab3Sql = '''SELECT
-  status,
-  COUNT(*) AS service_count,
-  SUM(replicas) AS total_replicas,
-  AVG(latency_ms) AS avg_latency_ms
-FROM deployments
-GROUP BY status
-ORDER BY total_replicas DESC;''';
-
-    final t1 = SqlQueryTab(
-      id: 'tab_01',
-      title: '01_active_clusters.sql',
-      connectionId: 'conn_fyr_cloud',
-      sqlText: tab1Sql,
-    );
-    final t2 = SqlQueryTab(
-      id: 'tab_02',
-      title: '02_user_audit_join.sql',
-      connectionId: 'conn_fyr_cloud',
-      sqlText: tab2Sql,
-    );
-    final t3 = SqlQueryTab(
-      id: 'tab_03',
-      title: '03_schema_metrics.sql',
-      connectionId: 'conn_fyr_cloud',
-      sqlText: tab3Sql,
-    );
-
-    openTabs.addAll([t1, t2, t3]);
-    // Execute tab 1 immediately so the result grid & explain plan are populated on startup
-    t1.lastResult = runSql(t1.sqlText, connectionId: t1.connectionId);
-    t2.lastResult = SqlEngine.executeInMemory(
-      t2.sqlText,
-      _schemasByConnection['conn_fyr_cloud']!,
-    );
-    t3.lastResult = SqlEngine.executeInMemory(
-      t3.sqlText,
-      _schemasByConnection['conn_fyr_cloud']!,
-    );
-    activeTabIndex = 0;
-  }
-
-  List<DbTableSchema> _buildFyrCloudProdSchema() {
-    final usersTable = DbTableSchema(
-      name: 'users',
-      schemaName: 'main',
-      sizeBytes: 32768,
-      erPosition: const Offset(36, 36),
-      columns: const [
-        DbColumnSchema(
-          name: 'id',
-          dataType: 'INTEGER',
-          isPrimaryKey: true,
-          isNullable: false,
-          isUnique: true,
-        ),
-        DbColumnSchema(
-          name: 'username',
-          dataType: 'VARCHAR(64)',
-          isNullable: false,
-          isUnique: true,
-        ),
-        DbColumnSchema(
-          name: 'email',
-          dataType: 'VARCHAR(255)',
-          isNullable: false,
-          isUnique: true,
-        ),
-        DbColumnSchema(
-          name: 'role',
-          dataType: 'TEXT',
-          isNullable: false,
-          defaultValue: "'developer'",
-        ),
-        DbColumnSchema(
-          name: 'plan_tier',
-          dataType: 'TEXT',
-          isNullable: false,
-          defaultValue: "'pro'",
-        ),
-        DbColumnSchema(
-          name: 'active',
-          dataType: 'BOOLEAN',
-          isNullable: false,
-          defaultValue: '1',
-        ),
-        DbColumnSchema(
-          name: 'created_at',
-          dataType: 'TIMESTAMPTZ',
-          isNullable: false,
-        ),
-      ],
-      indexes: const [
-        DbIndexSchema(
-          name: 'idx_users_username',
-          tableName: 'users',
-          columns: ['username'],
-          isUnique: true,
-        ),
-        DbIndexSchema(
-          name: 'idx_users_role_tier',
-          tableName: 'users',
-          columns: ['role', 'plan_tier'],
-        ),
-      ],
-      triggers: const [
-        DbTriggerSchema(
-          name: 'trg_users_audit_insert',
-          tableName: 'users',
-          timing: 'AFTER',
-          event: 'INSERT',
-          definitionSql:
-              "CREATE TRIGGER trg_users_audit_insert AFTER INSERT ON users BEGIN INSERT INTO audit_logs (user_id, action, ip_addr, severity, created_at) VALUES (NEW.id, 'user.created', '127.0.0.1', 'INFO', CURRENT_TIMESTAMP); END;",
-        ),
-      ],
-      rows: [
-        {
-          'id': 1,
-          'username': 'archer',
-          'email': 'archer@fyrde.io',
-          'role': 'principal_architect',
-          'plan_tier': 'enterprise',
-          'active': 1,
-          'created_at': '2026-01-10 08:15:00',
-        },
-        {
-          'id': 2,
-          'username': 'linnea',
-          'email': 'linnea@fyrde.io',
-          'role': 'sre_lead',
-          'plan_tier': 'enterprise',
-          'active': 1,
-          'created_at': '2026-01-14 10:30:00',
-        },
-        {
-          'id': 3,
-          'username': 'soren',
-          'email': 'soren@fyrde.io',
-          'role': 'compositor_eng',
-          'plan_tier': 'pro',
-          'active': 1,
-          'created_at': '2026-02-02 14:12:00',
-        },
-        {
-          'id': 4,
-          'username': 'freja',
-          'email': 'freja@fyrde.io',
-          'role': 'security_eng',
-          'plan_tier': 'enterprise',
-          'active': 1,
-          'created_at': '2026-02-19 09:45:00',
-        },
-        {
-          'id': 5,
-          'username': 'kasper',
-          'email': 'kasper@fyrde.io',
-          'role': 'kernel_dev',
-          'plan_tier': 'pro',
-          'active': 1,
-          'created_at': '2026-03-04 16:20:00',
-        },
-        {
-          'id': 6,
-          'username': 'astrid',
-          'email': 'astrid@fyrde.io',
-          'role': 'ml_infra',
-          'plan_tier': 'enterprise',
-          'active': 1,
-          'created_at': '2026-03-21 11:05:00',
-        },
-        {
-          'id': 7,
-          'username': 'torben',
-          'email': 'torben@fyrde.io',
-          'role': 'qa_automation',
-          'plan_tier': 'team',
-          'active': 0,
-          'created_at': '2026-04-08 13:50:00',
-        },
-        {
-          'id': 8,
-          'username': 'ingrid',
-          'email': 'ingrid@fyrde.io',
-          'role': 'data_platform',
-          'plan_tier': 'pro',
-          'active': 1,
-          'created_at': '2026-04-18 17:40:00',
-        },
-      ],
-    );
-
-    final workspacesTable = DbTableSchema(
-      name: 'workspaces',
-      schemaName: 'main',
-      sizeBytes: 24576,
-      erPosition: const Offset(370, 36),
-      columns: const [
-        DbColumnSchema(
-          name: 'id',
-          dataType: 'INTEGER',
-          isPrimaryKey: true,
-          isNullable: false,
-          isUnique: true,
-        ),
-        DbColumnSchema(
-          name: 'owner_id',
-          dataType: 'INTEGER',
-          isNullable: false,
-          foreignKeyTarget: 'users.id',
-        ),
-        DbColumnSchema(
-          name: 'name',
-          dataType: 'VARCHAR(128)',
-          isNullable: false,
-          isUnique: true,
-        ),
-        DbColumnSchema(
-          name: 'region',
-          dataType: 'TEXT',
-          isNullable: false,
-          defaultValue: "'eu-north-1'",
-        ),
-        DbColumnSchema(
-          name: 'compositor',
-          dataType: 'TEXT',
-          isNullable: false,
-          defaultValue: "'swayfx-1.4'",
-        ),
-        DbColumnSchema(
-          name: 'ram_gb',
-          dataType: 'INTEGER',
-          isNullable: false,
-          defaultValue: '32',
-        ),
-      ],
-      indexes: const [
-        DbIndexSchema(
-          name: 'idx_workspaces_owner_id',
-          tableName: 'workspaces',
-          columns: ['owner_id'],
-        ),
-      ],
-      rows: [
-        {
-          'id': 101,
-          'owner_id': 1,
-          'name': 'fyr-core-wayland',
-          'region': 'eu-north-1',
-          'compositor': 'swayfx-1.4',
-          'ram_gb': 64,
-        },
-        {
-          'id': 102,
-          'owner_id': 2,
-          'name': 'edge-mesh-control',
-          'region': 'us-east-1',
-          'compositor': 'swayfx-1.4',
-          'ram_gb': 128,
-        },
-        {
-          'id': 103,
-          'owner_id': 3,
-          'name': 'vulkan-shader-lab',
-          'region': 'eu-central-1',
-          'compositor': 'wlroots-0.18',
-          'ram_gb': 64,
-        },
-        {
-          'id': 104,
-          'owner_id': 4,
-          'name': 'zero-trust-vault',
-          'region': 'eu-north-1',
-          'compositor': 'swayfx-1.4',
-          'ram_gb': 32,
-        },
-        {
-          'id': 105,
-          'owner_id': 6,
-          'name': 'tensor-cluster-a100',
-          'region': 'us-west-2',
-          'compositor': 'headless-drm',
-          'ram_gb': 256,
-        },
-        {
-          'id': 106,
-          'owner_id': 8,
-          'name': 'duckdb-lakehouse',
-          'region': 'ap-northeast-1',
-          'compositor': 'swayfx-1.4',
-          'ram_gb': 96,
-        },
-      ],
-    );
-
-    final deploymentsTable = DbTableSchema(
-      name: 'deployments',
-      schemaName: 'main',
-      sizeBytes: 49152,
-      erPosition: const Offset(704, 36),
-      columns: const [
-        DbColumnSchema(
-          name: 'id',
-          dataType: 'INTEGER',
-          isPrimaryKey: true,
-          isNullable: false,
-          isUnique: true,
-        ),
-        DbColumnSchema(
-          name: 'workspace_id',
-          dataType: 'INTEGER',
-          isNullable: false,
-          foreignKeyTarget: 'workspaces.id',
-        ),
-        DbColumnSchema(
-          name: 'service_name',
-          dataType: 'VARCHAR(128)',
-          isNullable: false,
-        ),
-        DbColumnSchema(
-          name: 'image_tag',
-          dataType: 'VARCHAR(64)',
-          isNullable: false,
-        ),
-        DbColumnSchema(
-          name: 'status',
-          dataType: 'TEXT',
-          isNullable: false,
-          defaultValue: "'HEALTHY'",
-        ),
-        DbColumnSchema(
-          name: 'replicas',
-          dataType: 'INTEGER',
-          isNullable: false,
-          defaultValue: '2',
-        ),
-        DbColumnSchema(
-          name: 'latency_ms',
-          dataType: 'REAL',
-          isNullable: false,
-          defaultValue: '1.5',
-        ),
-      ],
-      indexes: const [
-        DbIndexSchema(
-          name: 'idx_deployments_workspace_id',
-          tableName: 'deployments',
-          columns: ['workspace_id', 'status'],
-        ),
-      ],
-      triggers: const [
-        DbTriggerSchema(
-          name: 'trg_deployments_replica_guard',
-          tableName: 'deployments',
-          timing: 'BEFORE',
-          event: 'UPDATE',
-          definitionSql:
-              'CREATE TRIGGER trg_deployments_replica_guard BEFORE UPDATE ON deployments WHEN NEW.replicas < 0 BEGIN SELECT RAISE(ABORT, "Replicas cannot be negative"); END;',
-        ),
-      ],
-      rows: [
-        {
-          'id': 501,
-          'workspace_id': 101,
-          'service_name': 'fyr-compositor-daemon',
-          'image_tag': 'v2.4.0-vulkan',
-          'status': 'HEALTHY',
-          'replicas': 4,
-          'latency_ms': 1.2,
-        },
-        {
-          'id': 502,
-          'workspace_id': 102,
-          'service_name': 'envoy-mesh-ingress',
-          'image_tag': 'v1.31.2-tls',
-          'status': 'HEALTHY',
-          'replicas': 6,
-          'latency_ms': 1.8,
-        },
-        {
-          'id': 503,
-          'workspace_id': 105,
-          'service_name': 'vllm-inference-router',
-          'image_tag': 'v0.9.4-cuda12',
-          'status': 'HEALTHY',
-          'replicas': 8,
-          'latency_ms': 2.4,
-        },
-        {
-          'id': 504,
-          'workspace_id': 104,
-          'service_name': 'wireguard-kms-signer',
-          'image_tag': 'v1.8.1-fips',
-          'status': 'HEALTHY',
-          'replicas': 3,
-          'latency_ms': 2.9,
-        },
-        {
-          'id': 505,
-          'workspace_id': 106,
-          'service_name': 'parquet-compactor',
-          'image_tag': 'v3.2.0-avx512',
-          'status': 'SYNCING',
-          'replicas': 4,
-          'latency_ms': 4.1,
-        },
-        {
-          'id': 506,
-          'workspace_id': 103,
-          'service_name': 'spirv-shader-cache',
-          'image_tag': 'v1.6.0-mesa',
-          'status': 'HEALTHY',
-          'replicas': 2,
-          'latency_ms': 5.6,
-        },
-        {
-          'id': 507,
-          'workspace_id': 101,
-          'service_name': 'pipewire-audio-bridge',
-          'image_tag': 'v1.2.5-rt',
-          'status': 'HEALTHY',
-          'replicas': 2,
-          'latency_ms': 6.3,
-        },
-        {
-          'id': 508,
-          'workspace_id': 102,
-          'service_name': 'prometheus-tsdb-shard',
-          'image_tag': 'v2.54.1',
-          'status': 'DEGRADED',
-          'replicas': 3,
-          'latency_ms': 14.8,
-        },
-        {
-          'id': 509,
-          'workspace_id': 104,
-          'service_name': 'oidc-session-broker',
-          'image_tag': 'v4.0.2',
-          'status': 'HEALTHY',
-          'replicas': 1,
-          'latency_ms': 3.5,
-        },
-        {
-          'id': 510,
-          'workspace_id': 106,
-          'service_name': 'clickhouse-sink-worker',
-          'image_tag': 'v24.8-lts',
-          'status': 'SCALING',
-          'replicas': 5,
-          'latency_ms': 8.2,
-        },
-      ],
-    );
-
-    final apiKeysTable = DbTableSchema(
-      name: 'api_keys',
-      schemaName: 'main',
-      sizeBytes: 16384,
-      erPosition: const Offset(36, 310),
-      columns: const [
-        DbColumnSchema(
-          name: 'id',
-          dataType: 'INTEGER',
-          isPrimaryKey: true,
-          isNullable: false,
-          isUnique: true,
-        ),
-        DbColumnSchema(
-          name: 'user_id',
-          dataType: 'INTEGER',
-          isNullable: false,
-          foreignKeyTarget: 'users.id',
-        ),
-        DbColumnSchema(
-          name: 'key_prefix',
-          dataType: 'VARCHAR(32)',
-          isNullable: false,
-          isUnique: true,
-        ),
-        DbColumnSchema(
-          name: 'scopes',
-          dataType: 'TEXT',
-          isNullable: false,
-        ),
-        DbColumnSchema(
-          name: 'last_used_at',
-          dataType: 'TIMESTAMPTZ',
-          isNullable: true,
-        ),
-      ],
-      indexes: const [
-        DbIndexSchema(
-          name: 'idx_api_keys_prefix',
-          tableName: 'api_keys',
-          columns: ['key_prefix'],
-          isUnique: true,
-        ),
-      ],
-      rows: [
-        {
-          'id': 1,
-          'user_id': 1,
-          'key_prefix': 'fyr_live_98a7c1',
-          'scopes': 'cluster:admin,db:write',
-          'last_used_at': '2026-11-17 21:58:10',
-        },
-        {
-          'id': 2,
-          'user_id': 2,
-          'key_prefix': 'fyr_live_44b2e9',
-          'scopes': 'mesh:read,mesh:deploy',
-          'last_used_at': '2026-11-17 21:40:02',
-        },
-        {
-          'id': 3,
-          'user_id': 3,
-          'key_prefix': 'fyr_live_71d0f4',
-          'scopes': 'shader:publish',
-          'last_used_at': '2026-11-17 19:15:44',
-        },
-        {
-          'id': 4,
-          'user_id': 4,
-          'key_prefix': 'fyr_sec_19f8a3',
-          'scopes': 'kms:rotate,audit:read',
-          'last_used_at': '2026-11-17 21:55:19',
-        },
-        {
-          'id': 5,
-          'user_id': 6,
-          'key_prefix': 'fyr_gpu_63c5b8',
-          'scopes': 'inference:invoke',
-          'last_used_at': '2026-11-17 20:30:00',
-        },
-        {
-          'id': 6,
-          'user_id': 8,
-          'key_prefix': 'fyr_olap_82e1d7',
-          'scopes': 'warehouse:query',
-          'last_used_at': null,
-        },
-      ],
-    );
-
-    final auditLogsTable = DbTableSchema(
-      name: 'audit_logs',
-      schemaName: 'main',
-      sizeBytes: 65536,
-      erPosition: const Offset(370, 310),
-      columns: const [
-        DbColumnSchema(
-          name: 'id',
-          dataType: 'BIGINT',
-          isPrimaryKey: true,
-          isNullable: false,
-          isUnique: true,
-        ),
-        DbColumnSchema(
-          name: 'user_id',
-          dataType: 'INTEGER',
-          isNullable: false,
-          foreignKeyTarget: 'users.id',
-        ),
-        DbColumnSchema(
-          name: 'action',
-          dataType: 'VARCHAR(128)',
-          isNullable: false,
-        ),
-        DbColumnSchema(
-          name: 'ip_addr',
-          dataType: 'VARCHAR(45)',
-          isNullable: false,
-        ),
-        DbColumnSchema(
-          name: 'severity',
-          dataType: 'TEXT',
-          isNullable: false,
-          defaultValue: "'INFO'",
-        ),
-        DbColumnSchema(
-          name: 'created_at',
-          dataType: 'TIMESTAMPTZ',
-          isNullable: false,
-        ),
-      ],
-      indexes: const [
-        DbIndexSchema(
-          name: 'idx_audit_logs_user_created',
-          tableName: 'audit_logs',
-          columns: ['user_id', 'created_at'],
-        ),
-      ],
-      rows: [
-        {
-          'id': 9001,
-          'user_id': 1,
-          'action': 'schema.migration.applied',
-          'ip_addr': '10.24.0.4',
-          'severity': 'INFO',
-          'created_at': '2026-11-17 20:01:12',
-        },
-        {
-          'id': 9002,
-          'user_id': 2,
-          'action': 'deployment.scaled.up',
-          'ip_addr': '10.24.0.19',
-          'severity': 'INFO',
-          'created_at': '2026-11-17 20:14:35',
-        },
-        {
-          'id': 9003,
-          'user_id': 4,
-          'action': 'kms.master_key.rotated',
-          'ip_addr': '10.24.0.8',
-          'severity': 'WARN',
-          'created_at': '2026-11-17 20:32:09',
-        },
-        {
-          'id': 9004,
-          'user_id': 3,
-          'action': 'vulkan.pipeline.compiled',
-          'ip_addr': '10.24.1.15',
-          'severity': 'INFO',
-          'created_at': '2026-11-17 20:45:51',
-        },
-        {
-          'id': 9005,
-          'user_id': 6,
-          'action': 'gpu.oom_guard.triggered',
-          'ip_addr': '10.24.4.88',
-          'severity': 'CRITICAL',
-          'created_at': '2026-11-17 21:02:18',
-        },
-        {
-          'id': 9006,
-          'user_id': 8,
-          'action': 'parquet.snapshot.exported',
-          'ip_addr': '10.24.2.41',
-          'severity': 'INFO',
-          'created_at': '2026-11-17 21:11:04',
-        },
-        {
-          'id': 9007,
-          'user_id': 1,
-          'action': 'sqlite.wal_checkpoint.run',
-          'ip_addr': '10.24.0.4',
-          'severity': 'INFO',
-          'created_at': '2026-11-17 21:19:42',
-        },
-        {
-          'id': 9008,
-          'user_id': 5,
-          'action': 'ebpf.probe.attached',
-          'ip_addr': '10.24.0.77',
-          'severity': 'WARN',
-          'created_at': '2026-11-17 21:28:15',
-        },
-        {
-          'id': 9009,
-          'user_id': 2,
-          'action': 'envoy.route_table.synced',
-          'ip_addr': '10.24.0.19',
-          'severity': 'INFO',
-          'created_at': '2026-11-17 21:35:00',
-        },
-        {
-          'id': 9010,
-          'user_id': 4,
-          'action': 'rbac.policy.verified',
-          'ip_addr': '10.24.0.8',
-          'severity': 'INFO',
-          'created_at': '2026-11-17 21:44:27',
-        },
-        {
-          'id': 9011,
-          'user_id': 6,
-          'action': 'tensor.weights.sharded',
-          'ip_addr': '10.24.4.88',
-          'severity': 'INFO',
-          'created_at': '2026-11-17 21:51:09',
-        },
-        {
-          'id': 9012,
-          'user_id': 1,
-          'action': 'db.index.analyzed',
-          'ip_addr': '10.24.0.4',
-          'severity': 'INFO',
-          'created_at': '2026-11-17 21:59:01',
-        },
-      ],
-    );
-
-    final viewActiveDeployments = DbTableSchema(
-      name: 'v_active_deployments',
-      schemaName: 'main',
-      isView: true,
-      sizeBytes: 4096,
-      erPosition: const Offset(704, 310),
-      ddlSql: '''CREATE VIEW v_active_deployments AS
-SELECT d.id, d.service_name, d.image_tag, d.status, d.replicas, d.latency_ms
-FROM deployments d
-WHERE d.status = 'HEALTHY';''',
-      columns: const [
-        DbColumnSchema(name: 'id', dataType: 'INTEGER', isPrimaryKey: true),
-        DbColumnSchema(name: 'service_name', dataType: 'VARCHAR(128)'),
-        DbColumnSchema(name: 'image_tag', dataType: 'VARCHAR(64)'),
-        DbColumnSchema(name: 'status', dataType: 'TEXT'),
-        DbColumnSchema(name: 'replicas', dataType: 'INTEGER'),
-        DbColumnSchema(name: 'latency_ms', dataType: 'REAL'),
-      ],
-      rows: deploymentsTable.rows
-          .where((r) => r['status'] == 'HEALTHY')
-          .map((r) => Map<String, dynamic>.from(r))
-          .toList(),
-    );
-
-    final viewUserWorkspaceUsage = DbTableSchema(
-      name: 'v_user_workspace_usage',
-      schemaName: 'main',
-      isView: true,
-      sizeBytes: 4096,
-      erPosition: const Offset(704, 490),
-      ddlSql: '''CREATE VIEW v_user_workspace_usage AS
-SELECT u.username, w.name AS workspace, w.region, w.ram_gb
-FROM workspaces w
-JOIN users u ON w.owner_id = u.id;''',
-      columns: const [
-        DbColumnSchema(name: 'username', dataType: 'VARCHAR(64)'),
-        DbColumnSchema(name: 'workspace', dataType: 'VARCHAR(128)'),
-        DbColumnSchema(name: 'region', dataType: 'TEXT'),
-        DbColumnSchema(name: 'ram_gb', dataType: 'INTEGER'),
-      ],
-      rows: [
-        {
-          'username': 'archer',
-          'workspace': 'fyr-core-wayland',
-          'region': 'eu-north-1',
-          'ram_gb': 64,
-        },
-        {
-          'username': 'linnea',
-          'workspace': 'edge-mesh-control',
-          'region': 'us-east-1',
-          'ram_gb': 128,
-        },
-        {
-          'username': 'soren',
-          'workspace': 'vulkan-shader-lab',
-          'region': 'eu-central-1',
-          'ram_gb': 64,
-        },
-        {
-          'username': 'freja',
-          'workspace': 'zero-trust-vault',
-          'region': 'eu-north-1',
-          'ram_gb': 32,
-        },
-        {
-          'username': 'astrid',
-          'workspace': 'tensor-cluster-a100',
-          'region': 'us-west-2',
-          'ram_gb': 256,
-        },
-        {
-          'username': 'ingrid',
-          'workspace': 'duckdb-lakehouse',
-          'region': 'ap-northeast-1',
-          'ram_gb': 96,
-        },
-      ],
-    );
-
-    final all = [
-      usersTable,
-      workspacesTable,
-      deploymentsTable,
-      apiKeysTable,
-      auditLogsTable,
-      viewActiveDeployments,
-      viewUserWorkspaceUsage,
-    ];
-    for (final t in all) {
-      if (t.ddlSql.isEmpty) {
-        t.ddlSql = SqlEngine.generateTableDdl(t);
-      }
-    }
-    return all;
-  }
-
-  List<DbTableSchema> _buildAnalyticsWarehouseSchema() {
-    final eventsDaily = DbTableSchema(
-      name: 'events_daily',
-      schemaName: 'analytics',
-      sizeBytes: 131072,
-      erPosition: const Offset(40, 40),
-      columns: const [
-        DbColumnSchema(
-          name: 'day',
-          dataType: 'TEXT',
-          isPrimaryKey: true,
-          isNullable: false,
-        ),
-        DbColumnSchema(
-          name: 'region',
-          dataType: 'TEXT',
-          isNullable: false,
-        ),
-        DbColumnSchema(
-          name: 'total_requests',
-          dataType: 'BIGINT',
-          isNullable: false,
-        ),
-        DbColumnSchema(
-          name: 'p99_ms',
-          dataType: 'REAL',
-          isNullable: false,
-        ),
-      ],
-      rows: [
-        {
-          'day': '2026-11-15',
-          'region': 'eu-north-1',
-          'total_requests': 14820900,
-          'p99_ms': 4.2,
-        },
-        {
-          'day': '2026-11-16',
-          'region': 'eu-north-1',
-          'total_requests': 16194200,
-          'p99_ms': 3.9,
-        },
-        {
-          'day': '2026-11-17',
-          'region': 'us-east-1',
-          'total_requests': 22410000,
-          'p99_ms': 5.1,
-        },
-      ],
-    );
-    eventsDaily.ddlSql = SqlEngine.generateTableDdl(eventsDaily);
-    return [eventsDaily];
-  }
-
-  List<DbTableSchema> _buildStagingPostgresSchema() {
-    final tenants = DbTableSchema(
-      name: 'tenants',
-      schemaName: 'public',
-      sizeBytes: 24576,
-      erPosition: const Offset(40, 40),
-      columns: const [
-        DbColumnSchema(
-          name: 'id',
-          dataType: 'INTEGER',
-          isPrimaryKey: true,
-          isNullable: false,
-        ),
-        DbColumnSchema(
-          name: 'slug',
-          dataType: 'VARCHAR(64)',
-          isNullable: false,
-          isUnique: true,
-        ),
-        DbColumnSchema(
-          name: 'mrr_usd',
-          dataType: 'INTEGER',
-          isNullable: false,
-        ),
-      ],
-      rows: [
-        {'id': 1, 'slug': 'nordic-robotics', 'mrr_usd': 12500},
-        {'id': 2, 'slug': 'krono-aerospace', 'mrr_usd': 28000},
-        {'id': 3, 'slug': 'valkyrie-bio', 'mrr_usd': 9400},
-      ],
-    );
-    tenants.ddlSql = SqlEngine.generateTableDdl(tenants);
-    return [tenants];
-  }
-
-  List<DbTableSchema> _buildDefaultStarterSchema() {
-    final items = DbTableSchema(
-      name: 'records',
-      schemaName: 'main',
-      columns: const [
-        DbColumnSchema(
-          name: 'id',
-          dataType: 'INTEGER',
-          isPrimaryKey: true,
-          isNullable: false,
-        ),
-        DbColumnSchema(
-          name: 'name',
-          dataType: 'TEXT',
-          isNullable: false,
-        ),
-        DbColumnSchema(
-          name: 'value',
-          dataType: 'REAL',
-          isNullable: true,
-        ),
-      ],
-      rows: [
-        {'id': 1, 'name': 'alpha', 'value': 42.5},
-        {'id': 2, 'name': 'beta', 'value': 99.0},
-      ],
-    );
-    items.ddlSql = SqlEngine.generateTableDdl(items);
-    return [items];
-  }
 }

@@ -90,8 +90,7 @@ class _DataBrowserPanelState extends State<DataBrowserPanel> {
                       color: FyrTheme.textColor,
                     ),
                     decoration: InputDecoration(
-                      hintText:
-                          "e.g. status = 'HEALTHY' AND replicas >= 3 (Press Enter)",
+                      hintText: "e.g. id > 0 (Press Enter)",
                       hintStyle: GoogleFonts.jetBrainsMono(
                         fontSize: 11,
                         color: FyrTheme.textColorMuted.withValues(alpha: 0.5),

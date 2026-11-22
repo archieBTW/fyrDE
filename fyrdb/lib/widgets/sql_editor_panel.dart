@@ -103,6 +103,31 @@ class _SqlEditorPanelState extends State<SqlEditorPanel> {
     final activeTab = ctrl.activeTab;
     final accent = FyrTheme.accentColor;
 
+    if (activeTab == null) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'No SQL tab open.',
+              style: TextStyle(fontSize: 13, color: FyrTheme.textColorMuted),
+            ),
+            const SizedBox(height: 10),
+            if (ctrl.activeConnection != null)
+              FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: accent,
+                  foregroundColor: FyrTheme.getContrastingColor(accent),
+                ),
+                onPressed: ctrl.newSqlTab,
+                icon: const Icon(Icons.add_rounded, size: 16),
+                label: const Text('New Query Tab'),
+              ),
+          ],
+        ),
+      );
+    }
+
     if (_lastSyncedTabId != activeTab.id ||
         _sqlCtrl.text != activeTab.sqlText) {
       _lastSyncedTabId = activeTab.id;
@@ -113,6 +138,7 @@ class _SqlEditorPanelState extends State<SqlEditorPanel> {
     }
 
     final lineCount = '\n'.allMatches(activeTab.sqlText).length + 1;
+    final targetTable = ctrl.selectedTableName ?? 'table_name';
 
     return Column(
       children: [
@@ -209,21 +235,21 @@ class _SqlEditorPanelState extends State<SqlEditorPanel> {
               _snippetChip(
                 label: 'SELECT *',
                 onTap: () => ctrl.insertSqlSnippet(
-                  'SELECT * FROM ${ctrl.selectedTableName} LIMIT 50;',
+                  'SELECT * FROM $targetTable LIMIT 50;',
                 ),
               ),
               const SizedBox(width: 4),
               _snippetChip(
-                label: 'JOIN',
+                label: 'CREATE TABLE',
                 onTap: () => ctrl.insertSqlSnippet(
-                  'SELECT u.username, w.name, w.region\nFROM workspaces w\nJOIN users u ON w.owner_id = u.id;',
+                  'CREATE TABLE items (\n  id INTEGER PRIMARY KEY,\n  name TEXT NOT NULL,\n  created_at TEXT DEFAULT CURRENT_TIMESTAMP\n);',
                 ),
               ),
               const SizedBox(width: 4),
               _snippetChip(
-                label: 'GROUP BY',
+                label: 'COUNT',
                 onTap: () => ctrl.insertSqlSnippet(
-                  'SELECT status, COUNT(*) AS count, AVG(latency_ms) AS avg_ms\nFROM deployments\nGROUP BY status;',
+                  'SELECT COUNT(*) AS total_rows\nFROM $targetTable;',
                 ),
               ),
               const SizedBox(width: 4),
@@ -354,7 +380,29 @@ class _SqlEditorPanelState extends State<SqlEditorPanel> {
                 const SizedBox(width: 4),
               ],
               const Spacer(),
-              if (activeTab.lastResult != null)
+              if (activeTab.isRunning)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: accent,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Running...',
+                      style: GoogleFonts.jetBrainsMono(
+                        fontSize: 11,
+                        color: accent,
+                      ),
+                    ),
+                  ],
+                )
+              else if (activeTab.lastResult != null)
                 _buildResultSummaryBadge(activeTab.lastResult!, accent),
             ],
           ),

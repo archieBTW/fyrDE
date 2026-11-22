@@ -39,26 +39,25 @@ class ErDiagramCanvas extends StatelessWidget {
             children: [
               Icon(Icons.hub_rounded, size: 15, color: accent),
               const SizedBox(width: 7),
-              Text(
-                'Entity-Relationship (ER) Schema Diagram — ${ctrl.activeConnection.name}',
-                style: GoogleFonts.outfit(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: FyrTheme.textColor,
+              Expanded(
+                child: Text(
+                  'ER Schema Diagram — ${ctrl.activeConnection?.name ?? 'Disconnected'}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.outfit(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: FyrTheme.textColor,
+                  ),
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               _legendChip('PK', 'Primary Key', const Color(0xFFFBBF24)),
               const SizedBox(width: 8),
               _legendChip(
                 'FK',
-                '$fkCount Foreign Key Relations',
+                '$fkCount FKs',
                 const Color(0xFF38BDF8),
-              ),
-              const Spacer(),
-              Text(
-                'Drag any entity card to rearrange layout',
-                style: TextStyle(fontSize: 11, color: FyrTheme.textColorMuted),
               ),
               const SizedBox(width: 12),
               InkWell(
@@ -110,10 +109,20 @@ class ErDiagramCanvas extends StatelessWidget {
                       painter: _ErDiagramPainter(
                         schemas: schemas,
                         accentColor: accent,
-                        selectedTableName: ctrl.selectedTableName,
+                        selectedTableName: ctrl.selectedTableName ?? '',
                       ),
                     ),
                   ),
+                  if (schemas.isEmpty)
+                    Center(
+                      child: Text(
+                        'No tables in this schema yet. Create tables in the SQL Editor to inspect ER relationships.',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: FyrTheme.textColorMuted,
+                        ),
+                      ),
+                    ),
                   // Draggable Table Entity Cards
                   for (final table in schemas)
                     Positioned(

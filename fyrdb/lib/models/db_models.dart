@@ -8,30 +8,42 @@ enum DbDriverType {
     cliBinary: 'sqlite3',
     badgeColor: Color(0xFF38BDF8),
     icon: Icons.insert_drive_file_rounded,
+    hint: 'Local .db / .sqlite file',
+    description:
+        'Embedded serverless SQL database stored in a single local file. Open existing or create new.',
   ),
   postgres(
-    label: 'PostgreSQL 17',
+    label: 'PostgreSQL',
     shortTag: 'PGSQL',
     defaultPort: 5432,
     cliBinary: 'psql',
     badgeColor: Color(0xFF60A5FA),
     icon: Icons.dns_rounded,
+    hint: 'Default port 5432',
+    description:
+        'Advanced open-source relational database with full ACID compliance, JSONB, and extensions.',
   ),
   mysql(
-    label: 'MySQL 8',
+    label: 'MySQL / MariaDB',
     shortTag: 'MYSQL',
     defaultPort: 3306,
     cliBinary: 'mysql',
     badgeColor: Color(0xFFF59E0B),
     icon: Icons.storage_rounded,
+    hint: 'Default port 3306',
+    description:
+        'Widely deployed relational database engine for web backends and transactional workloads.',
   ),
   mariadb(
-    label: 'MariaDB 11',
+    label: 'MariaDB',
     shortTag: 'MARIADB',
     defaultPort: 3306,
     cliBinary: 'mariadb',
     badgeColor: Color(0xFFEC4899),
     icon: Icons.table_view_rounded,
+    hint: 'Default port 3306',
+    description:
+        'Community-developed, MySQL-compatible relational database server.',
   ),
   duckdb(
     label: 'DuckDB',
@@ -40,14 +52,20 @@ enum DbDriverType {
     cliBinary: 'duckdb',
     badgeColor: Color(0xFFFACC15),
     icon: Icons.analytics_rounded,
+    hint: 'Local .duckdb file',
+    description:
+        'High-performance in-process analytical (OLAP) SQL engine for local files and Parquet.',
   ),
   redis(
-    label: 'Redis 7',
+    label: 'Redis',
     shortTag: 'REDIS',
     defaultPort: 6379,
     cliBinary: 'redis-cli',
     badgeColor: Color(0xFFF87171),
     icon: Icons.bolt_rounded,
+    hint: 'Default port 6379',
+    description:
+        'In-memory key-value data store for caching, sessions, streams, and real-time analytics.',
   ),
   clickhouse(
     label: 'ClickHouse',
@@ -56,6 +74,9 @@ enum DbDriverType {
     cliBinary: 'clickhouse-client',
     badgeColor: Color(0xFFA78BFA),
     icon: Icons.speed_rounded,
+    hint: 'Default port 8123',
+    description:
+        'Column-oriented OLAP database management system for real-time analytical queries.',
   );
 
   final String label;
@@ -64,6 +85,8 @@ enum DbDriverType {
   final String cliBinary;
   final Color badgeColor;
   final IconData icon;
+  final String hint;
+  final String description;
 
   const DbDriverType({
     required this.label,
@@ -72,9 +95,36 @@ enum DbDriverType {
     required this.cliBinary,
     required this.badgeColor,
     required this.icon,
+    required this.hint,
+    required this.description,
   });
 
-  bool get isFileBased => this == DbDriverType.sqlite || this == DbDriverType.duckdb;
+  bool get isFileBased =>
+      this == DbDriverType.sqlite || this == DbDriverType.duckdb;
+
+  String get defaultUsername {
+    switch (this) {
+      case DbDriverType.postgres:
+        return 'postgres';
+      case DbDriverType.mysql:
+      case DbDriverType.mariadb:
+        return 'root';
+      case DbDriverType.redis:
+        return '';
+      case DbDriverType.clickhouse:
+        return 'default';
+      case DbDriverType.sqlite:
+      case DbDriverType.duckdb:
+        return '';
+    }
+  }
+
+  static DbDriverType fromName(String name) {
+    for (final d in DbDriverType.values) {
+      if (d.name == name) return d;
+    }
+    return DbDriverType.sqlite;
+  }
 }
 
 enum DbWorkspaceMode {
@@ -99,6 +149,42 @@ enum DbBottomTab {
   const DbBottomTab(this.label, this.icon);
 }
 
+class ConnectionTestResult {
+  final bool success;
+  final double latencyMs;
+  final String message;
+  final String? details;
+  final bool cliAvailable;
+
+  const ConnectionTestResult({
+    required this.success,
+    required this.latencyMs,
+    required this.message,
+    this.details,
+    this.cliAvailable = false,
+  });
+}
+
+class ParsedConnectionUri {
+  final DbDriverType? driver;
+  final String? host;
+  final int? port;
+  final String? database;
+  final String? username;
+  final String? password;
+  final bool? sslEnabled;
+
+  const ParsedConnectionUri({
+    this.driver,
+    this.host,
+    this.port,
+    this.database,
+    this.username,
+    this.password,
+    this.sslEnabled,
+  });
+}
+
 class DbConnectionProfile {
   final String id;
   String name;
@@ -107,6 +193,8 @@ class DbConnectionProfile {
   int port;
   String databaseOrPath;
   String username;
+  /// Kept in memory for the current session only; never written to connections.json.
+  String? password;
   bool sslEnabled;
   bool readOnly;
   String colorTagHex;
@@ -119,7 +207,8 @@ class DbConnectionProfile {
     this.host = 'localhost',
     int? port,
     required this.databaseOrPath,
-    this.username = 'postgres',
+    this.username = '',
+    this.password,
     this.sslEnabled = false,
     this.readOnly = false,
     this.colorTagHex = '#D040FF',
@@ -130,7 +219,44 @@ class DbConnectionProfile {
     if (driver.isFileBased) {
       return '${driver.label} • $databaseOrPath';
     }
-    return '${driver.label} • $host:$port/$databaseOrPath';
+    final dbSuffix = databaseOrPath.isNotEmpty ? '/$databaseOrPath' : '';
+    return '${driver.label} • $host:$port$dbSuffix';
+  }
+
+  /// Serializes connection metadata to JSON (intentionally excludes raw passwords).
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'name': name,
+      'driver': driver.name,
+      'host': host,
+      'port': port,
+      'databaseOrPath': databaseOrPath,
+      'username': username,
+      'sslEnabled': sslEnabled,
+      'readOnly': readOnly,
+      'colorTagHex': colorTagHex,
+    };
+  }
+
+  factory DbConnectionProfile.fromJson(Map<String, dynamic> json) {
+    final driver = DbDriverType.fromName(json['driver']?.toString() ?? 'sqlite');
+    return DbConnectionProfile(
+      id: json['id']?.toString() ??
+          'conn_${DateTime.now().microsecondsSinceEpoch}',
+      name: json['name']?.toString() ?? 'Untitled Connection',
+      driver: driver,
+      host: json['host']?.toString() ?? 'localhost',
+      port: json['port'] is int
+          ? json['port'] as int
+          : int.tryParse(json['port']?.toString() ?? '') ?? driver.defaultPort,
+      databaseOrPath: json['databaseOrPath']?.toString() ?? '',
+      username: json['username']?.toString() ?? '',
+      sslEnabled: json['sslEnabled'] == true,
+      readOnly: json['readOnly'] == true,
+      colorTagHex: json['colorTagHex']?.toString() ?? '#D040FF',
+      isConnected: false,
+    );
   }
 
   DbConnectionProfile copyWith({
@@ -141,6 +267,7 @@ class DbConnectionProfile {
     int? port,
     String? databaseOrPath,
     String? username,
+    String? password,
     bool? sslEnabled,
     bool? readOnly,
     String? colorTagHex,
@@ -154,6 +281,7 @@ class DbConnectionProfile {
       port: port ?? this.port,
       databaseOrPath: databaseOrPath ?? this.databaseOrPath,
       username: username ?? this.username,
+      password: password ?? this.password,
       sslEnabled: sslEnabled ?? this.sslEnabled,
       readOnly: readOnly ?? this.readOnly,
       colorTagHex: colorTagHex ?? this.colorTagHex,

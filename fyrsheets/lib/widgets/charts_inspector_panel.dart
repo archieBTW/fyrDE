@@ -99,12 +99,16 @@ class ChartsInspectorPanel extends StatelessWidget {
                 color: active ? FyrTheme.accentColor : FyrTheme.textColorMuted,
               ),
               const SizedBox(width: 4),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-                  color: active ? FyrTheme.accentColor : FyrTheme.textColor,
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                    color: active ? FyrTheme.accentColor : FyrTheme.textColor,
+                  ),
                 ),
               ),
             ],
@@ -124,15 +128,20 @@ class ChartsInspectorPanel extends StatelessWidget {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(
-              'LIVE WORKSHEET CHARTS',
-              style: GoogleFonts.outfit(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.7,
-                color: FyrTheme.textColorMuted,
+            Expanded(
+              child: Text(
+                'LIVE WORKSHEET CHARTS',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: GoogleFonts.outfit(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.7,
+                  color: FyrTheme.textColorMuted,
+                ),
               ),
             ),
+            const SizedBox(width: 6),
             InkWell(
               borderRadius: BorderRadius.circular(5),
               onTap: () => ctrl.addChart(),

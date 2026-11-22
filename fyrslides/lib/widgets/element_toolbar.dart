@@ -20,8 +20,10 @@ class ElementToolbar extends StatelessWidget {
         color: FyrTheme.surfaceColor,
         border: Border(bottom: BorderSide(color: FyrTheme.dividerColor)),
       ),
-      child: Row(
-        children: [
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
           // Add Slide with Layout Menu
           PopupMenuButton<SlideLayoutType>(
             tooltip: 'Add New Slide with Layout',
@@ -217,7 +219,7 @@ class ElementToolbar extends StatelessWidget {
               ),
             ),
           ),
-          const Spacer(),
+          const SizedBox(width: 12),
           // Layer & Selection Actions
           IconButton(
             icon: Icon(
@@ -264,6 +266,7 @@ class ElementToolbar extends StatelessWidget {
             onPressed: hasSelection ? ctrl.deleteSelectedElement : null,
           ),
         ],
+      ),
       ),
     );
   }

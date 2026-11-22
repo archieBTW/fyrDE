@@ -41,8 +41,8 @@ class DocsController extends ChangeNotifier {
   String? statusMessage;
   int _nextIdCounter = 100;
 
-  DocsController() {
-    document = buildArchitectureRfcTemplate();
+  DocsController({FyrDocument? initialDocument}) {
+    document = initialDocument ?? buildBlankTemplate();
     if (document.blocks.isNotEmpty) {
       selectedBlockId = document.blocks.first.id;
     }
@@ -608,8 +608,15 @@ class DocsController extends ChangeNotifier {
   }
 
   void newBlankDocument() {
-    loadTemplate(buildBlankTemplate());
+    _recordSnapshot();
+    document = buildBlankTemplate();
+    selectedBlockId =
+        document.blocks.isNotEmpty ? document.blocks.first.id : null;
+    statusMessage = 'Created new document';
+    notifyListeners();
   }
+
+  void newDocument() => newBlankDocument();
 
   Future<void> openDocumentFile(String filePath) async {
     try {
@@ -931,21 +938,15 @@ class DocsController extends ChangeNotifier {
   static FyrDocument buildBlankTemplate() {
     return FyrDocument(
       id: 'doc_${DateTime.now().millisecondsSinceEpoch}',
-      title: 'Untitled_Document',
+      title: 'Untitled Document',
       format: 'odt',
+      headerText: '',
+      footerText: '',
       blocks: [
         DocBlock(
           id: 'blk_1',
-          type: DocBlockType.title,
-          text: 'Untitled Document',
-          fontFamily: 'Outfit',
-          fontSize: 26,
-          bold: true,
-        ),
-        DocBlock(
-          id: 'blk_2',
           type: DocBlockType.paragraph,
-          text: 'Start typing your document here...',
+          text: '',
         ),
       ],
     );

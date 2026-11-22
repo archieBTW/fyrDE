@@ -175,14 +175,18 @@ class _SlideCanvasState extends State<SlideCanvas> {
               ),
               child: Row(
                 children: [
-                  Text(
-                    'Slide ${ctrl.activeSlideIndex + 1} of ${ctrl.slides.length}  •  1600×900 (${ctrl.deck.aspectRatio})  •  Theme: ${ctrl.deck.theme.name}',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: FyrTheme.textColorMuted,
+                  Expanded(
+                    child: Text(
+                      'Slide ${ctrl.activeSlideIndex + 1} of ${ctrl.slides.length}  •  1600×900 (${ctrl.deck.aspectRatio})  •  Theme: ${ctrl.deck.theme.name}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: FyrTheme.textColorMuted,
+                      ),
                     ),
                   ),
-                  const Spacer(),
+                  const SizedBox(width: 8),
                   InkWell(
                     onTap: ctrl.toggleCanvasGrid,
                     child: Padding(

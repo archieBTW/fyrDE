@@ -30,16 +30,19 @@ class SlideFilmstrip extends StatelessWidget {
             ),
             child: Row(
               children: [
-                Text(
-                  'SLIDES (${slides.length})',
-                  style: TextStyle(
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.9,
-                    color: FyrTheme.textColorMuted,
+                Expanded(
+                  child: Text(
+                    'SLIDES (${slides.length})',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.9,
+                      color: FyrTheme.textColorMuted,
+                    ),
                   ),
                 ),
-                const Spacer(),
                 IconButton(
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
@@ -177,27 +180,35 @@ class SlideFilmstrip extends StatelessWidget {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                TextButton.icon(
-                  style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    minimumSize: const Size(0, 26),
+                Flexible(
+                  child: TextButton.icon(
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      minimumSize: const Size(0, 26),
+                    ),
+                    onPressed:
+                        ctrl.activeSlideIndex > 0 ? ctrl.moveSlideUp : null,
+                    icon: const Icon(Icons.keyboard_arrow_up_rounded, size: 14),
+                    label: const Text('Up',
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 11)),
                   ),
-                  onPressed: ctrl.activeSlideIndex > 0 ? ctrl.moveSlideUp : null,
-                  icon: const Icon(Icons.keyboard_arrow_up_rounded, size: 15),
-                  label: const Text('Move Up', style: TextStyle(fontSize: 11)),
                 ),
-                TextButton.icon(
-                  style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    minimumSize: const Size(0, 26),
+                Flexible(
+                  child: TextButton.icon(
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      minimumSize: const Size(0, 26),
+                    ),
+                    onPressed: ctrl.activeSlideIndex < slides.length - 1
+                        ? ctrl.moveSlideDown
+                        : null,
+                    icon:
+                        const Icon(Icons.keyboard_arrow_down_rounded, size: 14),
+                    label: const Text('Down',
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 11)),
                   ),
-                  onPressed: ctrl.activeSlideIndex < slides.length - 1
-                      ? ctrl.moveSlideDown
-                      : null,
-                  icon:
-                      const Icon(Icons.keyboard_arrow_down_rounded, size: 15),
-                  label:
-                      const Text('Move Down', style: TextStyle(fontSize: 11)),
                 ),
               ],
             ),

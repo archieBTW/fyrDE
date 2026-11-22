@@ -24,7 +24,7 @@ class SlidesController extends ChangeNotifier {
   static const int _maxHistory = 40;
 
   SlidesController({PresentationDeck? initialDeck})
-      : _deck = initialDeck ?? buildDefaultKeynoteDeck() {
+      : _deck = initialDeck ?? buildBlankDeck() {
     if (_deck.slides.isNotEmpty && _deck.slides.first.elements.isNotEmpty) {
       _selectedElementId = _deck.slides.first.elements.first.id;
     }
@@ -540,22 +540,12 @@ class SlidesController extends ChangeNotifier {
 
   void newDeck() {
     _pushUndo();
-    final theme = kDeckThemePresets.first;
-    final firstSlide = _createSlideFromLayout(
-      id: 'slide_1',
-      index: 1,
-      layout: SlideLayoutType.titleSlide,
-      theme: theme,
-    );
-    _deck = PresentationDeck(
-      id: 'deck_${DateTime.now().millisecondsSinceEpoch}',
-      title: 'Untitled_Presentation',
-      format: 'odp',
-      theme: theme,
-      slides: [firstSlide],
-    );
+    _deck = buildBlankDeck();
     _activeSlideIndex = 0;
-    _selectedElementId = firstSlide.elements.first.id;
+    _selectedElementId = _deck.slides.isNotEmpty &&
+            _deck.slides.first.elements.isNotEmpty
+        ? _deck.slides.first.elements.first.id
+        : null;
     _statusMessage = 'Created new presentation deck';
     notifyListeners();
   }
@@ -620,6 +610,15 @@ class SlidesController extends ChangeNotifier {
     required DeckThemePreset theme,
   }) {
     switch (layout) {
+      case SlideLayoutType.blank:
+        return SlidePage(
+          id: id,
+          title: 'Slide $index',
+          layout: layout,
+          transition: SlideTransitionType.none,
+          elements: const [],
+          speakerNotes: '',
+        );
       case SlideLayoutType.titleSlide:
         return SlidePage(
           id: id,
@@ -627,30 +626,14 @@ class SlidesController extends ChangeNotifier {
           layout: layout,
           elements: [
             SlideElement(
-              id: '${id}_badge',
-              type: SlideElementType.badge,
-              x: 110,
-              y: 150,
-              width: 310,
-              height: 52,
-              text: 'FYRDE PRESENTATION',
-              fontSize: 16,
-              bold: true,
-              align: 'center',
-              textColorHex: theme.accentHex,
-              fillColorHex: theme.cardBgHex,
-              borderColorHex: theme.accentHex,
-              borderRadius: 99,
-            ),
-            SlideElement(
               id: '${id}_title',
               type: SlideElementType.text,
               x: 110,
-              y: 230,
-              width: 1280,
+              y: 260,
+              width: 1380,
               height: 220,
-              text: 'Presentation Title Goes Here',
-              subtitle: 'Subtitle, presenter name, and architectural overview',
+              text: 'Click to add title',
+              subtitle: 'Click to add subtitle',
               fontSize: 58,
               bold: true,
               textColorHex: theme.textHex,
@@ -658,7 +641,7 @@ class SlidesController extends ChangeNotifier {
               borderColorHex: theme.accentHex,
             ),
           ],
-          speakerNotes: 'Introduce the core vision and agenda for this session.',
+          speakerNotes: '',
         );
       case SlideLayoutType.metricsCallout:
         return SlidePage(
@@ -774,373 +757,24 @@ class SlidesController extends ChangeNotifier {
     }
   }
 
-  /// Rich 5-slide default deck (`fyrDE_2026_Keynote.odp`).
-  static PresentationDeck buildDefaultKeynoteDeck() {
-    final theme = kDeckThemePresets.first; // Fyr Cyber Purple
+  /// Clean 1-slide blank presentation (`Untitled Presentation.odp`).
+  static PresentationDeck buildBlankDeck() {
+    final theme = kDeckThemePresets.first;
     return PresentationDeck(
-      id: 'fyrde_2026_keynote',
-      title: 'fyrDE_2026_Keynote',
-      author: 'FyrDE Core Team',
+      id: 'deck_${DateTime.now().millisecondsSinceEpoch}',
+      title: 'Untitled Presentation',
+      author: '',
       format: 'odp',
       aspectRatio: '16:9',
       theme: theme,
-      slides: [
-        // Slide 1: Title Slide
+      slides: const [
         SlidePage(
           id: 'slide_1',
-          title: 'fyrDE 2026: Frick Your RAM',
-          layout: SlideLayoutType.titleSlide,
-          transition: SlideTransitionType.fade,
-          speakerNotes:
-              'Welcome everyone to the fyrDE 2026 Architecture Keynote. Emphasize how our SwayFX + Flutter desktop suite eliminates Electron bloat while delivering 34 integrated apps.',
-          elements: [
-            const SlideElement(
-              id: 's1_badge',
-              type: SlideElementType.badge,
-              x: 110,
-              y: 120,
-              width: 370,
-              height: 52,
-              text: 'FYRDE 2026 ARCHITECTURE KEYNOTE',
-              fontSize: 15,
-              bold: true,
-              align: 'center',
-              textColorHex: '#D040FF',
-              fillColorHex: '#1D1433',
-              borderColorHex: '#D040FF',
-              borderRadius: 99,
-            ),
-            const SlideElement(
-              id: 's1_title',
-              type: SlideElementType.text,
-              x: 110,
-              y: 205,
-              width: 1360,
-              height: 230,
-              text: 'fyrDE: Frick Your RAM',
-              subtitle:
-                  'A Unified Wayland Desktop & 34-App Native Suite Built with SwayFX and Flutter Linux',
-              fontSize: 64,
-              bold: true,
-              textColorHex: '#F6F2FF',
-              fillColorHex: '#1D1433',
-              borderColorHex: '#D040FF',
-            ),
-            const SlideElement(
-              id: 's1_m1',
-              type: SlideElementType.metricCard,
-              x: 110,
-              y: 510,
-              width: 420,
-              height: 230,
-              text: '34 Apps',
-              subtitle: 'Cohesive Native Desktop Ecosystem',
-              fontSize: 50,
-              bold: true,
-              textColorHex: '#F6F2FF',
-              fillColorHex: '#1D1433',
-              borderColorHex: '#D040FF',
-            ),
-            const SlideElement(
-              id: 's1_m2',
-              type: SlideElementType.metricCard,
-              x: 570,
-              y: 510,
-              width: 420,
-              height: 230,
-              text: '410 MB',
-              subtitle: 'Cold-Boot Idle RAM Footprint',
-              fontSize: 50,
-              bold: true,
-              textColorHex: '#F6F2FF',
-              fillColorHex: '#1D1433',
-              borderColorHex: '#00E5FF',
-            ),
-            const SlideElement(
-              id: 's1_m3',
-              type: SlideElementType.metricCard,
-              x: 1030,
-              y: 510,
-              width: 440,
-              height: 230,
-              text: '100% ODF',
-              subtitle: 'Native .odt, .ods, .odp & Office XML',
-              fontSize: 50,
-              bold: true,
-              textColorHex: '#F6F2FF',
-              fillColorHex: '#1D1433',
-              borderColorHex: '#D040FF',
-            ),
-          ],
-        ),
-
-        // Slide 2: Compositor & Flutter Shell Architecture
-        SlidePage(
-          id: 'slide_2',
-          title: 'Compositor & Flutter Shell Architecture',
-          layout: SlideLayoutType.twoColumn,
-          transition: SlideTransitionType.slideLeft,
-          speakerNotes:
-              'Walk through how SwayFX handles blurred Wayland layer-shell surfaces while fyr_core synchronizes accent colors and GTK3/GTK4 themes in under 2 milliseconds.',
-          elements: [
-            const SlideElement(
-              id: 's2_hdr',
-              type: SlideElementType.text,
-              x: 100,
-              y: 72,
-              width: 1400,
-              height: 110,
-              text: 'Compositor & Flutter Shell Architecture',
-              subtitle:
-                  'Zero-latency IPC between SwayFX Wayland compositor and Flutter desktop surfaces',
-              fontSize: 42,
-              bold: true,
-              textColorHex: '#F6F2FF',
-              fillColorHex: '#1D1433',
-              borderColorHex: '#D040FF',
-            ),
-            const SlideElement(
-              id: 's2_left',
-              type: SlideElementType.bulletList,
-              x: 100,
-              y: 220,
-              width: 680,
-              height: 560,
-              text: 'SwayFX + Layer-Shell Pipeline',
-              bulletItems: [
-                'Real-time dual-Kawase background blur & rounded corners',
-                'Atomic drop-in config reload via ~/.config/sway/conf.d/',
-                'Live inotify theme synchronization across all 34 apps',
-                'Damage-tracked surface rendering at 144Hz refresh rates',
-              ],
-              fontSize: 25,
-              textColorHex: '#F6F2FF',
-              fillColorHex: '#1D1433',
-              borderColorHex: '#D040FF',
-            ),
-            const SlideElement(
-              id: 's2_right',
-              type: SlideElementType.chartCard,
-              x: 830,
-              y: 220,
-              width: 670,
-              height: 560,
-              text: 'Desktop Cold-Boot RAM Usage (MB)',
-              subtitle: 'Measured with taskbar, dock, notifications & file manager',
-              chartValues: [410, 920, 1180, 1740],
-              chartLabels: ['fyrDE', 'KDE 6', 'GNOME 47', 'Win 11'],
-              fontSize: 22,
-              bold: true,
-              textColorHex: '#F6F2FF',
-              fillColorHex: '#1D1433',
-              borderColorHex: '#00E5FF',
-            ),
-          ],
-        ),
-
-        // Slide 3: fyrOffice Native OpenDocument Engine
-        SlidePage(
-          id: 'slide_3',
-          title: 'fyrOffice Native OpenDocument Engine',
-          layout: SlideLayoutType.metricsCallout,
-          transition: SlideTransitionType.zoomIn,
-          speakerNotes:
-              'fyrDocs, fyrSheets, and fyrSlides read and write real OASIS OpenDocument (.odt, .ods, .odp) and Microsoft OpenXML (.docx, .xlsx, .pptx) archives in pure Dart.',
-          elements: [
-            const SlideElement(
-              id: 's3_hdr',
-              type: SlideElementType.text,
-              x: 100,
-              y: 70,
-              width: 1400,
-              height: 110,
-              text: 'fyrOffice: Native OpenDocument & OpenXML Engine',
-              subtitle:
-                  'fyrDocs (.odt/.docx) • fyrSheets (.ods/.xlsx) • fyrSlides (.odp/.pptx)',
-              fontSize: 40,
-              bold: true,
-              textColorHex: '#F6F2FF',
-              fillColorHex: '#1D1433',
-              borderColorHex: '#D040FF',
-            ),
-            const SlideElement(
-              id: 's3_m1',
-              type: SlideElementType.metricCard,
-              x: 100,
-              y: 215,
-              width: 440,
-              height: 215,
-              text: '100% ODF/OOXML',
-              subtitle: 'Lossless ZIP + XML Standards Compliance',
-              fontSize: 42,
-              bold: true,
-              textColorHex: '#F6F2FF',
-              fillColorHex: '#1D1433',
-              borderColorHex: '#D040FF',
-            ),
-            const SlideElement(
-              id: 's3_m2',
-              type: SlideElementType.metricCard,
-              x: 580,
-              y: 215,
-              width: 440,
-              height: 215,
-              text: '< 18ms Load',
-              subtitle: 'Instant Deck & Spreadsheet Parsing',
-              fontSize: 42,
-              bold: true,
-              textColorHex: '#F6F2FF',
-              fillColorHex: '#1D1433',
-              borderColorHex: '#00E5FF',
-            ),
-            const SlideElement(
-              id: 's3_m3',
-              type: SlideElementType.metricCard,
-              x: 1060,
-              y: 215,
-              width: 440,
-              height: 215,
-              text: 'Zero Bloat',
-              subtitle: 'No Java Runtime or Chromium Helper Processes',
-              fontSize: 42,
-              bold: true,
-              textColorHex: '#F6F2FF',
-              fillColorHex: '#1D1433',
-              borderColorHex: '#D040FF',
-            ),
-            const SlideElement(
-              id: 's3_list',
-              type: SlideElementType.bulletList,
-              x: 100,
-              y: 470,
-              width: 1400,
-              height: 330,
-              text: 'Interoperability Across Every Suite',
-              bulletItems: [
-                'fyrDocs: Rich WYSIWYG .odt/.docx/.md/HTML/PDF document processor with outline & stats',
-                'fyrSheets: Multi-sheet .ods/.xlsx/.csv formula engine (SUM, AVERAGE, IF, VLOOKUP, STDEV)',
-                'fyrSlides: Interactive 16:9 stage, speaker notes, presenter HUD, and .odp/.pptx/.html export',
-              ],
-              fontSize: 24,
-              textColorHex: '#F6F2FF',
-              fillColorHex: '#1D1433',
-              borderColorHex: '#D040FF',
-            ),
-          ],
-        ),
-
-        // Slide 4: Developer Ecosystem
-        SlidePage(
-          id: 'slide_4',
-          title: 'Developer Ecosystem: fyrCode, fyrDB & fyrPods',
-          layout: SlideLayoutType.codeShowcase,
-          transition: SlideTransitionType.slideLeft,
-          speakerNotes:
-              'Demonstrate how developers can build, query SQLite databases in fyrDB, inspect containers in fyrPods, and export slides directly from Dart.',
-          elements: [
-            const SlideElement(
-              id: 's4_hdr',
-              type: SlideElementType.text,
-              x: 100,
-              y: 72,
-              width: 1400,
-              height: 110,
-              text: 'Developer Powerhouse: fyrCode, fyrDB & fyrPods',
-              subtitle:
-                  'First-class SQLite studio, Podman/Docker orchestrator, and REST client',
-              fontSize: 40,
-              bold: true,
-              textColorHex: '#F6F2FF',
-              fillColorHex: '#1D1433',
-              borderColorHex: '#D040FF',
-            ),
-            const SlideElement(
-              id: 's4_code',
-              type: SlideElementType.codeBlock,
-              x: 100,
-              y: 220,
-              width: 740,
-              height: 560,
-              text: '// Pure-Dart ODP & PPTX Presentation Pipeline\n'
-                  'final deck = await SlidesIO.loadOdp("fyrDE_2026.odp");\n\n'
-                  'for (final slide in deck.slides) {\n'
-                  '  debugPrint("Slide: \${slide.title} (\${slide.elements.length} nodes)");\n'
-                  '}\n\n'
-                  '// Export simultaneously to PowerPoint & HTML5\n'
-                  'await SlidesIO.savePptx(deck, "build/fyrDE_2026.pptx");\n'
-                  'await SlidesIO.exportHtml(deck, "build/index.html");',
-              codeLanguage: 'dart',
-              fontSize: 21,
-              textColorHex: '#F6F2FF',
-              fillColorHex: '#090612',
-              borderColorHex: '#00E5FF',
-            ),
-            const SlideElement(
-              id: 's4_bullets',
-              type: SlideElementType.bulletList,
-              x: 880,
-              y: 220,
-              width: 620,
-              height: 560,
-              text: 'Integrated Dev Tooling',
-              bulletItems: [
-                'fyrDB: Live SQLite3 FFI schema inspector, ER diagram & SQL runner',
-                'fyrPods: Rootless Podman & Docker container logs, stats & compose',
-                'fyrAPI: Collections, bearer auth, latency charts & cURL generator',
-                'fyrCode & fyrTerm: Syntax-highlighted IDE + GPU VTE terminal',
-              ],
-              fontSize: 24,
-              textColorHex: '#F6F2FF',
-              fillColorHex: '#1D1433',
-              borderColorHex: '#D040FF',
-            ),
-          ],
-        ),
-
-        // Slide 5: Q4 Roadmap & Release Targets
-        SlidePage(
-          id: 'slide_5',
-          title: 'Q4 Roadmap & Release Targets',
-          layout: SlideLayoutType.titleAndContent,
-          transition: SlideTransitionType.flip,
-          speakerNotes:
-              'Wrap up with Q4 milestones and invite contributors to test ISO images in fyrVirt.',
-          elements: [
-            const SlideElement(
-              id: 's5_hdr',
-              type: SlideElementType.text,
-              x: 100,
-              y: 72,
-              width: 1400,
-              height: 110,
-              text: '2026 Roadmap & Release Targets',
-              subtitle: 'Shipping the complete 34-application Linux desktop experience',
-              fontSize: 42,
-              bold: true,
-              textColorHex: '#F6F2FF',
-              fillColorHex: '#1D1433',
-              borderColorHex: '#D040FF',
-            ),
-            const SlideElement(
-              id: 's5_bullets',
-              type: SlideElementType.bulletList,
-              x: 100,
-              y: 220,
-              width: 1400,
-              height: 540,
-              text: 'Upcoming Milestones',
-              bulletItems: [
-                'M1 — Complete fyrOffice Suite (fyrDocs, fyrSheets, fyrSlides) with ODF 1.2 & OOXML',
-                'M2 — Complete Developer Pro Pack (fyrDB SQLite Studio & fyrPods Container Engine)',
-                'M3 — Automated Arch Linux + SwayFX single-command installer & SDDM theme',
-                'M4 — Hardware-accelerated PipeWire screen studio & multi-monitor workspace rules',
-              ],
-              fontSize: 27,
-              textColorHex: '#F6F2FF',
-              fillColorHex: '#1D1433',
-              borderColorHex: '#D040FF',
-            ),
-          ],
+          title: 'Slide 1',
+          layout: SlideLayoutType.blank,
+          transition: SlideTransitionType.none,
+          elements: [],
+          speakerNotes: '',
         ),
       ],
     );

@@ -1,5 +1,6 @@
 #include "my_application.h"
 
+#include <cstring>
 #include <flutter_linux/flutter_linux.h>
 #ifdef GDK_WINDOWING_X11
 #include <gdk/gdkx.h>
@@ -14,6 +15,30 @@ struct _MyApplication {
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 
+// Detect Windows Subsystem for Linux (WSL / WSLg) so we can avoid CSD and
+// hidden-until-first-frame quirks under Weston/XWayland.
+static gboolean is_running_in_wsl() {
+  const gchar* distro = g_getenv("WSL_DISTRO_NAME");
+  if (distro != nullptr && distro[0] != '\0') {
+    return TRUE;
+  }
+  const gchar* interop = g_getenv("WSL_INTEROP");
+  if (interop != nullptr && interop[0] != '\0') {
+    return TRUE;
+  }
+  g_autofree gchar* proc_version = nullptr;
+  if (g_file_get_contents("/proc/version", &proc_version, nullptr, nullptr) &&
+      proc_version != nullptr) {
+    g_autofree gchar* lower = g_ascii_strdown(proc_version, -1);
+    if (lower != nullptr &&
+        (std::strstr(lower, "microsoft") != nullptr ||
+         std::strstr(lower, "wsl") != nullptr)) {
+      return TRUE;
+    }
+  }
+  return FALSE;
+}
+
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
@@ -25,20 +50,24 @@ static void my_application_activate(GApplication* application) {
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
 
+  const gboolean in_wsl = is_running_in_wsl();
+
   // Use a header bar when running in GNOME as this is the common style used
   // by applications and is the setup most users will be using (e.g. Ubuntu
   // desktop).
+  // Under WSL/WSLg, avoid GtkHeaderBar CSD so WSLg renders native Windows
+  // titlebar and window chrome reliably.
   // If running on X and not using GNOME then just use a traditional title bar
   // in case the window manager does more exotic layout, e.g. tiling.
-  // If running on Wayland assume the header bar will work (may need changing
-  // if future cases occur).
-  gboolean use_header_bar = TRUE;
+  gboolean use_header_bar = !in_wsl;
 #ifdef GDK_WINDOWING_X11
-  GdkScreen* screen = gtk_window_get_screen(window);
-  if (GDK_IS_X11_SCREEN(screen)) {
-    const gchar* wm_name = gdk_x11_screen_get_window_manager_name(screen);
-    if (g_strcmp0(wm_name, "GNOME Shell") != 0) {
-      use_header_bar = FALSE;
+  if (use_header_bar) {
+    GdkScreen* screen = gtk_window_get_screen(window);
+    if (screen != nullptr && GDK_IS_X11_SCREEN(screen)) {
+      const gchar* wm_name = gdk_x11_screen_get_window_manager_name(screen);
+      if (wm_name == nullptr || g_strcmp0(wm_name, "GNOME Shell") != 0) {
+        use_header_bar = FALSE;
+      }
     }
   }
 #endif
@@ -52,7 +81,7 @@ static void my_application_activate(GApplication* application) {
     gtk_window_set_title(window, "fyrjournal");
   }
 
-  gtk_window_set_default_size(window, 1280, 720);
+  gtk_window_set_default_size(window, 600, 850);
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();
   fl_dart_project_set_dart_entrypoint_arguments(
@@ -60,9 +89,8 @@ static void my_application_activate(GApplication* application) {
 
   FlView* view = fl_view_new(project);
   GdkRGBA background_color;
-  // Background defaults to black, override it here if necessary, e.g. #00000000
-  // for transparent.
-  gdk_rgba_parse(&background_color, "#000000");
+  // Match the soft-white paper surface so startup does not flash black.
+  gdk_rgba_parse(&background_color, "#FBFBF9");
   fl_view_set_background_color(view, &background_color);
   gtk_widget_show(GTK_WIDGET(view));
   gtk_container_add(GTK_CONTAINER(window), GTK_WIDGET(view));
@@ -72,6 +100,11 @@ static void my_application_activate(GApplication* application) {
   g_signal_connect_swapped(view, "first-frame", G_CALLBACK(first_frame_cb),
                            self);
   gtk_widget_realize(GTK_WIDGET(view));
+  if (in_wsl) {
+    // WSLg's Weston/XWayland often stalls or drops first-frame expose events
+    // for hidden windows, so show immediately after realizing the view.
+    gtk_widget_show(GTK_WIDGET(window));
+  }
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
 

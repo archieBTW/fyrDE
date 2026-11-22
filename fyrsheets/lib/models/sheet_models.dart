@@ -694,7 +694,7 @@ class SpreadsheetWorkbook {
     }
     return SpreadsheetWorkbook(
       id: json['id'] as String? ?? 'wb_1',
-      title: json['title'] as String? ?? 'Untitled_Workbook.ods',
+      title: json['title'] as String? ?? 'Untitled.ods',
       filePath: json['filePath'] as String?,
       format: WorkbookFormat.values.firstWhere(
         (f) => f.name == json['format'],

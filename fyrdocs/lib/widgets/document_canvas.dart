@@ -328,17 +328,22 @@ class _DocumentCanvasState extends State<DocumentCanvas> {
             '~${doc.readingTimeMinutes} min read',
             style: TextStyle(fontSize: 11, color: FyrTheme.textColorMuted),
           ),
-          const Spacer(),
-          Text(
-            doc.format == 'odt'
-                ? 'OASIS OpenDocument Text (.ODT)'
-                : doc.format == 'docx'
-                    ? 'Microsoft Word OpenXML (.DOCX)'
-                    : 'Format: .${doc.format.toUpperCase()}',
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: FyrTheme.accentColor,
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              doc.format == 'odt'
+                  ? 'OASIS OpenDocument Text (.ODT)'
+                  : doc.format == 'docx'
+                      ? 'Microsoft Word OpenXML (.DOCX)'
+                      : 'Format: .${doc.format.toUpperCase()}',
+              textAlign: TextAlign.right,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: FyrTheme.accentColor,
+              ),
             ),
           ),
           _dot(),
@@ -607,10 +612,14 @@ class _DocBlockItemWidgetState extends State<_DocBlockItemWidget> {
       style: _buildBlockTextStyle(),
       onTap: () => ctrl.selectBlock(blk.id),
       onChanged: (v) => ctrl.updateBlockText(blk.id, v),
-      decoration: const InputDecoration(
+      decoration: InputDecoration(
         isDense: true,
         border: InputBorder.none,
         contentPadding: EdgeInsets.zero,
+        hintText: blk.type == DocBlockType.paragraph ? 'Start typing...' : null,
+        hintStyle: TextStyle(
+          color: widget.defaultTextColor.withValues(alpha: 0.3),
+        ),
       ),
     );
   }

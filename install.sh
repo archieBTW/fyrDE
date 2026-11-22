@@ -22,7 +22,7 @@ WIDTH=$(echo $RES | cut -d'x' -f1)
 HEIGHT=$(echo $RES | cut -d'x' -f2)
 echo "Detected resolution: ${WIDTH}x${HEIGHT}"
 
-flutter_apps=("fyrdock" "fyroverview" "fyrwindowoverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrclipboard" "fyrstore" "fyrvirt" "fyrav" "fyrtext" "fyrdaw" "fyrphone" "fyrcalculator" "fyrcode" "fyrvideo" "fyrmusic" "fyrphotos" "fyrcamera" "fyrbrowser" "fyrjournal" "fyrcalender" "fyrclock" "fyrtorrent" "fyrapi" "fyrgraphics" "devign" "fyremu" "fyrdirector" "fyrdisks" "fyrmonitor" "fyrdocs" "fyrsheets" "fyrslides" "fyrdb" "fyrpods")
+flutter_apps=("fyrdock" "fyroverview" "fyrwindowoverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrclipboard" "fyrstore" "fyrvirt" "fyrav" "fyrtext" "fyrdaw" "fyrphone" "fyrcalculator" "fyrcode" "fyrvideo" "fyrmusic" "fyrphotos" "fyrcamera" "fyrbrowser" "fyrjournal" "fyrcalender" "fyrclock" "fyrtorrent" "fyrapi" "fyrgraphics" "devign" "fyremu" "fyrdirector" "fyrdisks" "fyrmonitor" "fyrdocs" "fyrsheets" "fyrslides" "fyrpdf" "fyrdb" "fyrpods")
 
 # --- Progress Tracking & Terminal Management ---
 CURRENT_STEP=0
@@ -674,6 +674,7 @@ EOF
             ;;
         "fyrphone")
             sudo ln -sf /opt/fyrphone/fyrphone /usr/local/bin/fyrphone
+            sudo ln -sf /opt/fyrphone/fyrphone /usr/local/bin/fyrconnect
             if [ -f "./fyrphone/assets/icons/connect.png" ]; then
                 sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
                 sudo cp ./fyrphone/assets/icons/connect.png /usr/share/icons/hicolor/512x512/apps/fyrphone.png
@@ -688,6 +689,11 @@ Terminal=false
 Type=Application
 Categories=System;Network;
 EOF
+            # Allow KDE Connect LAN discovery & pairing through UFW if installed
+            if command -v ufw &> /dev/null; then
+                sudo ufw allow 1714:1764/tcp comment 'KDE Connect / fyrConnect' || true
+                sudo ufw allow 1714:1764/udp comment 'KDE Connect / fyrConnect' || true
+            fi
             ;;
         "fyrtext")
             sudo ln -sf /opt/fyrtext/fyrtext /usr/local/bin/fyrtext
@@ -1029,6 +1035,15 @@ EOF
             fi
             sudo cp ./fyrslides/fyrslides.desktop /usr/share/applications/fyrslides.desktop
             xdg-mime default fyrslides.desktop application/vnd.oasis.opendocument.presentation application/vnd.openxmlformats-officedocument.presentationml.presentation || true
+            ;;
+        "fyrpdf")
+            sudo ln -sf /opt/fyrpdf/fyrpdf /usr/local/bin/fyrpdf
+            if [ -f "./fyrpdf/assets/icons/fyrpdf.png" ]; then
+                sudo mkdir -p /usr/share/icons/hicolor/512x512/apps
+                sudo cp ./fyrpdf/assets/icons/fyrpdf.png /usr/share/icons/hicolor/512x512/apps/fyrpdf.png
+            fi
+            sudo cp ./fyrpdf/fyrpdf.desktop /usr/share/applications/fyrpdf.desktop
+            xdg-mime default fyrpdf.desktop application/pdf || true
             ;;
         "fyrdb")
             sudo ln -sf /opt/fyrdb/fyrdb /usr/local/bin/fyrdb

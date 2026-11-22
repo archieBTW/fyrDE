@@ -155,9 +155,12 @@ class _RightInspectorState extends State<RightInspector> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('Paper Size',
-                      style: TextStyle(
-                          fontSize: 11.5, color: FyrTheme.textColorMuted)),
+                  Flexible(
+                    child: Text('Paper Size',
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 11.5, color: FyrTheme.textColorMuted)),
+                  ),
                   DropdownButton<PageSizePreset>(
                     value: doc.pageSize,
                     isDense: true,

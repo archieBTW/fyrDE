@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import 'package:fyrsheets/engine/formula_engine.dart';
@@ -8,7 +9,45 @@ import 'package:fyrsheets/main.dart';
 import 'package:fyrsheets/models/sheet_models.dart';
 import 'package:fyrsheets/state/sheets_controller.dart';
 
+SpreadsheetWorkbook _buildRoundTripTestWorkbook() {
+  final sheet1 = Worksheet(id: 's1', name: 'Costs');
+  sheet1.setCell(0, 0, const SheetCell(rawInput: 'Item'));
+  sheet1.setCell(0, 1, const SheetCell(rawInput: 'Qty'));
+  sheet1.setCell(0, 2, const SheetCell(rawInput: 'Price'));
+  sheet1.setCell(0, 3, const SheetCell(rawInput: 'Total'));
+
+  sheet1.setCell(1, 0, const SheetCell(rawInput: 'Compute Node'));
+  sheet1.setCell(1, 1, const SheetCell(rawInput: '4'));
+  sheet1.setCell(1, 2, const SheetCell(rawInput: '250'));
+  sheet1.setCell(1, 3, const SheetCell(rawInput: '=B2*C2'));
+
+  sheet1.setCell(2, 0, const SheetCell(rawInput: 'Storage Pool'));
+  sheet1.setCell(2, 1, const SheetCell(rawInput: '2'));
+  sheet1.setCell(2, 2, const SheetCell(rawInput: '150'));
+  sheet1.setCell(2, 3, const SheetCell(rawInput: '=B3*C3'));
+
+  sheet1.setCell(3, 0, const SheetCell(rawInput: 'Grand Total'));
+  sheet1.setCell(3, 3, const SheetCell(rawInput: '=SUM(D2:D3)'));
+
+  final sheet2 = Worksheet(id: 's2', name: 'Summary');
+  sheet2.setCell(0, 0, const SheetCell(rawInput: 'Status'));
+  sheet2.setCell(1, 0, const SheetCell(rawInput: 'Active'));
+
+  final wb = SpreadsheetWorkbook(
+    id: 'wb_test',
+    title: 'test_workbook.ods',
+    format: WorkbookFormat.ods,
+    sheets: [sheet1, sheet2],
+  );
+  FormulaEngine.recalculateWorkbook(wb);
+  return wb;
+}
+
 void main() {
+  setUpAll(() {
+    GoogleFonts.config.allowRuntimeFetching = false;
+  });
+
   group('fyrSheets FormulaEngine & CellCoordinate', () {
     test('parses and formats A1 cell coordinates and ranges', () {
       expect(CellCoordinate.parse('A1'), const CellCoordinate(0, 0));
@@ -74,43 +113,56 @@ void main() {
   });
 
   group('fyrSheets .ods, .xlsx, and .csv Round-Trip I/O', () {
+    test('default controller opens to a clean blank workbook', () {
+      final ctrl = SheetsController();
+      expect(ctrl.workbook.title, 'Untitled.ods');
+      expect(ctrl.workbook.format, WorkbookFormat.ods);
+      expect(ctrl.workbook.sheets.length, 1);
+      expect(ctrl.activeSheet.name, 'Sheet 1');
+      expect(ctrl.activeSheet.cells, isEmpty);
+      expect(ctrl.activeSheet.charts, isEmpty);
+      expect(ctrl.activeSheet.conditionalRules, isEmpty);
+      expect(ctrl.activeCell, const CellCoordinate(0, 0));
+      ctrl.dispose();
+    });
+
     test('encodes and decodes OpenDocument Spreadsheet (.ods) round-trip', () {
-      final wb = SheetsController.buildDefaultWorkbook();
+      final wb = _buildRoundTripTestWorkbook();
       final odsBytes = SheetIO.encodeOdsBytes(wb);
       expect(odsBytes.isNotEmpty, isTrue);
 
       final decoded = SheetIO.decodeOdsBytes(odsBytes, title: wb.title);
-      expect(decoded.sheets.length, 3);
-      expect(decoded.sheets[0].name, 'Infrastructure Cost');
+      expect(decoded.sheets.length, 2);
+      expect(decoded.sheets[0].name, 'Costs');
       expect(
         decoded.sheets[0].getCellByA1('A2').displayValue,
-        'GPU Inference Nodes',
+        'Compute Node',
       );
-      expect(decoded.sheets[0].getCellByA1('E8').rawInput, '=SUM(E2:E7)');
+      expect(decoded.sheets[0].getCellByA1('D4').rawInput, '=SUM(D2:D3)');
       expect(
-        decoded.sheets[0].getCellByA1('E8').computedValue,
-        closeTo(28920.0, 1e-3),
+        decoded.sheets[0].getCellByA1('D4').computedValue,
+        closeTo(1300.0, 1e-3),
       );
     });
 
     test('encodes and decodes Microsoft Excel (.xlsx) round-trip', () {
-      final wb = SheetsController.buildDefaultWorkbook();
+      final wb = _buildRoundTripTestWorkbook();
       final xlsxBytes = SheetIO.encodeXlsxBytes(wb);
       expect(xlsxBytes.isNotEmpty, isTrue);
 
       final decoded = SheetIO.decodeXlsxBytes(xlsxBytes, title: 'budget.xlsx');
-      expect(decoded.sheets.length, 3);
-      expect(decoded.sheets[0].name, 'Infrastructure Cost');
+      expect(decoded.sheets.length, 2);
+      expect(decoded.sheets[0].name, 'Costs');
       expect(
         decoded.sheets[0].getCellByA1('A2').displayValue,
-        'GPU Inference Nodes',
+        'Compute Node',
       );
-      expect(decoded.sheets[0].getCellByA1('E8').rawInput, '=SUM(E2:E7)');
+      expect(decoded.sheets[0].getCellByA1('D4').rawInput, '=SUM(D2:D3)');
       expect(
-        decoded.sheets[0].getCellByA1('E8').computedValue,
-        closeTo(28920.0, 1e-3),
+        decoded.sheets[0].getCellByA1('D4').computedValue,
+        closeTo(1300.0, 1e-3),
       );
-      expect(decoded.sheets[1].name, 'Revenue & ARR');
+      expect(decoded.sheets[1].name, 'Summary');
     });
 
     test('serializes and parses RFC-4180 CSV with quoted fields', () {
@@ -131,7 +183,7 @@ void main() {
   });
 
   group('fyrSheets UI Smoke Test', () {
-    testWidgets('renders TopBar, FormulaRibbon, Grid, Charts, and Sheet Tabs',
+    testWidgets('renders TopBar, FormulaRibbon, Grid, Charts, and clean Sheet 1',
         (WidgetTester tester) async {
       tester.view.physicalSize = const Size(1440, 880);
       tester.view.devicePixelRatio = 1.0;
@@ -147,12 +199,12 @@ void main() {
       await tester.pump();
 
       expect(find.text('fyrSheets'), findsOneWidget);
-      expect(find.text('Q4_Cloud_Infrastructure_Budget.ods'), findsOneWidget);
-      expect(find.text('Infrastructure Cost'), findsOneWidget);
-      expect(find.text('Revenue & ARR'), findsOneWidget);
-      expect(find.text('Benchmarks'), findsOneWidget);
-      expect(find.text('Monthly Cluster Cost by Service'), findsOneWidget);
-      expect(find.text('SUM: \$28,920.00'), findsOneWidget);
+      expect(find.text('Untitled.ods'), findsOneWidget);
+      expect(find.text('Sheet 1'), findsOneWidget);
+      expect(find.text('No charts on this sheet yet.'), findsOneWidget);
+      expect(find.text('COUNT: 0'), findsOneWidget);
+      expect(find.text('Q4_Cloud_Infrastructure_Budget.ods'), findsNothing);
+      expect(find.text('Infrastructure Cost'), findsNothing);
 
       ctrl.dispose();
     });

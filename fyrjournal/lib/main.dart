@@ -7,29 +7,114 @@ import 'package:window_manager/window_manager.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'fyr_theme.dart';
 
+/// Returns true when running inside Windows Subsystem for Linux (WSL / WSLg).
+bool isWslEnvironment({
+  Map<String, String>? environment,
+  String? procVersionContent,
+}) {
+  final env = environment ?? Platform.environment;
+  final distro = env['WSL_DISTRO_NAME'];
+  if (distro != null && distro.trim().isNotEmpty) {
+    return true;
+  }
+  final interop = env['WSL_INTEROP'];
+  if (interop != null && interop.trim().isNotEmpty) {
+    return true;
+  }
+
+  String? versionText = procVersionContent;
+  if (versionText == null) {
+    try {
+      final versionFile = File('/proc/version');
+      if (versionFile.existsSync()) {
+        versionText = versionFile.readAsStringSync();
+      }
+    } catch (_) {
+      versionText = null;
+    }
+  }
+  if (versionText != null) {
+    final lower = versionText.toLowerCase();
+    if (lower.contains('microsoft') || lower.contains('wsl')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+TextStyle _handwritingStyle({
+  double? fontSize,
+  FontWeight? fontWeight,
+  double? height,
+  Color? color,
+}) {
+  final fallback = TextStyle(
+    fontFamily: 'serif',
+    fontStyle: FontStyle.italic,
+    fontSize: fontSize,
+    fontWeight: fontWeight,
+    height: height,
+    color: color,
+  );
+  if (!GoogleFonts.config.allowRuntimeFetching) {
+    return fallback;
+  }
+  try {
+    return GoogleFonts.caveat(
+      fontSize: fontSize,
+      fontWeight: fontWeight,
+      height: height,
+      color: color,
+    ).copyWith(fontFamilyFallback: const ['Georgia', 'serif']);
+  } catch (e) {
+    debugPrint('Journal: GoogleFonts.caveat fallback used: $e');
+    return fallback;
+  }
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  FyrTheme.initialize();
-  await windowManager.ensureInitialized();
 
-  WindowOptions windowOptions = const WindowOptions(
-    size: Size(600, 850),
-    center: true,
-    backgroundColor: Colors.transparent,
-    skipTaskbar: false,
-    titleBarStyle: TitleBarStyle.hidden,
-  );
+  try {
+    FyrTheme.initialize();
+  } catch (e, st) {
+    debugPrint('Journal: FyrTheme initialization failed: $e\n$st');
+  }
 
-  windowManager.waitUntilReadyToShow(windowOptions, () async {
-    await windowManager.show();
-    await windowManager.focus();
-  });
+  final inWsl = isWslEnvironment();
 
-  runApp(const FyrJournalApp());
+  if (!inWsl) {
+    try {
+      await windowManager.ensureInitialized();
+
+      const WindowOptions windowOptions = WindowOptions(
+        size: Size(600, 850),
+        center: true,
+        backgroundColor: Colors.transparent,
+        skipTaskbar: false,
+        titleBarStyle: TitleBarStyle.hidden,
+      );
+
+      windowManager.waitUntilReadyToShow(windowOptions, () async {
+        try {
+          await windowManager.show();
+          await windowManager.focus();
+        } catch (e) {
+          debugPrint('Journal: windowManager show/focus failed: $e');
+        }
+      });
+    } catch (e, st) {
+      debugPrint('Journal: windowManager unavailable: $e\n$st');
+    }
+  }
+
+  runApp(FyrJournalApp(showCustomTitleBar: !inWsl));
 }
 
 class FyrJournalApp extends StatelessWidget {
-  const FyrJournalApp({super.key});
+  const FyrJournalApp({super.key, this.showCustomTitleBar});
+
+  final bool? showCustomTitleBar;
 
   @override
   Widget build(BuildContext context) {
@@ -44,7 +129,7 @@ class FyrJournalApp extends StatelessWidget {
             colorSchemeSeed: accent,
             fontFamily: 'Outfit',
           ),
-          home: const JournalHomePage(),
+          home: JournalHomePage(showCustomTitleBar: showCustomTitleBar),
           debugShowCheckedModeBanner: false,
         );
       },
@@ -53,11 +138,19 @@ class FyrJournalApp extends StatelessWidget {
 }
 
 class JournalHomePage extends StatefulWidget {
-  const JournalHomePage({super.key, this.storageDirOverride});
+  const JournalHomePage({
+    super.key,
+    this.storageDirOverride,
+    this.showCustomTitleBar,
+  });
 
   /// Forces a storage location; used by tests to avoid touching the real home
   /// directory.
   final Directory? storageDirOverride;
+
+  /// Controls visibility of the custom frameless title bar. Defaults to false
+  /// under WSL/WSLg where native Windows window controls are rendered.
+  final bool? showCustomTitleBar;
 
   @override
   State<JournalHomePage> createState() => _JournalHomePageState();
@@ -146,6 +239,25 @@ class _JournalHomePageState extends State<JournalHomePage> {
       }
       if (_isWritable(dir)) return dir;
     }
+
+    // Last-resort fallbacks if HOME/XDG locations are unavailable or read-only.
+    final fallbacks = <Directory>[];
+    final pwd = Platform.environment['PWD'] ?? '';
+    if (pwd.isNotEmpty) {
+      fallbacks.add(Directory('$pwd/.fyrjournal'));
+    }
+    fallbacks.add(Directory('${Directory.systemTemp.path}/fyrjournal'));
+
+    for (final dir in fallbacks) {
+      try {
+        if (!dir.existsSync()) {
+          dir.createSync(recursive: true);
+        }
+        if (_isWritable(dir)) return dir;
+      } catch (e) {
+        debugPrint('Journal: fallback ${dir.path} unavailable: $e');
+      }
+    }
     return null;
   }
 
@@ -177,7 +289,7 @@ class _JournalHomePageState extends State<JournalHomePage> {
       final file = File('$storagePath/$fileName.txt');
       try {
         if (file.existsSync()) {
-          _entries[fileName] = await file.readAsString();
+          _entries[fileName] = file.readAsStringSync();
         }
       } catch (e) {
         debugPrint('Journal: cannot read ${file.path}: $e');
@@ -223,35 +335,62 @@ class _JournalHomePageState extends State<JournalHomePage> {
     }
 
     const softWhite = Color(0xFFFBFBF9);
+    final showCustomTitleBar =
+        widget.showCustomTitleBar ?? !isWslEnvironment();
 
     return Scaffold(
       backgroundColor: softWhite,
       body: Column(
         children: [
-          GestureDetector(
-            onPanStart: (_) => windowManager.startDragging(),
-            child: Container(
-              height: 40,
-              color: softWhite,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  _TrafficLight(color: Colors.red.shade400, onTap: () => windowManager.close()),
-                  const SizedBox(width: 8),
-                  _TrafficLight(color: Colors.amber.shade400, onTap: () => windowManager.minimize()),
-                  const SizedBox(width: 8),
-                  _TrafficLight(color: Colors.green.shade400, onTap: () async {
-                    if (await windowManager.isMaximized()) {
-                      await windowManager.unmaximize();
-                    } else {
-                      await windowManager.maximize();
-                    }
-                  }),
-                  const Expanded(child: SizedBox()),
-                ],
+          if (showCustomTitleBar)
+            GestureDetector(
+              onPanStart: (_) {
+                try {
+                  windowManager.startDragging();
+                } catch (_) {}
+              },
+              child: Container(
+                key: const Key('custom_title_bar'),
+                height: 40,
+                color: softWhite,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  children: [
+                    _TrafficLight(
+                      color: Colors.red.shade400,
+                      onTap: () {
+                        try {
+                          windowManager.close();
+                        } catch (_) {}
+                      },
+                    ),
+                    const SizedBox(width: 8),
+                    _TrafficLight(
+                      color: Colors.amber.shade400,
+                      onTap: () {
+                        try {
+                          windowManager.minimize();
+                        } catch (_) {}
+                      },
+                    ),
+                    const SizedBox(width: 8),
+                    _TrafficLight(
+                      color: Colors.green.shade400,
+                      onTap: () async {
+                        try {
+                          if (await windowManager.isMaximized()) {
+                            await windowManager.unmaximize();
+                          } else {
+                            await windowManager.maximize();
+                          }
+                        } catch (_) {}
+                      },
+                    ),
+                    const Expanded(child: SizedBox()),
+                  ],
+                ),
               ),
             ),
-          ),
           if (_storageError != null)
             Container(
               width: double.infinity,
@@ -380,6 +519,17 @@ class _JournalDayItemState extends State<JournalDayItem> {
 
   @override
   Widget build(BuildContext context) {
+    final dateStyle = _handwritingStyle(
+      fontSize: 16,
+      fontWeight: FontWeight.bold,
+      color: Colors.black54,
+    );
+    final entryStyle = _handwritingStyle(
+      fontSize: 22,
+      height: 1.3636,
+      color: const Color(0xFF454545),
+    );
+
     return CustomPaint(
       painter: NotebookItemPainter(
         lineColor: Colors.blue.withOpacity(0.15),
@@ -400,11 +550,7 @@ class _JournalDayItemState extends State<JournalDayItem> {
               alignment: Alignment.centerLeft,
               child: Text(
                 DateFormat('MMM d, EE').format(widget.date).toUpperCase(),
-                style: GoogleFonts.caveat(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black54,
-                ),
+                style: dateStyle,
               ),
             ),
             const SizedBox(width: 4),
@@ -418,16 +564,12 @@ class _JournalDayItemState extends State<JournalDayItem> {
                   maxLines: null,
                   onChanged: widget.onChanged,
                   strutStyle: StrutStyle(
-                    fontFamily: GoogleFonts.caveat().fontFamily,
+                    fontFamily: entryStyle.fontFamily,
                     fontSize: 22,
                     height: 1.3636,
                     forceStrutHeight: true,
                   ),
-                  style: GoogleFonts.caveat(
-                    fontSize: 22,
-                    height: 1.3636,
-                    color: const Color(0xFF454545),
-                  ),
+                  style: entryStyle,
                   selectionHeightStyle: BoxHeightStyle.tight,
                   decoration: const InputDecoration(
                     border: InputBorder.none,

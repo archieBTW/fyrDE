@@ -12,9 +12,9 @@ enum RightInspectorTab {
 
 class SheetsController extends ChangeNotifier {
   late SpreadsheetWorkbook _workbook;
-  CellCoordinate _activeCell = const CellCoordinate(7, 4); // E8
-  CellCoordinate _selectionAnchor = const CellCoordinate(7, 4);
-  CellCoordinate _selectionFocus = const CellCoordinate(7, 4);
+  CellCoordinate _activeCell = const CellCoordinate(0, 0); // A1
+  CellCoordinate _selectionAnchor = const CellCoordinate(0, 0);
+  CellCoordinate _selectionFocus = const CellCoordinate(0, 0);
 
   final TextEditingController formulaController = TextEditingController();
   bool isEditingInline = false;
@@ -567,13 +567,7 @@ class SheetsController extends ChangeNotifier {
 
   void newWorkbook() {
     _pushUndoSnapshot();
-    final sheet = Worksheet(id: 'sheet_1', name: 'Sheet 1');
-    _workbook = SpreadsheetWorkbook(
-      id: 'wb_${DateTime.now().millisecondsSinceEpoch}',
-      title: 'Untitled_Workbook.ods',
-      format: WorkbookFormat.ods,
-      sheets: [sheet],
-    );
+    _workbook = buildDefaultWorkbook();
     _activeCell = const CellCoordinate(0, 0);
     _selectionAnchor = _activeCell;
     _selectionFocus = _activeCell;
@@ -611,325 +605,21 @@ class SheetsController extends ChangeNotifier {
   }
 
   // ===========================================================================
-  // Default Pre-Populated Workbook
+  // Default Blank Workbook
   // ===========================================================================
 
   static SpreadsheetWorkbook buildDefaultWorkbook() {
-    const headerStyle = CellStyle(
-      bold: true,
-      fillColorHex: '#1F182B',
-      textColorHex: '#E9B8FF',
-      align: CellAlign.left,
-    );
-    const numHeaderStyle = CellStyle(
-      bold: true,
-      fillColorHex: '#1F182B',
-      textColorHex: '#E9B8FF',
-      align: CellAlign.right,
-    );
-    const currencyStyle = CellStyle(
-      numberFormat: NumberFormatType.currency,
-      decimals: 2,
-      align: CellAlign.right,
-    );
-    const boldCurrencyStyle = CellStyle(
-      bold: true,
-      numberFormat: NumberFormatType.currency,
-      decimals: 2,
-      align: CellAlign.right,
-      fillColorHex: '#1B1426',
-      textColorHex: '#D040FF',
-    );
-    const percentStyle = CellStyle(
-      numberFormat: NumberFormatType.percent,
-      decimals: 1,
-      align: CellAlign.right,
-    );
-    const intStyle = CellStyle(
-      numberFormat: NumberFormatType.number,
-      decimals: 0,
-      align: CellAlign.right,
-    );
-    const centerBadgeStyle = CellStyle(
-      bold: true,
-      align: CellAlign.center,
-    );
-
-    // Sheet 1: Infrastructure Cost
-    final sheet1 = Worksheet(
-      id: 'sheet_infra',
-      name: 'Infrastructure Cost',
-      rowCount: 40,
-      colCount: 12,
-      columnWidths: {
-        0: 196.0,
-        1: 118.0,
-        2: 88.0,
-        3: 112.0,
-        4: 132.0,
-        5: 108.0,
-        6: 106.0,
-      },
-      charts: [
-        const SheetChartConfig(
-          id: 'chart_infra_cost',
-          title: 'Monthly Cluster Cost by Service',
-          type: ChartType.bar,
-          labelRange: 'A2:A7',
-          valueRange: 'E2:E7',
-          accentHex: '#D040FF',
-        ),
-      ],
-      conditionalRules: [
-        const ConditionalRule(
-          id: 'rule_high_cost',
-          range: 'E2:E7',
-          operator: ConditionalOperator.greaterThan,
-          threshold: '5000',
-          highlightHex: '#D040FF',
-        ),
-      ],
-    );
-
-    final headers1 = [
-      ('Service Workload', headerStyle),
-      ('Region', headerStyle),
-      ('Nodes', numHeaderStyle),
-      ('Unit Rate', numHeaderStyle),
-      ('Monthly Cost', numHeaderStyle),
-      ('Share %', numHeaderStyle),
-      ('Tier Alert', headerStyle),
-    ];
-    for (var c = 0; c < headers1.length; c++) {
-      sheet1.setCell(
-        0,
-        c,
-        SheetCell(
-          rawInput: headers1[c].$1,
-          displayValue: headers1[c].$1,
-          style: headers1[c].$2,
-        ),
-      );
-    }
-
-    final rows1 = [
-      ('GPU Inference Nodes', 'us-east-1', '16', '600'),
-      ('Kubernetes Control Plane', 'us-west-2', '12', '450'),
-      ('Postgres HA Replicas', 'eu-central-1', '8', '520'),
-      ('Object Storage Tier-1', 'global-cdn', '31', '40'),
-      ('Vector Search Cluster', 'us-east-1', '10', '512'),
-      ('Edge WAF & Telemetry', 'global-edge', '20', '170'),
-    ];
-
-    for (var i = 0; i < rows1.length; i++) {
-      final r = i + 1;
-      final rowNum = r + 1;
-      final item = rows1[i];
-      sheet1.setCell(0 + r, 0, SheetCell(rawInput: item.$1));
-      sheet1.setCell(0 + r, 1, SheetCell(rawInput: item.$2));
-      sheet1.setCell(
-        0 + r,
-        2,
-        SheetCell(rawInput: item.$3, style: intStyle),
-      );
-      sheet1.setCell(
-        0 + r,
-        3,
-        SheetCell(rawInput: item.$4, style: currencyStyle),
-      );
-      sheet1.setCell(
-        0 + r,
-        4,
-        SheetCell(
-          rawInput: '=C$rowNum*D$rowNum',
-          style: currencyStyle,
-        ),
-      );
-      sheet1.setCell(
-        0 + r,
-        5,
-        SheetCell(
-          rawInput: '=E$rowNum/E8',
-          style: percentStyle,
-        ),
-      );
-      sheet1.setCell(
-        0 + r,
-        6,
-        SheetCell(
-          rawInput: '=IF(E$rowNum>5000,"High","Normal")',
-          style: centerBadgeStyle,
-        ),
-      );
-    }
-
-    // Row 8 (index 7): Total Cluster Spend
-    sheet1.setCell(
-      7,
-      0,
-      const SheetCell(
-        rawInput: 'Total Monthly Spend',
-        style: CellStyle(
-          bold: true,
-          fillColorHex: '#1B1426',
-          textColorHex: '#FFFFFF',
-        ),
-      ),
-    );
-    sheet1.setCell(
-      7,
-      2,
-      const SheetCell(
-        rawInput: '=SUM(C2:C7)',
-        style: CellStyle(
-          bold: true,
-          numberFormat: NumberFormatType.number,
-          decimals: 0,
-          align: CellAlign.right,
-          fillColorHex: '#1B1426',
-        ),
-      ),
-    );
-    sheet1.setCell(
-      7,
-      4,
-      const SheetCell(
-        rawInput: '=SUM(E2:E7)',
-        style: boldCurrencyStyle,
-      ),
-    );
-    sheet1.setCell(
-      7,
-      5,
-      const SheetCell(
-        rawInput: '=SUM(F2:F7)',
-        style: CellStyle(
-          bold: true,
-          numberFormat: NumberFormatType.percent,
-          decimals: 1,
-          align: CellAlign.right,
-          fillColorHex: '#1B1426',
-        ),
-      ),
-    );
-
-    // Row 9 (index 8): Average Service Cost
-    sheet1.setCell(
-      8,
-      0,
-      const SheetCell(
-        rawInput: 'Average Workload Cost',
-        style: CellStyle(bold: true, textColorHex: '#B8B5C0'),
-      ),
-    );
-    sheet1.setCell(
-      8,
-      4,
-      const SheetCell(
-        rawInput: '=AVERAGE(E2:E7)',
-        style: currencyStyle,
-      ),
-    );
-
-    // Sheet 2: Revenue & ARR
-    final sheet2 = Worksheet(
-      id: 'sheet_arr',
-      name: 'Revenue & ARR',
-      rowCount: 35,
-      colCount: 10,
-      columnWidths: {0: 160.0, 1: 130.0, 2: 130.0, 3: 130.0, 4: 130.0},
-      charts: [
-        const SheetChartConfig(
-          id: 'chart_arr_growth',
-          title: 'Quarterly ARR Progression',
-          type: ChartType.line,
-          labelRange: 'A2:A5',
-          valueRange: 'D2:D5',
-          accentHex: '#00E5FF',
-        ),
-      ],
-    );
-
-    final headers2 = [
-      'Quarter',
-      'Enterprise ARR',
-      'Self-Serve ARR',
-      'Total ARR',
-      'Net Margin',
-    ];
-    for (var c = 0; c < headers2.length; c++) {
-      sheet2.setCell(
-        0,
-        c,
-        SheetCell(rawInput: headers2[c], style: headerStyle),
-      );
-    }
-
-    final arrRows = [
-      ('Q1 2026', '420000', '115000', '0.74'),
-      ('Q2 2026', '510000', '142000', '0.77'),
-      ('Q3 2026', '645000', '178000', '0.79'),
-      ('Q4 2026', '810000', '215000', '0.82'),
-    ];
-    for (var i = 0; i < arrRows.length; i++) {
-      final r = i + 1;
-      final rn = r + 1;
-      sheet2.setCell(r, 0, SheetCell(rawInput: arrRows[i].$1));
-      sheet2.setCell(
-        r,
-        1,
-        SheetCell(rawInput: arrRows[i].$2, style: currencyStyle),
-      );
-      sheet2.setCell(
-        r,
-        2,
-        SheetCell(rawInput: arrRows[i].$3, style: currencyStyle),
-      );
-      sheet2.setCell(
-        r,
-        3,
-        SheetCell(rawInput: '=B$rn+C$rn', style: boldCurrencyStyle),
-      );
-      sheet2.setCell(
-        r,
-        4,
-        SheetCell(rawInput: arrRows[i].$4, style: percentStyle),
-      );
-    }
-
-    // Sheet 3: Benchmarks
-    final sheet3 = Worksheet(
-      id: 'sheet_bench',
-      name: 'Benchmarks',
-      rowCount: 35,
-      colCount: 10,
-      columnWidths: {0: 180.0, 1: 120.0, 2: 120.0, 3: 120.0},
-    );
-    final headers3 = ['Engine Kernel', 'p50 Latency (ms)', 'p99 Latency (ms)', 'Throughput (req/s)'];
-    for (var c = 0; c < headers3.length; c++) {
-      sheet3.setCell(0, c, SheetCell(rawInput: headers3[c], style: headerStyle));
-    }
-    final benchRows = [
-      ('fyrWayland Compositor', '1.2', '3.4', '14400'),
-      ('fyrSheets Formula AST', '0.4', '1.1', '92000'),
-      ('ODS Archive Streamer', '4.8', '9.2', '6800'),
-    ];
-    for (var i = 0; i < benchRows.length; i++) {
-      final r = i + 1;
-      sheet3.setCell(r, 0, SheetCell(rawInput: benchRows[i].$1));
-      sheet3.setCell(r, 1, SheetCell(rawInput: benchRows[i].$2));
-      sheet3.setCell(r, 2, SheetCell(rawInput: benchRows[i].$3));
-      sheet3.setCell(r, 3, SheetCell(rawInput: benchRows[i].$4, style: intStyle));
-    }
-
-    final wb = SpreadsheetWorkbook(
-      id: 'wb_default_q4',
-      title: 'Q4_Cloud_Infrastructure_Budget.ods',
+    return SpreadsheetWorkbook(
+      id: 'wb_${DateTime.now().millisecondsSinceEpoch}',
+      title: 'Untitled.ods',
       format: WorkbookFormat.ods,
-      sheets: [sheet1, sheet2, sheet3],
+      sheets: [
+        Worksheet(
+          id: 'sheet_1',
+          name: 'Sheet 1',
+        ),
+      ],
     );
-    FormulaEngine.recalculateWorkbook(wb);
-    return wb;
   }
 
   @override

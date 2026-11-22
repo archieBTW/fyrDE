@@ -523,7 +523,7 @@ class PresentationDeck {
   factory PresentationDeck.fromJson(Map<String, dynamic> json) {
     return PresentationDeck(
       id: json['id'] as String? ?? 'deck_1',
-      title: json['title'] as String? ?? 'fyrDE_2026_Keynote',
+      title: json['title'] as String? ?? 'Untitled Presentation',
       author: json['author'] as String? ?? 'FyrDE Studio',
       filePath: json['filePath'] as String?,
       format: json['format'] as String? ?? 'odp',

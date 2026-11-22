@@ -5,17 +5,514 @@ import 'package:flutter/material.dart';
 import '../models/db_models.dart';
 
 class SqlEngine {
-  static bool? _hasSqliteCliCache;
+  static String? _sqliteCliPathCache;
+  static bool _sqliteCliChecked = false;
 
-  /// Checks whether `/usr/bin/sqlite3` is available on the host system.
-  static bool get hasSqliteCli {
-    if (_hasSqliteCliCache != null) return _hasSqliteCliCache!;
-    try {
-      _hasSqliteCliCache = File('/usr/bin/sqlite3').existsSync();
-    } catch (_) {
-      _hasSqliteCliCache = false;
+  /// Expands leading `~/` to the current user's HOME directory.
+  static String resolvePath(String rawPath) {
+    final trimmed = rawPath.trim();
+    if (trimmed.isEmpty) return '';
+    if (trimmed == '~') {
+      return Platform.environment['HOME'] ?? trimmed;
     }
-    return _hasSqliteCliCache!;
+    if (trimmed.startsWith('~/')) {
+      final home = Platform.environment['HOME'];
+      if (home != null && home.isNotEmpty) {
+        return '$home${trimmed.substring(1)}';
+      }
+    }
+    return trimmed;
+  }
+
+  /// Searches standard Linux binary paths and PATH for a CLI executable.
+  static String? findCliBinary(String binaryName) {
+    final candidates = <String>[
+      '/usr/bin/$binaryName',
+      '/usr/local/bin/$binaryName',
+      '/bin/$binaryName',
+    ];
+    final pathEnv = Platform.environment['PATH'];
+    if (pathEnv != null && pathEnv.isNotEmpty) {
+      for (final dir in pathEnv.split(':')) {
+        if (dir.isNotEmpty) {
+          candidates.add('$dir/$binaryName');
+        }
+      }
+    }
+    for (final candidate in candidates) {
+      try {
+        if (File(candidate).existsSync()) {
+          return candidate;
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  /// Path to the `sqlite3` CLI executable on the host system, if installed.
+  static String? get sqliteCliPath {
+    if (!_sqliteCliChecked) {
+      _sqliteCliChecked = true;
+      _sqliteCliPathCache = findCliBinary('sqlite3');
+    }
+    return _sqliteCliPathCache;
+  }
+
+  /// Checks whether `sqlite3` CLI is available on the host system.
+  static bool get hasSqliteCli => sqliteCliPath != null;
+
+  /// Parses a standard database connection URI such as:
+  /// `postgres://user:pass@host:5432/dbname?sslmode=require`
+  /// `mysql://user:pass@host:3306/dbname`
+  /// `redis://:pass@host:6379/0`
+  static ParsedConnectionUri? parseConnectionUri(String rawUri) {
+    final trimmed = rawUri.trim();
+    if (trimmed.isEmpty) return null;
+
+    final uri = Uri.tryParse(trimmed);
+    if (uri == null || uri.scheme.isEmpty) return null;
+
+    final scheme = uri.scheme.toLowerCase();
+    DbDriverType? driver;
+    bool? ssl;
+
+    switch (scheme) {
+      case 'postgres':
+      case 'postgresql':
+        driver = DbDriverType.postgres;
+        break;
+      case 'mysql':
+        driver = DbDriverType.mysql;
+        break;
+      case 'mariadb':
+        driver = DbDriverType.mariadb;
+        break;
+      case 'redis':
+        driver = DbDriverType.redis;
+        break;
+      case 'rediss':
+        driver = DbDriverType.redis;
+        ssl = true;
+        break;
+      case 'clickhouse':
+      case 'clickhouses':
+        driver = DbDriverType.clickhouse;
+        if (scheme == 'clickhouses') ssl = true;
+        break;
+      case 'sqlite':
+      case 'sqlite3':
+        driver = DbDriverType.sqlite;
+        break;
+      case 'duckdb':
+        driver = DbDriverType.duckdb;
+        break;
+      default:
+        return null;
+    }
+
+    if (driver.isFileBased) {
+      final filePath = uri.path;
+      return ParsedConnectionUri(
+        driver: driver,
+        database: filePath.isNotEmpty ? filePath : null,
+      );
+    }
+
+    String? username;
+    String? password;
+    if (uri.userInfo.isNotEmpty) {
+      final colonIdx = uri.userInfo.indexOf(':');
+      if (colonIdx >= 0) {
+        username = Uri.decodeComponent(uri.userInfo.substring(0, colonIdx));
+        password = Uri.decodeComponent(uri.userInfo.substring(colonIdx + 1));
+      } else {
+        username = Uri.decodeComponent(uri.userInfo);
+      }
+    }
+
+    final dbPath = uri.path.startsWith('/') ? uri.path.substring(1) : uri.path;
+    final sslMode = (uri.queryParameters['sslmode'] ??
+            uri.queryParameters['ssl'] ??
+            uri.queryParameters['tls'] ??
+            '')
+        .toLowerCase();
+    if (sslMode == 'require' ||
+        sslMode == 'verify-ca' ||
+        sslMode == 'verify-full' ||
+        sslMode == 'true' ||
+        sslMode == '1') {
+      ssl = true;
+    } else if (sslMode == 'disable' || sslMode == 'false' || sslMode == '0') {
+      ssl = false;
+    }
+
+    return ParsedConnectionUri(
+      driver: driver,
+      host: uri.host.isNotEmpty ? uri.host : null,
+      port: uri.hasPort ? uri.port : driver.defaultPort,
+      database: dbPath.isNotEmpty ? dbPath : null,
+      username: (username != null && username.isNotEmpty) ? username : null,
+      password: (password != null && password.isNotEmpty) ? password : null,
+      sslEnabled: ssl,
+    );
+  }
+
+  /// Creates a new valid empty SQLite 3 database file on disk.
+  static Future<bool> createSqliteFile(String rawPath) async {
+    final filePath = resolvePath(rawPath);
+    if (filePath.isEmpty || filePath == ':memory:') return false;
+    try {
+      final file = File(filePath);
+      if (!file.parent.existsSync()) {
+        file.parent.createSync(recursive: true);
+      }
+      final cli = sqliteCliPath;
+      if (cli != null) {
+        final res = await Process.run(cli, [
+          filePath,
+          'PRAGMA journal_mode = WAL; VACUUM;',
+        ]);
+        return res.exitCode == 0 && file.existsSync();
+      }
+      // Fallback: create empty file so it exists on disk even without sqlite3 CLI
+      if (!file.existsSync()) {
+        file.createSync(recursive: true);
+      }
+      return file.existsSync();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Creates a new DuckDB file on disk when `duckdb` CLI is available.
+  static Future<bool> createDuckDbFile(String rawPath) async {
+    final filePath = resolvePath(rawPath);
+    if (filePath.isEmpty || filePath == ':memory:') return false;
+    try {
+      final file = File(filePath);
+      if (!file.parent.existsSync()) {
+        file.parent.createSync(recursive: true);
+      }
+      final cli = findCliBinary('duckdb');
+      if (cli != null) {
+        final res = await Process.run(cli, [filePath, '-c', 'SELECT 1;']);
+        return res.exitCode == 0 && file.existsSync();
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Runs a real connectivity & diagnostic check for the given connection profile.
+  static Future<ConnectionTestResult> testConnection(
+    DbConnectionProfile profile, {
+    bool createIfMissing = false,
+  }) async {
+    final sw = Stopwatch()..start();
+
+    if (profile.driver == DbDriverType.sqlite) {
+      final raw = profile.databaseOrPath.trim();
+      if (raw.isEmpty) {
+        sw.stop();
+        return ConnectionTestResult(
+          success: false,
+          latencyMs: sw.elapsedMicroseconds / 1000.0,
+          message: 'Database file path is required.',
+          cliAvailable: hasSqliteCli,
+        );
+      }
+      if (raw == ':memory:') {
+        sw.stop();
+        return ConnectionTestResult(
+          success: true,
+          latencyMs: sw.elapsedMicroseconds / 1000.0,
+          message: 'In-memory SQLite workspace ready.',
+          details: 'Data will live in memory for the current session.',
+          cliAvailable: hasSqliteCli,
+        );
+      }
+
+      final resolved = resolvePath(raw);
+      if (Directory(resolved).existsSync()) {
+        sw.stop();
+        return ConnectionTestResult(
+          success: false,
+          latencyMs: sw.elapsedMicroseconds / 1000.0,
+          message: 'Path points to a directory, not a database file.',
+          details: resolved,
+          cliAvailable: hasSqliteCli,
+        );
+      }
+
+      final file = File(resolved);
+      if (!file.existsSync()) {
+        sw.stop();
+        if (createIfMissing) {
+          final parentExists = file.parent.existsSync();
+          return ConnectionTestResult(
+            success: true,
+            latencyMs: sw.elapsedMicroseconds / 1000.0,
+            message: 'Ready to create new SQLite database.',
+            details: parentExists
+                ? 'Will initialize $resolved${hasSqliteCli ? ' via sqlite3 CLI' : ''}.'
+                : 'Parent folder ${file.parent.path} will be created automatically.',
+            cliAvailable: hasSqliteCli,
+          );
+        }
+        return ConnectionTestResult(
+          success: false,
+          latencyMs: sw.elapsedMicroseconds / 1000.0,
+          message: 'SQLite file not found.',
+          details:
+              'File "$resolved" does not exist. Choose an existing file or use "Create New File".',
+          cliAvailable: hasSqliteCli,
+        );
+      }
+
+      // Existing file — verify header & optionally query version via sqlite3 CLI
+      try {
+        final len = file.lengthSync();
+        if (len >= 16) {
+          final raf = file.openSync(mode: FileMode.read);
+          try {
+            final header = raf.readSync(16);
+            final headerStr = ascii.decode(header, allowInvalid: true);
+            if (!headerStr.startsWith('SQLite format 3')) {
+              sw.stop();
+              return ConnectionTestResult(
+                success: false,
+                latencyMs: sw.elapsedMicroseconds / 1000.0,
+                message: 'File is not a valid SQLite 3 database.',
+                details: 'Header signature mismatch in $resolved.',
+                cliAvailable: hasSqliteCli,
+              );
+            }
+          } finally {
+            raf.closeSync();
+          }
+        }
+
+        if (hasSqliteCli) {
+          final verRes = await executeOnSqliteFile(
+            resolved,
+            "SELECT sqlite_version() AS version, (SELECT COUNT(*) FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%') AS objects;",
+          );
+          sw.stop();
+          if (!verRes.isSuccess) {
+            return ConnectionTestResult(
+              success: false,
+              latencyMs: sw.elapsedMicroseconds / 1000.0,
+              message: 'SQLite integrity check failed.',
+              details: verRes.error,
+              cliAvailable: true,
+            );
+          }
+          final version = verRes.rows.isNotEmpty
+              ? verRes.rows.first['version']?.toString() ?? '3'
+              : '3';
+          final objects = verRes.rows.isNotEmpty
+              ? verRes.rows.first['objects']?.toString() ?? '0'
+              : '0';
+          return ConnectionTestResult(
+            success: true,
+            latencyMs: sw.elapsedMicroseconds / 1000.0,
+            message: 'SQLite $version ready — $objects schema objects found.',
+            details: '$resolved (${_formatFileSize(len)})',
+            cliAvailable: true,
+          );
+        }
+
+        sw.stop();
+        return ConnectionTestResult(
+          success: true,
+          latencyMs: sw.elapsedMicroseconds / 1000.0,
+          message: 'SQLite file verified (${_formatFileSize(len)}).',
+          details:
+              'Note: sqlite3 CLI was not found on PATH; install sqlite3 for full disk query execution.',
+          cliAvailable: false,
+        );
+      } catch (e) {
+        sw.stop();
+        return ConnectionTestResult(
+          success: false,
+          latencyMs: sw.elapsedMicroseconds / 1000.0,
+          message: 'Cannot read SQLite file.',
+          details: e.toString(),
+          cliAvailable: hasSqliteCli,
+        );
+      }
+    }
+
+    if (profile.driver == DbDriverType.duckdb) {
+      final raw = profile.databaseOrPath.trim();
+      final cli = findCliBinary('duckdb');
+      if (raw.isEmpty) {
+        sw.stop();
+        return ConnectionTestResult(
+          success: false,
+          latencyMs: sw.elapsedMicroseconds / 1000.0,
+          message: 'DuckDB file path is required.',
+          cliAvailable: cli != null,
+        );
+      }
+      final resolved = resolvePath(raw);
+      final file = File(resolved);
+      if (!file.existsSync() && !createIfMissing) {
+        sw.stop();
+        return ConnectionTestResult(
+          success: false,
+          latencyMs: sw.elapsedMicroseconds / 1000.0,
+          message: 'DuckDB file not found: $resolved',
+          details: 'Browse for an existing .duckdb file or use "Create New File".',
+          cliAvailable: cli != null,
+        );
+      }
+      if (cli == null) {
+        sw.stop();
+        return ConnectionTestResult(
+          success: false,
+          latencyMs: sw.elapsedMicroseconds / 1000.0,
+          message: 'DuckDB CLI ("duckdb") not installed on this system.',
+          details:
+              'Install the duckdb CLI binary on PATH to query DuckDB files.',
+          cliAvailable: false,
+        );
+      }
+      if (file.existsSync()) {
+        final res = await Process.run(cli, [resolved, '-c', 'SELECT version();'])
+            .timeout(const Duration(seconds: 5));
+        sw.stop();
+        if (res.exitCode != 0) {
+          return ConnectionTestResult(
+            success: false,
+            latencyMs: sw.elapsedMicroseconds / 1000.0,
+            message: 'DuckDB failed to open database.',
+            details: (res.stderr as String).trim(),
+            cliAvailable: true,
+          );
+        }
+        return ConnectionTestResult(
+          success: true,
+          latencyMs: sw.elapsedMicroseconds / 1000.0,
+          message: 'DuckDB connection verified.',
+          details: resolved,
+          cliAvailable: true,
+        );
+      }
+      sw.stop();
+      return ConnectionTestResult(
+        success: true,
+        latencyMs: sw.elapsedMicroseconds / 1000.0,
+        message: 'Ready to create new DuckDB file.',
+        details: '$resolved (duckdb CLI detected)',
+        cliAvailable: true,
+      );
+    }
+
+    // Remote TCP database engines (PostgreSQL, MySQL/MariaDB, Redis, ClickHouse)
+    final host = profile.host.trim();
+    final port = profile.port;
+    if (host.isEmpty) {
+      sw.stop();
+      return const ConnectionTestResult(
+        success: false,
+        latencyMs: 0,
+        message: 'Host is required.',
+      );
+    }
+    if (port <= 0 || port > 65535) {
+      sw.stop();
+      return const ConnectionTestResult(
+        success: false,
+        latencyMs: 0,
+        message: 'Port must be between 1 and 65535.',
+      );
+    }
+
+    final cliBin = _resolveDriverCli(profile.driver);
+    try {
+      final socket = await Socket.connect(
+        host,
+        port,
+        timeout: const Duration(seconds: 4),
+      );
+      socket.destroy();
+      sw.stop();
+      final tcpMs = sw.elapsedMicroseconds / 1000.0;
+
+      if (cliBin == null) {
+        return ConnectionTestResult(
+          success: true,
+          latencyMs: tcpMs,
+          message:
+              'TCP reachable at $host:$port (${tcpMs.toStringAsFixed(1)} ms).',
+          details:
+              'Note: "${profile.driver.cliBinary}" CLI is not installed on PATH. Install it to execute queries from fyrDB.',
+          cliAvailable: false,
+        );
+      }
+
+      // Attempt live protocol/auth ping via CLI when available
+      final pingSql = profile.driver == DbDriverType.redis ? 'PING' : 'SELECT 1;';
+      final pingRes = await executeOnProfile(profile, pingSql);
+      if (pingRes.isSuccess) {
+        return ConnectionTestResult(
+          success: true,
+          latencyMs: pingRes.executionTimeMs,
+          message:
+              'Connected to ${profile.driver.label} at $host:$port (${tcpMs.toStringAsFixed(1)} ms TCP).',
+          details: 'Verified via ${profile.driver.cliBinary} CLI.',
+          cliAvailable: true,
+        );
+      } else {
+        return ConnectionTestResult(
+          success: false,
+          latencyMs: tcpMs,
+          message:
+              'TCP port $port is open (${tcpMs.toStringAsFixed(1)} ms), but server rejected query.',
+          details: pingRes.error,
+          cliAvailable: true,
+        );
+      }
+    } on SocketException catch (e) {
+      sw.stop();
+      return ConnectionTestResult(
+        success: false,
+        latencyMs: sw.elapsedMicroseconds / 1000.0,
+        message: 'Could not reach $host:$port.',
+        details:
+            '${e.message}${e.osError != null ? ' (${e.osError!.message})' : ''}. Check host, port, firewall, and ensure ${profile.driver.label} is running.',
+        cliAvailable: cliBin != null,
+      );
+    } catch (e) {
+      sw.stop();
+      return ConnectionTestResult(
+        success: false,
+        latencyMs: sw.elapsedMicroseconds / 1000.0,
+        message: 'Connection test failed for $host:$port.',
+        details: e.toString(),
+        cliAvailable: cliBin != null,
+      );
+    }
+  }
+
+  static String? _resolveDriverCli(DbDriverType driver) {
+    final primary = findCliBinary(driver.cliBinary);
+    if (primary != null) return primary;
+    if (driver == DbDriverType.mysql) {
+      return findCliBinary('mariadb');
+    }
+    if (driver == DbDriverType.mariadb) {
+      return findCliBinary('mysql');
+    }
+    return null;
+  }
+
+  static String _formatFileSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(2)} MB';
   }
 
   /// Builds the non-interactive CLI invocation for any supported database driver.
@@ -26,22 +523,25 @@ class SqlEngine {
     switch (profile.driver) {
       case DbDriverType.sqlite:
         return [
-          '/usr/bin/sqlite3',
+          sqliteCliPath ?? 'sqlite3',
           '-json',
-          profile.databaseOrPath,
+          resolvePath(profile.databaseOrPath),
           sql,
         ];
       case DbDriverType.postgres:
         return [
-          'psql',
+          _resolveDriverCli(DbDriverType.postgres) ?? 'psql',
           '-h',
           profile.host,
           '-p',
           '${profile.port}',
-          '-U',
-          profile.username,
-          '-d',
-          profile.databaseOrPath,
+          if (profile.username.isNotEmpty) ...['-U', profile.username],
+          if (profile.databaseOrPath.isNotEmpty) ...[
+            '-d',
+            profile.databaseOrPath,
+          ],
+          '-v',
+          'ON_ERROR_STOP=1',
           '--csv',
           '-c',
           sql,
@@ -49,45 +549,55 @@ class SqlEngine {
       case DbDriverType.mysql:
       case DbDriverType.mariadb:
         return [
-          profile.driver.cliBinary,
+          _resolveDriverCli(profile.driver) ?? profile.driver.cliBinary,
           '-h',
           profile.host,
           '-P',
           '${profile.port}',
-          '-u',
-          profile.username,
-          '-D',
-          profile.databaseOrPath,
+          if (profile.username.isNotEmpty) ...['-u', profile.username],
+          if (profile.databaseOrPath.isNotEmpty) ...[
+            '-D',
+            profile.databaseOrPath,
+          ],
           '--batch',
           '-e',
           sql,
         ];
       case DbDriverType.duckdb:
         return [
-          'duckdb',
+          _resolveDriverCli(DbDriverType.duckdb) ?? 'duckdb',
           '-json',
-          profile.databaseOrPath,
+          resolvePath(profile.databaseOrPath),
           '-c',
           sql,
         ];
       case DbDriverType.redis:
         return [
-          'redis-cli',
+          _resolveDriverCli(DbDriverType.redis) ?? 'redis-cli',
           '-h',
           profile.host,
           '-p',
           '${profile.port}',
+          if (profile.databaseOrPath.isNotEmpty &&
+              int.tryParse(profile.databaseOrPath) != null) ...[
+            '-n',
+            profile.databaseOrPath,
+          ],
+          if (profile.sslEnabled) '--tls',
           ...sql.trim().split(RegExp(r'\s+')),
         ];
       case DbDriverType.clickhouse:
         return [
-          'clickhouse-client',
+          _resolveDriverCli(DbDriverType.clickhouse) ?? 'clickhouse-client',
           '--host',
           profile.host,
           '--port',
           '${profile.port}',
-          '--database',
-          profile.databaseOrPath,
+          if (profile.username.isNotEmpty) ...['--user', profile.username],
+          if (profile.databaseOrPath.isNotEmpty) ...[
+            '--database',
+            profile.databaseOrPath,
+          ],
           '--format',
           'JSONEachRow',
           '--query',
@@ -96,13 +606,488 @@ class SqlEngine {
     }
   }
 
+  /// Executes a real statement against a live connection profile via its driver CLI.
+  /// Never returns fake/mock rows when the driver or server is unavailable.
+  static Future<QueryResult> executeOnProfile(
+    DbConnectionProfile profile,
+    String sql,
+  ) async {
+    final trimmed = _stripSqlComments(sql).trim();
+    if (trimmed.isEmpty) {
+      return QueryResult(
+        columns: const [],
+        rows: const [],
+        executionTimeMs: 0.1,
+        error: 'Empty SQL query.',
+        executedSql: sql,
+      );
+    }
+
+    if (profile.driver == DbDriverType.sqlite) {
+      return executeOnSqliteFile(resolvePath(profile.databaseOrPath), sql);
+    }
+
+    final cli = _resolveDriverCli(profile.driver);
+    if (cli == null) {
+      return QueryResult(
+        columns: const [],
+        rows: const [],
+        executionTimeMs: 0.1,
+        error:
+            'CLI driver "${profile.driver.cliBinary}" is not installed on this system. Install it to execute queries against ${profile.driver.label}.',
+        executedSql: sql,
+      );
+    }
+
+    final sw = Stopwatch()..start();
+    final cmd = buildCliCommand(profile, trimmed);
+    final env = Map<String, String>.from(Platform.environment);
+    if (profile.driver == DbDriverType.postgres) {
+      if (profile.password != null && profile.password!.isNotEmpty) {
+        env['PGPASSWORD'] = profile.password!;
+      }
+      env['PGCONNECT_TIMEOUT'] = '5';
+      if (profile.sslEnabled) {
+        env['PGSSLMODE'] = 'require';
+      }
+    } else if (profile.driver == DbDriverType.mysql ||
+        profile.driver == DbDriverType.mariadb) {
+      if (profile.password != null && profile.password!.isNotEmpty) {
+        env['MYSQL_PWD'] = profile.password!;
+      }
+    } else if (profile.driver == DbDriverType.redis) {
+      if (profile.password != null && profile.password!.isNotEmpty) {
+        env['REDISCLI_AUTH'] = profile.password!;
+      }
+    }
+
+    try {
+      final res = await Process.run(
+        cmd.first,
+        cmd.sublist(1),
+        environment: env,
+      ).timeout(const Duration(seconds: 15));
+      sw.stop();
+      final elapsedMs = sw.elapsedMicroseconds / 1000.0;
+
+      if (res.exitCode != 0) {
+        final stderrText = (res.stderr as String).trim();
+        final stdoutText = (res.stdout as String).trim();
+        return QueryResult(
+          columns: const [],
+          rows: const [],
+          executionTimeMs: elapsedMs,
+          error: stderrText.isNotEmpty
+              ? stderrText
+              : (stdoutText.isNotEmpty
+                  ? stdoutText
+                  : '${profile.driver.cliBinary} exited with code ${res.exitCode}'),
+          executedSql: sql,
+        );
+      }
+
+      final out = (res.stdout as String).trim();
+      if (out.isEmpty) {
+        return QueryResult(
+          columns: const ['status'],
+          rows: const [
+            {'status': 'OK'},
+          ],
+          affectedRows: 0,
+          executionTimeMs: elapsedMs,
+          explainPlan: ['EXECUTED VIA ${profile.driver.cliBinary.toUpperCase()}'],
+          executedSql: sql,
+        );
+      }
+
+      switch (profile.driver) {
+        case DbDriverType.postgres:
+          return _parseCsvResult(out, elapsedMs, sql);
+        case DbDriverType.mysql:
+        case DbDriverType.mariadb:
+          return _parseTsvResult(out, elapsedMs, sql);
+        case DbDriverType.duckdb:
+          return _parseJsonArrayResult(out, elapsedMs, sql);
+        case DbDriverType.clickhouse:
+          return _parseJsonLinesResult(out, elapsedMs, sql);
+        case DbDriverType.redis:
+          final lines = out.split('\n');
+          return QueryResult(
+            columns: const ['response'],
+            rows: lines.map((l) => {'response': l}).toList(),
+            affectedRows: lines.length,
+            executionTimeMs: elapsedMs,
+            explainPlan: const ['REDIS-CLI COMMAND'],
+            executedSql: sql,
+          );
+        case DbDriverType.sqlite:
+          return _parseJsonArrayResult(out, elapsedMs, sql);
+      }
+    } catch (e) {
+      sw.stop();
+      return QueryResult(
+        columns: const [],
+        rows: const [],
+        executionTimeMs: sw.elapsedMicroseconds / 1000.0,
+        error: e.toString(),
+        executedSql: sql,
+      );
+    }
+  }
+
+  static QueryResult _parseJsonArrayResult(
+    String stdoutStr,
+    double elapsedMs,
+    String sql,
+  ) {
+    try {
+      final decoded = jsonDecode(stdoutStr);
+      if (decoded is List) {
+        final columns = <String>[];
+        final rows = <Map<String, dynamic>>[];
+        for (final item in decoded) {
+          if (item is Map<String, dynamic>) {
+            if (columns.isEmpty) columns.addAll(item.keys);
+            rows.add(Map<String, dynamic>.from(item));
+          }
+        }
+        return QueryResult(
+          columns: columns,
+          rows: rows,
+          affectedRows: rows.length,
+          executionTimeMs: elapsedMs,
+          executedSql: sql,
+        );
+      }
+    } catch (_) {}
+    return QueryResult(
+      columns: const ['output'],
+      rows: [
+        {'output': stdoutStr},
+      ],
+      affectedRows: 1,
+      executionTimeMs: elapsedMs,
+      executedSql: sql,
+    );
+  }
+
+  static QueryResult _parseJsonLinesResult(
+    String stdoutStr,
+    double elapsedMs,
+    String sql,
+  ) {
+    final columns = <String>[];
+    final rows = <Map<String, dynamic>>[];
+    for (final line in stdoutStr.split('\n')) {
+      final t = line.trim();
+      if (t.isEmpty) continue;
+      try {
+        final obj = jsonDecode(t);
+        if (obj is Map<String, dynamic>) {
+          if (columns.isEmpty) columns.addAll(obj.keys);
+          rows.add(Map<String, dynamic>.from(obj));
+        }
+      } catch (_) {}
+    }
+    return QueryResult(
+      columns: columns,
+      rows: rows,
+      affectedRows: rows.length,
+      executionTimeMs: elapsedMs,
+      executedSql: sql,
+    );
+  }
+
+  static QueryResult _parseTsvResult(
+    String stdoutStr,
+    double elapsedMs,
+    String sql,
+  ) {
+    final lines = stdoutStr.split('\n').where((l) => l.isNotEmpty).toList();
+    if (lines.isEmpty) {
+      return QueryResult(
+        columns: const [],
+        rows: const [],
+        executionTimeMs: elapsedMs,
+        executedSql: sql,
+      );
+    }
+    final columns = lines.first.split('\t');
+    final rows = <Map<String, dynamic>>[];
+    for (var i = 1; i < lines.length; i++) {
+      final cells = lines[i].split('\t');
+      final row = <String, dynamic>{};
+      for (var c = 0; c < columns.length; c++) {
+        final rawVal = c < cells.length ? cells[c] : null;
+        row[columns[c]] = rawVal == 'NULL' ? null : rawVal;
+      }
+      rows.add(row);
+    }
+    return QueryResult(
+      columns: columns,
+      rows: rows,
+      affectedRows: rows.length,
+      executionTimeMs: elapsedMs,
+      executedSql: sql,
+    );
+  }
+
+  static QueryResult _parseCsvResult(
+    String stdoutStr,
+    double elapsedMs,
+    String sql,
+  ) {
+    final lines = stdoutStr.split('\n').where((l) => l.isNotEmpty).toList();
+    if (lines.isEmpty) {
+      return QueryResult(
+        columns: const [],
+        rows: const [],
+        executionTimeMs: elapsedMs,
+        executedSql: sql,
+      );
+    }
+    final columns = _parseCsvLine(lines.first);
+    final rows = <Map<String, dynamic>>[];
+    for (var i = 1; i < lines.length; i++) {
+      final cells = _parseCsvLine(lines[i]);
+      final row = <String, dynamic>{};
+      for (var c = 0; c < columns.length; c++) {
+        row[columns[c]] = c < cells.length ? cells[c] : null;
+      }
+      rows.add(row);
+    }
+    return QueryResult(
+      columns: columns,
+      rows: rows,
+      affectedRows: rows.length,
+      executionTimeMs: elapsedMs,
+      executedSql: sql,
+    );
+  }
+
+  static List<String> _parseCsvLine(String line) {
+    final result = <String>[];
+    final current = StringBuffer();
+    var inQuotes = false;
+    for (var i = 0; i < line.length; i++) {
+      final ch = line[i];
+      if (inQuotes) {
+        if (ch == '"' && i + 1 < line.length && line[i + 1] == '"') {
+          current.write('"');
+          i++;
+        } else if (ch == '"') {
+          inQuotes = false;
+        } else {
+          current.write(ch);
+        }
+      } else {
+        if (ch == '"') {
+          inQuotes = true;
+        } else if (ch == ',') {
+          result.add(current.toString());
+          current.clear();
+        } else {
+          current.write(ch);
+        }
+      }
+    }
+    result.add(current.toString());
+    return result;
+  }
+
+  /// Introspects real tables & columns for a connected database profile.
+  static Future<List<DbTableSchema>> introspectConnection(
+    DbConnectionProfile profile,
+  ) async {
+    switch (profile.driver) {
+      case DbDriverType.sqlite:
+        if (profile.databaseOrPath.trim() == ':memory:') return [];
+        return introspectSqliteFile(resolvePath(profile.databaseOrPath));
+      case DbDriverType.postgres:
+        return _introspectPostgres(profile);
+      case DbDriverType.mysql:
+      case DbDriverType.mariadb:
+        return _introspectMysql(profile);
+      case DbDriverType.duckdb:
+        return _introspectDuckDb(profile);
+      case DbDriverType.redis:
+      case DbDriverType.clickhouse:
+        return [];
+    }
+  }
+
+  static Future<List<DbTableSchema>> _introspectPostgres(
+    DbConnectionProfile profile,
+  ) async {
+    final res = await executeOnProfile(
+      profile,
+      "SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog', 'information_schema') ORDER BY table_schema, table_name;",
+    );
+    if (!res.isSuccess || res.rows.isEmpty) return [];
+
+    final tables = <DbTableSchema>[];
+    var idx = 0;
+    for (final row in res.rows) {
+      final schemaName = row['table_schema']?.toString() ?? 'public';
+      final tableName = row['table_name']?.toString() ?? '';
+      if (tableName.isEmpty) continue;
+      final isView =
+          (row['table_type']?.toString() ?? '').toUpperCase().contains('VIEW');
+
+      final colRes = await executeOnProfile(
+        profile,
+        "SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = '$schemaName' AND table_name = '$tableName' ORDER BY ordinal_position;",
+      );
+      final columns = colRes.rows.map((c) {
+        return DbColumnSchema(
+          name: c['column_name']?.toString() ?? '',
+          dataType: (c['data_type']?.toString() ?? 'TEXT').toUpperCase(),
+          isNullable: (c['is_nullable']?.toString() ?? 'YES') == 'YES',
+          defaultValue: c['column_default']?.toString(),
+        );
+      }).toList();
+
+      final dataRes = await executeOnProfile(
+        profile,
+        'SELECT * FROM "$schemaName"."$tableName" LIMIT 200;',
+      );
+
+      final colIndex = idx % 3;
+      final rowIndex = idx ~/ 3;
+      idx++;
+      final tbl = DbTableSchema(
+        name: tableName,
+        schemaName: schemaName,
+        isView: isView,
+        rowCount: dataRes.rows.length,
+        sizeBytes: math.max(4096, dataRes.rows.length * 256),
+        columns: columns,
+        rows: dataRes.isSuccess ? dataRes.rows : [],
+        erPosition: Offset(40.0 + colIndex * 310.0, 40.0 + rowIndex * 250.0),
+      );
+      tbl.ddlSql = generateTableDdl(tbl);
+      tables.add(tbl);
+    }
+    return tables;
+  }
+
+  static Future<List<DbTableSchema>> _introspectMysql(
+    DbConnectionProfile profile,
+  ) async {
+    final db = profile.databaseOrPath.trim();
+    if (db.isEmpty) return [];
+    final res = await executeOnProfile(
+      profile,
+      "SELECT table_name, table_type FROM information_schema.tables WHERE table_schema = '$db' ORDER BY table_name;",
+    );
+    if (!res.isSuccess || res.rows.isEmpty) return [];
+
+    final tables = <DbTableSchema>[];
+    var idx = 0;
+    for (final row in res.rows) {
+      final tableName =
+          (row['table_name'] ?? row['TABLE_NAME'])?.toString() ?? '';
+      if (tableName.isEmpty) continue;
+      final typeStr =
+          (row['table_type'] ?? row['TABLE_TYPE'])?.toString() ?? '';
+      final isView = typeStr.toUpperCase().contains('VIEW');
+
+      final colRes = await executeOnProfile(
+        profile,
+        "SELECT column_name, data_type, is_nullable, column_key, column_default FROM information_schema.columns WHERE table_schema = '$db' AND table_name = '$tableName' ORDER BY ordinal_position;",
+      );
+      final columns = colRes.rows.map((c) {
+        final key = (c['column_key'] ?? c['COLUMN_KEY'])?.toString() ?? '';
+        return DbColumnSchema(
+          name: (c['column_name'] ?? c['COLUMN_NAME'])?.toString() ?? '',
+          dataType:
+              ((c['data_type'] ?? c['DATA_TYPE'])?.toString() ?? 'TEXT')
+                  .toUpperCase(),
+          isPrimaryKey: key == 'PRI',
+          isUnique: key == 'UNI',
+          isNullable:
+              ((c['is_nullable'] ?? c['IS_NULLABLE'])?.toString() ?? 'YES') ==
+                  'YES',
+          defaultValue: (c['column_default'] ?? c['COLUMN_DEFAULT'])?.toString(),
+        );
+      }).toList();
+
+      final dataRes = await executeOnProfile(
+        profile,
+        'SELECT * FROM `$tableName` LIMIT 200;',
+      );
+
+      final colIndex = idx % 3;
+      final rowIndex = idx ~/ 3;
+      idx++;
+      final tbl = DbTableSchema(
+        name: tableName,
+        schemaName: db,
+        isView: isView,
+        rowCount: dataRes.rows.length,
+        sizeBytes: math.max(4096, dataRes.rows.length * 256),
+        columns: columns,
+        rows: dataRes.isSuccess ? dataRes.rows : [],
+        erPosition: Offset(40.0 + colIndex * 310.0, 40.0 + rowIndex * 250.0),
+      );
+      tbl.ddlSql = generateTableDdl(tbl);
+      tables.add(tbl);
+    }
+    return tables;
+  }
+
+  static Future<List<DbTableSchema>> _introspectDuckDb(
+    DbConnectionProfile profile,
+  ) async {
+    final res = await executeOnProfile(profile, 'SHOW TABLES;');
+    if (!res.isSuccess || res.rows.isEmpty) return [];
+
+    final tables = <DbTableSchema>[];
+    var idx = 0;
+    for (final row in res.rows) {
+      final tableName = row.values.isNotEmpty ? row.values.first.toString() : '';
+      if (tableName.isEmpty) continue;
+      final descRes = await executeOnProfile(profile, 'DESCRIBE "$tableName";');
+      final columns = descRes.rows.map((c) {
+        return DbColumnSchema(
+          name: c['column_name']?.toString() ?? '',
+          dataType: (c['column_type']?.toString() ?? 'VARCHAR').toUpperCase(),
+          isNullable: (c['null']?.toString() ?? 'YES') == 'YES',
+          isPrimaryKey: (c['key']?.toString() ?? '') == 'PRI',
+          defaultValue: c['default']?.toString(),
+        );
+      }).toList();
+      final dataRes = await executeOnProfile(
+        profile,
+        'SELECT * FROM "$tableName" LIMIT 200;',
+      );
+      final colIndex = idx % 3;
+      final rowIndex = idx ~/ 3;
+      idx++;
+      final tbl = DbTableSchema(
+        name: tableName,
+        schemaName: 'main',
+        rowCount: dataRes.rows.length,
+        sizeBytes: math.max(4096, dataRes.rows.length * 256),
+        columns: columns,
+        rows: dataRes.isSuccess ? dataRes.rows : [],
+        erPosition: Offset(40.0 + colIndex * 310.0, 40.0 + rowIndex * 250.0),
+      );
+      tbl.ddlSql = generateTableDdl(tbl);
+      tables.add(tbl);
+    }
+    return tables;
+  }
+
   /// Materializes a list of `DbTableSchema` tables and their rows into a real SQLite 3
-  /// file on disk using `/usr/bin/sqlite3` when available.
+  /// file on disk using `sqlite3` CLI when available.
   static Future<bool> seedSqliteFile(
-    String filePath,
+    String rawPath,
     List<DbTableSchema> schemas,
   ) async {
-    if (!hasSqliteCli) return false;
+    final cli = sqliteCliPath;
+    if (cli == null) return false;
+    final filePath = resolvePath(rawPath);
     try {
       final file = File(filePath);
       if (!file.parent.existsSync()) {
@@ -143,7 +1128,7 @@ class SqlEngine {
         }
       }
       buffer.writeln('COMMIT;');
-      final res = await Process.run('/usr/bin/sqlite3', [
+      final res = await Process.run(cli, [
         filePath,
         buffer.toString(),
       ]);
@@ -153,19 +1138,23 @@ class SqlEngine {
     }
   }
 
-  /// Executes a real SQL statement against a SQLite file on disk via `/usr/bin/sqlite3`.
+  /// Executes a real SQL statement against a SQLite file on disk via `sqlite3` CLI.
   static Future<QueryResult> executeOnSqliteFile(
-    String filePath,
+    String rawPath,
     String sql,
   ) async {
     final sw = Stopwatch()..start();
+    final filePath = resolvePath(rawPath);
+    final cli = sqliteCliPath;
     final trimmed = _stripSqlComments(sql).trim();
-    if (!hasSqliteCli || !File(filePath).existsSync()) {
+    if (cli == null || !File(filePath).existsSync()) {
       return QueryResult(
         columns: const [],
         rows: const [],
         executionTimeMs: 0.2,
-        error: 'SQLite file or /usr/bin/sqlite3 not found: $filePath',
+        error: cli == null
+            ? 'sqlite3 CLI binary not found on system PATH.'
+            : 'SQLite file not found: $filePath',
         executedSql: sql,
       );
     }
@@ -180,7 +1169,7 @@ class SqlEngine {
           upper.startsWith('EXPLAIN');
 
       if (upper.startsWith('SELECT')) {
-        final eqpRes = await Process.run('/usr/bin/sqlite3', [
+        final eqpRes = await Process.run(cli, [
           '-json',
           filePath,
           'EXPLAIN QUERY PLAN $trimmed',
@@ -188,10 +1177,19 @@ class SqlEngine {
         if (eqpRes.exitCode == 0) {
           final out = (eqpRes.stdout as String).trim();
           if (out.isNotEmpty) {
-            final decoded = jsonDecode(out) as List<dynamic>;
-            for (final item in decoded) {
-              if (item is Map && item['detail'] != null) {
-                explainPlan.add(item['detail'].toString());
+            try {
+              final decoded = jsonDecode(out) as List<dynamic>;
+              for (final item in decoded) {
+                if (item is Map && item['detail'] != null) {
+                  explainPlan.add(item['detail'].toString());
+                }
+              }
+            } catch (_) {
+              for (final line in out.split('\n')) {
+                final clean = line.trim();
+                if (clean.isNotEmpty && clean != 'QUERY PLAN') {
+                  explainPlan.add(clean);
+                }
               }
             }
           }
@@ -199,7 +1197,7 @@ class SqlEngine {
       }
 
       if (isSelect) {
-        final res = await Process.run('/usr/bin/sqlite3', [
+        final res = await Process.run(cli, [
           '-json',
           filePath,
           trimmed,
@@ -246,9 +1244,10 @@ class SqlEngine {
           executedSql: sql,
         );
       } else {
-        final res = await Process.run('/usr/bin/sqlite3', [
+        final stmtWithSemi = trimmed.endsWith(';') ? trimmed : '$trimmed;';
+        final res = await Process.run(cli, [
           filePath,
-          '$trimmed;\nSELECT changes();',
+          '$stmtWithSemi\nSELECT changes();',
         ]);
         sw.stop();
         if (res.exitCode != 0) {
@@ -262,7 +1261,7 @@ class SqlEngine {
         }
         final lines = (res.stdout as String).trim().split('\n');
         final changes =
-            lines.isNotEmpty ? (int.tryParse(lines.last.trim()) ?? 1) : 1;
+            lines.isNotEmpty ? (int.tryParse(lines.last.trim()) ?? 0) : 0;
         return QueryResult(
           columns: const ['status', 'affected_rows'],
           rows: [
@@ -288,8 +1287,9 @@ class SqlEngine {
 
   /// Introspects a real SQLite 3 database file on disk using `sqlite_master` and `PRAGMA` statements.
   static Future<List<DbTableSchema>> introspectSqliteFile(
-    String filePath,
+    String rawPath,
   ) async {
+    final filePath = resolvePath(rawPath);
     if (!hasSqliteCli || !File(filePath).existsSync()) return [];
     final tables = <DbTableSchema>[];
     try {
@@ -311,7 +1311,7 @@ class SqlEngine {
         if (!isView) {
           final fkRes = await executeOnSqliteFile(
             filePath,
-            'PRAGMA foreign_key_list($tableName);',
+            'PRAGMA foreign_key_list("$tableName");',
           );
           for (final fk in fkRes.rows) {
             final fromCol = fk['from']?.toString();
@@ -326,7 +1326,7 @@ class SqlEngine {
         // Columns
         final colRes = await executeOnSqliteFile(
           filePath,
-          'PRAGMA table_info($tableName);',
+          'PRAGMA table_info("$tableName");',
         );
         final columns = <DbColumnSchema>[];
         for (final cRow in colRes.rows) {
@@ -355,7 +1355,7 @@ class SqlEngine {
         if (!isView) {
           final idxRes = await executeOnSqliteFile(
             filePath,
-            'PRAGMA index_list($tableName);',
+            'PRAGMA index_list("$tableName");',
           );
           for (final iRow in idxRes.rows) {
             final idxName = iRow['name']?.toString() ?? '';
@@ -365,7 +1365,7 @@ class SqlEngine {
                 : iRow['unique']?.toString() == '1');
             final infoRes = await executeOnSqliteFile(
               filePath,
-              'PRAGMA index_info($idxName);',
+              'PRAGMA index_info("$idxName");',
             );
             final idxCols = infoRes.rows
                 .map((r) => r['name']?.toString() ?? '')
@@ -382,10 +1382,38 @@ class SqlEngine {
           }
         }
 
+        // Triggers
+        final triggers = <DbTriggerSchema>[];
+        if (!isView) {
+          final trgRes = await executeOnSqliteFile(
+            filePath,
+            "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND tbl_name = '${tableName.replaceAll("'", "''")}';",
+          );
+          for (final tRow in trgRes.rows) {
+            final trgName = tRow['name']?.toString() ?? '';
+            final trgSql = tRow['sql']?.toString() ?? '';
+            if (trgName.isEmpty) continue;
+            final upperSql = trgSql.toUpperCase();
+            final timing = upperSql.contains('BEFORE') ? 'BEFORE' : 'AFTER';
+            final event = upperSql.contains('DELETE')
+                ? 'DELETE'
+                : (upperSql.contains('UPDATE') ? 'UPDATE' : 'INSERT');
+            triggers.add(
+              DbTriggerSchema(
+                name: trgName,
+                tableName: tableName,
+                timing: timing,
+                event: event,
+                definitionSql: trgSql,
+              ),
+            );
+          }
+        }
+
         // Rows
         final dataRes = await executeOnSqliteFile(
           filePath,
-          'SELECT * FROM $tableName LIMIT 200;',
+          'SELECT * FROM "$tableName" LIMIT 200;',
         );
 
         final colIndex = idx % 3;
@@ -401,6 +1429,7 @@ class SqlEngine {
             sizeBytes: math.max(4096, dataRes.rows.length * 256),
             columns: columns,
             indexes: indexes,
+            triggers: triggers,
             ddlSql: ddl,
             rows: dataRes.rows,
             erPosition: Offset(40.0 + colIndex * 310.0, 40.0 + rowIndex * 250.0),

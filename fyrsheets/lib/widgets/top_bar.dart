@@ -297,12 +297,12 @@ class TopBar extends StatelessWidget {
           ),
         ),
         PopupMenuItem(
-          value: 'fyrdemos',
+          value: 'fyrslides',
           child: Row(
             children: [
               Icon(Icons.slideshow_rounded, size: 15),
               SizedBox(width: 8),
-              Text('fyrDemos — Presentation Studio (.odp / .pptx)',
+              Text('fyrSlides — Presentation Studio (.odp / .pptx)',
                   style: TextStyle(fontSize: 12)),
             ],
           ),

@@ -50,8 +50,9 @@ You can also install individual app suites (Creative, Office, or Dev) on Ubuntu/
 ```bash
 chmod +x install_suite.sh
 ./install_suite.sh --suite creative          # Sound Booth (fyrdaw), fyrGraphics, fyrDirector
-./install_suite.sh --suite office            # fyrDocs, fyrSheets, fyrSlides
+./install_suite.sh --suite office            # fyrDocs, fyrSheets, fyrSlides, fyrPDF
 ./install_suite.sh --suite dev               # FyrCode, FyrApi, fyrDB, fyrPods
+./install_suite.sh --app fyrjournal          # fyrJournal (Linux & Arch/Ubuntu on WSL)
 ./install_suite.sh --suite creative --deb    # Also package .deb installers into ./dist/deb/
 ```
 
@@ -193,7 +194,8 @@ sway
   ![Sheets](screenshots/fyrsheets.png)
 - **fyrSlides** (`fyrOffice`): OpenDocument (`.odp`) and PowerPoint (`.pptx`) presentation studio.
   ![Slides](screenshots/fyrslides.png)
-- **fyrDB**: Universal database manager, SQL IDE, and ER diagram studio (DBeaver clone).
+- **fyrPDF** (`fyrOffice`): Fast native PDF reader with thumbnails, table of contents outline, bookmarks, in-document text search, rotation, dark reading mode, and drag-and-drop opening.
+- **fyrDB**: Universal database manager, SQL IDE, and ER diagram studio with guided connection setup wizard (SQLite, PostgreSQL, MySQL/MariaDB, DuckDB, Redis).
   ![DB](screenshots/fyrdb.png)
 - **fyrPods**: Container, pod, image, and compose stack manager (Podman / Docker).
   ![Pods](screenshots/fyrpods.png)
@@ -203,7 +205,7 @@ sway
   ![Clock](screenshots/clock.png)
 - **Calculator** (`fyrCalculator`): High-contrast, modern calculator.
   ![Calculator](screenshots/calc.png)
-- **Journal** (`fyrJournal`): Personal journal and note-taking application.
+- **Journal** (`fyrJournal`): Personal journal and note-taking application (native Linux & WSLg compatible).
   ![Journal](screenshots/journal.png)
 
 ### Companion Mobile Launcher
