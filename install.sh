@@ -209,7 +209,7 @@ build_swayfx() {
     echo "Building and installing local swayfx..."
     if [ -d "./swayfx" ]; then
         cd ./swayfx
-        if [ ! -f "build/build.ninja" ] || ! grep -q "scenefx-0.5" build/build.ninja 2>/dev/null; then
+        if [ ! -f "build/build.ninja" ] || ! grep -q "subprojects/scenefx/libscenefx-0.5.a" build/build.ninja 2>/dev/null; then
             rm -rf build
             meson setup build
         fi

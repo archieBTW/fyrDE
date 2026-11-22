@@ -10,8 +10,8 @@ build-*/
 .lvimrc
 config-debug
 wayland-*-protocol.*
-/subprojects/wlroots
-subprojects
+/subprojects/*
+!/subprojects/scenefx
 result
 
 # ignore the build output from build.sh

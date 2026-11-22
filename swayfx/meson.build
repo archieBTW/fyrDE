@@ -40,9 +40,13 @@ if is_freebsd
 	add_project_arguments('-D_C11_SOURCE', language: 'c')
 endif
 
-# Execute the scenefx subproject, if any
+# Execute the vendored patched scenefx subproject (statically linked), if any
 subproject(
 	'scenefx',
+	default_options: [
+		'default_library=static',
+		'examples=false',
+	],
 	required: false,
 )
 scenefx = dependency('scenefx-0.5', fallback: 'scenefx')
