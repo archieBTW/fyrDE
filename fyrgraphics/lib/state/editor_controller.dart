@@ -5,11 +5,16 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import '../engine/pixel_ops.dart';
+import '../engine/pro_pixel_ops.dart';
 import '../engine/project_io.dart';
 import '../models/editor_types.dart';
 
 class EditorController extends ChangeNotifier {
   static const int maxHistoryEntries = 35;
+
+  // Workspace Mode (Simple is default; easy toggle to Advanced)
+  WorkspaceMode workspaceMode = WorkspaceMode.simple;
+  bool get isAdvancedMode => workspaceMode == WorkspaceMode.advanced;
 
   final List<GraphicsDocument> documents = [];
   int activeDocIndex = 0;
@@ -17,10 +22,19 @@ class EditorController extends ChangeNotifier {
   // Active Tool & Parameters
   ToolType activeTool = ToolType.brush;
   SelectionMode selectionMode = SelectionMode.replace;
+  SymmetryMode symmetryMode = SymmetryMode.off;
 
+  BrushPresetKind activeBrushPreset = BrushPresetKind.hardRound;
   double brushSize = 24.0;
   double brushHardness = 0.75; // 0.0 (soft) .. 1.0 (hard)
   double brushOpacity = 1.0;
+  double brushSpacing = 0.18;
+  double brushScatter = 0.0;
+  double brushRoundness = 1.0;
+  double brushAngleDeg = 0.0;
+
+  double toneStrength = 0.45;
+  bool spongeDesaturate = false;
 
   double eraserSize = 32.0;
   double eraserHardness = 0.8;
@@ -120,6 +134,82 @@ class EditorController extends ChangeNotifier {
       statusMessage = null;
       notifyListeners();
     });
+    notifyListeners();
+  }
+
+  void setWorkspaceMode(WorkspaceMode mode) {
+    if (workspaceMode == mode) return;
+    workspaceMode = mode;
+    if (mode == WorkspaceMode.simple) {
+      if (!kSimpleModeTools.contains(activeTool)) {
+        activeTool = ToolType.brush;
+      }
+      symmetryMode = SymmetryMode.off;
+      topDockTab = 0;
+      bottomDockTab = 0;
+      setStatus('Switched to Simple Mode');
+    } else {
+      setStatus('Advanced Pro Studio unlocked — 24 tools, Curves, Symmetry & more');
+    }
+    notifyListeners();
+  }
+
+  void toggleWorkspaceMode() {
+    setWorkspaceMode(
+      isAdvancedMode ? WorkspaceMode.simple : WorkspaceMode.advanced,
+    );
+  }
+
+  void applyBrushPreset(BrushPreset preset) {
+    activeBrushPreset = preset.kind;
+    brushSize = preset.size;
+    brushHardness = preset.hardness;
+    brushOpacity = preset.opacity;
+    brushSpacing = preset.spacing;
+    brushScatter = preset.scatter;
+    brushRoundness = preset.roundness;
+    brushAngleDeg = preset.angleDeg;
+    if (activeTool != ToolType.brush) {
+      activeTool = ToolType.brush;
+    }
+    setStatus('Brush preset: ${preset.name}');
+    notifyListeners();
+  }
+
+  void setSymmetryMode(SymmetryMode mode) {
+    symmetryMode = mode;
+    setStatus(
+      mode == SymmetryMode.off
+          ? 'Symmetry Off'
+          : 'Symmetry: ${mode.label}',
+    );
+    notifyListeners();
+  }
+
+  void setCompositionGuide(CompositionGuide guide) {
+    final doc = activeDoc;
+    if (doc == null) return;
+    doc.compositionGuide = guide;
+    notifyListeners();
+  }
+
+  void addGuide({required bool horizontal, required double pos}) {
+    final doc = activeDoc;
+    if (doc == null) return;
+    if (horizontal) {
+      doc.hGuides.add(pos.clamp(0, doc.height.toDouble()));
+    } else {
+      doc.vGuides.add(pos.clamp(0, doc.width.toDouble()));
+    }
+    notifyListeners();
+  }
+
+  void clearGuides() {
+    final doc = activeDoc;
+    if (doc == null) return;
+    doc.hGuides.clear();
+    doc.vGuides.clear();
+    doc.compositionGuide = CompositionGuide.none;
     notifyListeners();
   }
 
@@ -494,6 +584,172 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void toggleLayerAlphaLock(int index) {
+    final doc = activeDoc;
+    if (doc == null || index < 0 || index >= doc.layers.length) return;
+    doc.layers[index].alphaLock = !doc.layers[index].alphaLock;
+    setStatus(
+      doc.layers[index].alphaLock
+          ? 'Alpha Lock enabled on ${doc.layers[index].name}'
+          : 'Alpha Lock disabled',
+    );
+    notifyListeners();
+  }
+
+  void toggleLayerClippingMask(int index) {
+    final doc = activeDoc;
+    if (doc == null || index <= 0 || index >= doc.layers.length) {
+      setStatus('Clipping Mask requires a layer below');
+      return;
+    }
+    doc.layers[index].clippingMask = !doc.layers[index].clippingMask;
+    doc.dirty = true;
+    _recordHistoryEntry(doc, 'Toggle Clipping Mask');
+    notifyListeners();
+  }
+
+  Future<void> stampVisibleLayer() async {
+    final doc = activeDoc;
+    if (doc == null) return;
+    final flat = await ProjectIO.compositeDocumentToStraightRgba(doc);
+    final img = await PixelOps.decodeStraightRgbaToUiImage(
+      flat,
+      doc.width,
+      doc.height,
+    );
+    final stamped = RasterLayer(
+      id: _newId(),
+      name: 'Stamped Visible',
+      width: doc.width,
+      height: doc.height,
+      pixels: flat,
+      cachedImage: img,
+    );
+    doc.layers.add(stamped);
+    doc.activeLayerIndex = doc.layers.length - 1;
+    doc.dirty = true;
+    _recordHistoryEntry(doc, 'Stamp Visible');
+    setStatus('Stamped visible layers into new top layer');
+    notifyListeners();
+  }
+
+  void selectLayerPixels(int index) {
+    final doc = activeDoc;
+    if (doc == null || index < 0 || index >= doc.layers.length) return;
+    final layer = doc.layers[index];
+    final mask = Uint8List(doc.width * doc.height);
+    for (int y = 0; y < layer.height; y++) {
+      final dy = (y + layer.offsetY).round();
+      if (dy < 0 || dy >= doc.height) continue;
+      for (int x = 0; x < layer.width; x++) {
+        final dx = (x + layer.offsetX).round();
+        if (dx < 0 || dx >= doc.width) continue;
+        mask[dy * doc.width + dx] = layer.pixels[(y * layer.width + x) * 4 + 3];
+      }
+    }
+    final bounds = PixelOps.computeMaskBounds(mask, doc.width, doc.height);
+    if (bounds == null) {
+      setStatus('Layer has no opaque pixels to select');
+      return;
+    }
+    doc.selection = SelectionState(
+      mask: mask,
+      bounds: bounds,
+      outlinePath: PixelOps.computeMaskOutlinePath(mask, doc.width, doc.height),
+    );
+    setStatus('Selected opaque pixels of ${layer.name}');
+    notifyListeners();
+  }
+
+  void featherSelection(double radius) {
+    final doc = activeDoc;
+    if (doc == null || !doc.selection.hasSelection) {
+      setStatus('Make a selection first');
+      return;
+    }
+    final feathered = ProPixelOps.featherSelectionMask(
+      doc.selection.mask!,
+      doc.width,
+      doc.height,
+      radius,
+    );
+    final bounds = PixelOps.computeMaskBounds(feathered, doc.width, doc.height);
+    doc.selection = SelectionState(
+      mask: feathered,
+      bounds: bounds,
+      outlinePath: bounds != null
+          ? PixelOps.computeMaskOutlinePath(feathered, doc.width, doc.height)
+          : null,
+    );
+    _recordHistoryEntry(doc, 'Feather Selection');
+    setStatus('Feathered selection (${radius.round()}px)');
+    notifyListeners();
+  }
+
+  void expandOrContractSelection(int deltaPx) {
+    final doc = activeDoc;
+    if (doc == null || !doc.selection.hasSelection) {
+      setStatus('Make a selection first');
+      return;
+    }
+    final morphed = ProPixelOps.morphSelectionMask(
+      doc.selection.mask!,
+      doc.width,
+      doc.height,
+      deltaPx,
+    );
+    final bounds = PixelOps.computeMaskBounds(morphed, doc.width, doc.height);
+    if (bounds == null) {
+      doc.selection.clear();
+    } else {
+      doc.selection = SelectionState(
+        mask: morphed,
+        bounds: bounds,
+        outlinePath:
+            PixelOps.computeMaskOutlinePath(morphed, doc.width, doc.height),
+      );
+    }
+    _recordHistoryEntry(
+      doc,
+      deltaPx >= 0 ? 'Expand Selection' : 'Contract Selection',
+    );
+    setStatus(
+      '${deltaPx >= 0 ? 'Expanded' : 'Contracted'} selection by ${deltaPx.abs()}px',
+    );
+    notifyListeners();
+  }
+
+  Future<void> strokeSelection(int strokeWidth) async {
+    final doc = activeDoc;
+    final layer = doc?.activeLayer;
+    if (doc == null || layer == null || !doc.selection.hasSelection) {
+      setStatus('Make a selection first');
+      return;
+    }
+    if (layer.locked || !layer.visible || layer.isTextLayer) return;
+    ProPixelOps.strokeSelectionMask(
+      pixels: layer.pixels,
+      width: layer.width,
+      height: layer.height,
+      selectionMask: doc.selection.mask!,
+      selectionWidth: doc.width,
+      selectionHeight: doc.height,
+      color: foregroundColor,
+      strokeWidth: strokeWidth,
+      layerOffsetX: layer.offsetX,
+      layerOffsetY: layer.offsetY,
+    );
+    layer.cachedImage = await PixelOps.decodeStraightRgbaToUiImage(
+      layer.pixels,
+      layer.width,
+      layer.height,
+    );
+    doc.dirty = true;
+    _recordHistoryEntry(doc, 'Stroke Selection');
+    setStatus('Stroked selection (${strokeWidth}px)');
+    notifyListeners();
+  }
+
   void setLayerOpacity(int index, double opacity, {bool commitHistory = false}) {
     final doc = activeDoc;
     if (doc == null || index < 0 || index >= doc.layers.length) return;
@@ -671,23 +927,120 @@ class EditorController extends ChangeNotifier {
       return;
     }
 
-    final localFrom =
-        Offset(canvasFrom.dx - layer.offsetX, canvasFrom.dy - layer.offsetY);
-    final localTo =
-        Offset(canvasTo.dx - layer.offsetX, canvasTo.dy - layer.offsetY);
+    final segments = ProPixelOps.expandSymmetrySegments(
+      canvasFrom,
+      canvasTo,
+      doc.width,
+      doc.height,
+      isAdvancedMode ? symmetryMode : SymmetryMode.off,
+    );
 
-    PixelOps.drawStrokeSegment(
+    for (final (segFrom, segTo) in segments) {
+      final localFrom =
+          Offset(segFrom.dx - layer.offsetX, segFrom.dy - layer.offsetY);
+      final localTo =
+          Offset(segTo.dx - layer.offsetX, segTo.dy - layer.offsetY);
+
+      ProPixelOps.drawProStrokeSegment(
+        pixels: layer.pixels,
+        width: layer.width,
+        height: layer.height,
+        from: localFrom,
+        to: localTo,
+        radius: (isEraser ? eraserSize : brushSize) / 2.0,
+        hardness: isPencil ? 1.0 : (isEraser ? eraserHardness : brushHardness),
+        opacity: isPencil ? 1.0 : (isEraser ? eraserOpacity : brushOpacity),
+        color: foregroundColor,
+        erase: isEraser,
+        hardPixelEdge: isPencil,
+        alphaLock: layer.alphaLock,
+        spacing: (isEraser || isPencil) ? 0.16 : brushSpacing,
+        scatter: (isEraser || isPencil) ? 0.0 : brushScatter,
+        roundness: (isEraser || isPencil) ? 1.0 : brushRoundness,
+        angleDeg: (isEraser || isPencil) ? 0.0 : brushAngleDeg,
+        selectionMask: doc.selection.mask,
+        selectionWidth: doc.width,
+        selectionHeight: doc.height,
+        layerOffsetX: layer.offsetX,
+        layerOffsetY: layer.offsetY,
+      );
+    }
+    doc.dirty = true;
+    _scheduleLayerImageUpload(layer);
+  }
+
+  void paintToneSegment(Offset canvasFrom, Offset canvasTo,
+      {required String mode}) {
+    final doc = activeDoc;
+    final layer = doc?.activeLayer;
+    if (doc == null || layer == null || layer.locked || !layer.visible) return;
+    if (layer.isTextLayer) return;
+
+    final segments = ProPixelOps.expandSymmetrySegments(
+      canvasFrom,
+      canvasTo,
+      doc.width,
+      doc.height,
+      isAdvancedMode ? symmetryMode : SymmetryMode.off,
+    );
+
+    for (final (segFrom, segTo) in segments) {
+      ProPixelOps.applyToneBrush(
+        pixels: layer.pixels,
+        width: layer.width,
+        height: layer.height,
+        from: Offset(segFrom.dx - layer.offsetX, segFrom.dy - layer.offsetY),
+        to: Offset(segTo.dx - layer.offsetX, segTo.dy - layer.offsetY),
+        radius: brushSize / 2.0,
+        strength: toneStrength,
+        mode: mode,
+        selectionMask: doc.selection.mask,
+        selectionWidth: doc.width,
+        selectionHeight: doc.height,
+        layerOffsetX: layer.offsetX,
+        layerOffsetY: layer.offsetY,
+      );
+    }
+    doc.dirty = true;
+    _scheduleLayerImageUpload(layer);
+  }
+
+  void paintSharpenSegment(Offset canvasFrom, Offset canvasTo) {
+    final doc = activeDoc;
+    final layer = doc?.activeLayer;
+    if (doc == null || layer == null || layer.locked || !layer.visible) return;
+    if (layer.isTextLayer) return;
+
+    ProPixelOps.applySharpenBrush(
       pixels: layer.pixels,
       width: layer.width,
       height: layer.height,
-      from: localFrom,
-      to: localTo,
-      radius: (isEraser ? eraserSize : brushSize) / 2.0,
-      hardness: isPencil ? 1.0 : (isEraser ? eraserHardness : brushHardness),
-      opacity: isPencil ? 1.0 : (isEraser ? eraserOpacity : brushOpacity),
-      color: foregroundColor,
-      erase: isEraser,
-      hardPixelEdge: isPencil,
+      from: Offset(canvasFrom.dx - layer.offsetX, canvasFrom.dy - layer.offsetY),
+      to: Offset(canvasTo.dx - layer.offsetX, canvasTo.dy - layer.offsetY),
+      radius: brushSize / 2.0,
+      strength: toneStrength,
+      selectionMask: doc.selection.mask,
+      selectionWidth: doc.width,
+      selectionHeight: doc.height,
+      layerOffsetX: layer.offsetX,
+      layerOffsetY: layer.offsetY,
+    );
+    doc.dirty = true;
+    _scheduleLayerImageUpload(layer);
+  }
+
+  void paintSpotHeal(Offset canvasPos) {
+    final doc = activeDoc;
+    final layer = doc?.activeLayer;
+    if (doc == null || layer == null || layer.locked || !layer.visible) return;
+    if (layer.isTextLayer) return;
+
+    ProPixelOps.applySpotHeal(
+      pixels: layer.pixels,
+      width: layer.width,
+      height: layer.height,
+      center: Offset(canvasPos.dx - layer.offsetX, canvasPos.dy - layer.offsetY),
+      radius: brushSize / 2.0,
       selectionMask: doc.selection.mask,
       selectionWidth: doc.width,
       selectionHeight: doc.height,

@@ -72,12 +72,22 @@ class ToolOptionsBar extends StatelessWidget {
         return 'Pencil';
       case ToolType.eraser:
         return 'Eraser';
+      case ToolType.dodge:
+        return 'Dodge';
+      case ToolType.burn:
+        return 'Burn';
+      case ToolType.sponge:
+        return 'Sponge';
+      case ToolType.healingBrush:
+        return 'Spot Heal';
       case ToolType.cloneStamp:
         return 'Clone Stamp';
       case ToolType.smudge:
         return 'Smudge';
       case ToolType.blurBrush:
         return 'Blur Brush';
+      case ToolType.sharpenBrush:
+        return 'Sharpen';
       case ToolType.bucket:
         return 'Paint Bucket';
       case ToolType.gradient:
@@ -100,6 +110,38 @@ class ToolOptionsBar extends StatelessWidget {
       case ToolType.smudge:
       case ToolType.blurBrush:
         return [
+          if (tool == ToolType.brush && ctrl.isAdvancedMode) ...[
+            Container(
+              height: 26,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              margin: const EdgeInsets.only(right: 10),
+              decoration: BoxDecoration(
+                color: FyrTheme.cardColor,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: FyrTheme.dividerColor),
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<BrushPresetKind>(
+                  value: ctrl.activeBrushPreset,
+                  isDense: true,
+                  dropdownColor: FyrTheme.surfaceColor,
+                  style: TextStyle(fontSize: 11, color: FyrTheme.textColor),
+                  items: kBrushPresets
+                      .map((p) => DropdownMenuItem(
+                            value: p.kind,
+                            child: Text(p.name),
+                          ))
+                      .toList(),
+                  onChanged: (k) {
+                    if (k == null) return;
+                    final preset =
+                        kBrushPresets.firstWhere((p) => p.kind == k);
+                    ctrl.applyBrushPreset(preset);
+                  },
+                ),
+              ),
+            ),
+          ],
           _sliderChip(
             label: 'Size',
             valueText: '${ctrl.brushSize.round()}px',
@@ -111,7 +153,8 @@ class ToolOptionsBar extends StatelessWidget {
               ctrl.refresh();
             },
           ),
-          if (tool == ToolType.brush || tool == ToolType.cloneStamp)
+          if ((tool == ToolType.brush || tool == ToolType.cloneStamp) &&
+              ctrl.isAdvancedMode)
             _sliderChip(
               label: 'Hardness',
               valueText: '${(ctrl.brushHardness * 100).round()}%',
@@ -134,6 +177,21 @@ class ToolOptionsBar extends StatelessWidget {
               ctrl.refresh();
             },
           ),
+          if (tool == ToolType.brush && ctrl.isAdvancedMode) ...[
+            _sliderChip(
+              label: 'Scatter',
+              valueText: '${(ctrl.brushScatter * 100).round()}%',
+              value: ctrl.brushScatter,
+              min: 0.0,
+              max: 1.5,
+              onChanged: (v) {
+                ctrl.brushScatter = v;
+                ctrl.refresh();
+              },
+            ),
+            const SizedBox(width: 6),
+            _symmetrySelector(ctrl),
+          ],
           if (tool == ToolType.cloneStamp)
             Padding(
               padding: const EdgeInsets.only(left: 10),
@@ -144,6 +202,72 @@ class ToolOptionsBar extends StatelessWidget {
                 style: TextStyle(fontSize: 11, color: FyrTheme.textColorMuted),
               ),
             ),
+        ];
+
+      case ToolType.dodge:
+      case ToolType.burn:
+      case ToolType.sponge:
+      case ToolType.sharpenBrush:
+      case ToolType.healingBrush:
+        return [
+          _sliderChip(
+            label: 'Size',
+            valueText: '${ctrl.brushSize.round()}px',
+            value: ctrl.brushSize,
+            min: 4,
+            max: 200,
+            onChanged: (v) {
+              ctrl.brushSize = v;
+              ctrl.refresh();
+            },
+          ),
+          if (tool != ToolType.healingBrush)
+            _sliderChip(
+              label: 'Strength',
+              valueText: '${(ctrl.toneStrength * 100).round()}%',
+              value: ctrl.toneStrength,
+              min: 0.1,
+              max: 1.0,
+              onChanged: (v) {
+                ctrl.toneStrength = v;
+                ctrl.refresh();
+              },
+            ),
+          if (tool == ToolType.sponge) ...[
+            ChoiceChip(
+              label: const Text('Saturate', style: TextStyle(fontSize: 10.5)),
+              selected: !ctrl.spongeDesaturate,
+              visualDensity: VisualDensity.compact,
+              selectedColor: FyrTheme.accentColor.withValues(alpha: 0.25),
+              onSelected: (_) {
+                ctrl.spongeDesaturate = false;
+                ctrl.refresh();
+              },
+            ),
+            const SizedBox(width: 4),
+            ChoiceChip(
+              label: const Text('Desaturate', style: TextStyle(fontSize: 10.5)),
+              selected: ctrl.spongeDesaturate,
+              visualDensity: VisualDensity.compact,
+              selectedColor: FyrTheme.accentColor.withValues(alpha: 0.25),
+              onSelected: (_) {
+                ctrl.spongeDesaturate = true;
+                ctrl.refresh();
+              },
+            ),
+          ],
+          if (tool == ToolType.healingBrush)
+            Padding(
+              padding: const EdgeInsets.only(left: 8),
+              child: Text(
+                'Click or dab blemishes to blend seamlessly with surrounding texture',
+                style: TextStyle(fontSize: 11, color: FyrTheme.textColorMuted),
+              ),
+            ),
+          if (ctrl.isAdvancedMode && tool != ToolType.healingBrush) ...[
+            const SizedBox(width: 8),
+            _symmetrySelector(ctrl),
+          ],
         ];
 
       case ToolType.pencil:
@@ -449,6 +573,41 @@ class ToolOptionsBar extends StatelessWidget {
           ),
         ];
     }
+  }
+
+  Widget _symmetrySelector(EditorController ctrl) {
+    return Container(
+      height: 26,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      decoration: BoxDecoration(
+        color: ctrl.symmetryMode == SymmetryMode.off
+            ? FyrTheme.cardColor
+            : FyrTheme.accentColor.withValues(alpha: 0.18),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(
+          color: ctrl.symmetryMode == SymmetryMode.off
+              ? FyrTheme.dividerColor
+              : FyrTheme.accentColor.withValues(alpha: 0.6),
+        ),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<SymmetryMode>(
+          value: ctrl.symmetryMode,
+          isDense: true,
+          dropdownColor: FyrTheme.surfaceColor,
+          style: TextStyle(fontSize: 11, color: FyrTheme.textColor),
+          items: SymmetryMode.values
+              .map((m) => DropdownMenuItem(
+                    value: m,
+                    child: Text('Symmetry: ${m.label}'),
+                  ))
+              .toList(),
+          onChanged: (m) {
+            if (m != null) ctrl.setSymmetryMode(m);
+          },
+        ),
+      ),
+    );
   }
 
   Widget _sliderChip({

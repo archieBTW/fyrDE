@@ -27,8 +27,16 @@ struct LayerOverlayConfig {
 struct LayerOverlayState {
   GtkWindow *window = nullptr;
   FlView *view = nullptr;
+  FlMethodChannel *channel = nullptr;
   LayerOverlayConfig config;
   bool visible = false;
+
+  ~LayerOverlayState() {
+    if (channel) {
+      g_object_unref(channel);
+      channel = nullptr;
+    }
+  }
 };
 
 inline bool ShouldStartShown(char *const *argv) {
@@ -100,10 +108,18 @@ inline void ShowLayerOverlay(LayerOverlayState *state,
   }
 }
 
+inline void NotifyDartOverlayHidden(LayerOverlayState *state) {
+  if (!state || !state->channel) return;
+  fl_method_channel_invoke_method(state->channel, "onHidden", nullptr, nullptr,
+                                  nullptr, nullptr);
+}
+
 inline gboolean OnLayerOverlayDelete(GtkWidget * /*widget*/,
                                      GdkEvent * /*event*/,
                                      gpointer user_data) {
-  HideLayerOverlay(static_cast<LayerOverlayState *>(user_data));
+  auto *state = static_cast<LayerOverlayState *>(user_data);
+  HideLayerOverlay(state);
+  NotifyDartOverlayHidden(state);
   return TRUE;
 }
 
@@ -113,6 +129,7 @@ inline gboolean OnLayerOverlayFocusOut(GtkWidget * /*widget*/,
   auto *state = static_cast<LayerOverlayState *>(user_data);
   if (state && state->visible && state->config.hide_on_focus_out) {
     HideLayerOverlay(state);
+    NotifyDartOverlayHidden(state);
   }
   return FALSE;
 }
@@ -176,6 +193,10 @@ inline void AttachLayerOverlayChannel(LayerOverlayState *state,
   g_autoptr(FlMethodChannel) channel = fl_method_channel_new(
       fl_engine_get_binary_messenger(fl_view_get_engine(view)),
       "fyr/overlay_window", FL_METHOD_CODEC(codec));
+  if (state->channel) {
+    g_object_unref(state->channel);
+  }
+  state->channel = FL_METHOD_CHANNEL(g_object_ref(channel));
   fl_method_channel_set_method_call_handler(
       channel,
       [](FlMethodChannel * /*channel*/, FlMethodCall *method_call,

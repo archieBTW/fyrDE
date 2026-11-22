@@ -7,7 +7,21 @@ import 'package:fyrtaskbar/fyr_theme.dart';
 import 'package:fyrtaskbar/models/notification.dart';
 import 'package:fyrtaskbar/notification_service.dart';
 import 'package:fyrtaskbar/phone_service.dart';
+import 'package:fyrtaskbar/services/mpris_service.dart';
+import 'package:fyrtaskbar/services/tray_service.dart';
 import 'package:fyrtaskbar/services/update_scheduler.dart';
+
+class ScreenshotPreview {
+  final String filePath;
+  final String label;
+  final DateTime timestamp;
+
+  const ScreenshotPreview({
+    required this.filePath,
+    required this.label,
+    required this.timestamp,
+  });
+}
 
 class SystemState {
   static final ValueNotifier<int> batteryLevel = ValueNotifier(100);
@@ -38,6 +52,10 @@ class SystemState {
       ValueNotifier([]);
   static final ValueNotifier<List<FyrNotification>> activePopups =
       ValueNotifier([]);
+  static final ValueNotifier<bool> doNotDisturb = ValueNotifier(false);
+  static final ValueNotifier<ScreenshotPreview?> activeScreenshotToast =
+      ValueNotifier(null);
+  static Timer? _screenshotTimer;
   static int _nextNotificationId = 1;
 
   static bool _isUpdating = false;
@@ -84,8 +102,11 @@ class SystemState {
     update();
     updateSwayState();
     _loadWeatherLocation();
+    _loadTaskbarSettings();
     NotificationService.init();
     PhoneService.init();
+    MprisService.init();
+    TrayService.init();
     UpdateScheduler.init();
     // Periodic fallback runs at 15s for slow-changing hardware stats (battery, wifi, bt)
     // while Sway, volume, and Fyr config changes arrive immediately via event streams.
@@ -104,6 +125,8 @@ class SystemState {
   static Future<void> dispose() async {
     _timer?.cancel();
     _timer = null;
+    _screenshotTimer?.cancel();
+    _screenshotTimer = null;
     await _swaySub?.cancel();
     _swaySub = null;
     _pactlSub?.kill();
@@ -112,7 +135,82 @@ class SystemState {
     _swayDirSub = null;
     await _dockDirSub?.cancel();
     _dockDirSub = null;
+    await MprisService.dispose();
+    await TrayService.dispose();
     UpdateScheduler.dispose();
+  }
+
+  static Future<void> _loadTaskbarSettings() async {
+    final file = File(
+      '${Platform.environment['HOME']}/.config/fyrtaskbar/settings.json',
+    );
+    if (await file.exists()) {
+      try {
+        final data = jsonDecode(await file.readAsString());
+        if (data is Map && data['do_not_disturb'] is bool) {
+          doNotDisturb.value = data['do_not_disturb'] as bool;
+        }
+      } catch (_) {}
+    }
+  }
+
+  static Future<void> setDoNotDisturb(bool enabled) async {
+    doNotDisturb.value = enabled;
+    if (enabled) {
+      activePopups.value = [];
+    }
+    try {
+      final file = File(
+        '${Platform.environment['HOME']}/.config/fyrtaskbar/settings.json',
+      );
+      if (!await file.parent.exists()) {
+        await file.parent.create(recursive: true);
+      }
+      Map<String, dynamic> data = {};
+      if (await file.exists()) {
+        try {
+          data = Map<String, dynamic>.from(
+            jsonDecode(await file.readAsString()) as Map,
+          );
+        } catch (_) {}
+      }
+      data['do_not_disturb'] = enabled;
+      await file.writeAsString(jsonEncode(data));
+    } catch (_) {}
+  }
+
+  static Future<void> toggleDoNotDisturb() async {
+    await setDoNotDisturb(!doNotDisturb.value);
+  }
+
+  static void showScreenshotPreview(
+    String filePath, {
+    String label = 'Screenshot saved',
+  }) {
+    activeScreenshotToast.value = ScreenshotPreview(
+      filePath: filePath,
+      label: label,
+      timestamp: DateTime.now(),
+    );
+    resumeScreenshotPreviewTimer();
+  }
+
+  static void pauseScreenshotPreviewTimer() {
+    _screenshotTimer?.cancel();
+    _screenshotTimer = null;
+  }
+
+  static void resumeScreenshotPreviewTimer() {
+    _screenshotTimer?.cancel();
+    _screenshotTimer = Timer(const Duration(seconds: 9), () {
+      activeScreenshotToast.value = null;
+    });
+  }
+
+  static void dismissScreenshotPreview() {
+    _screenshotTimer?.cancel();
+    _screenshotTimer = null;
+    activeScreenshotToast.value = null;
   }
 
   static void _startSwaySubscription() {
@@ -451,15 +549,21 @@ class SystemState {
     );
 
     notifications.value = [notification, ...notifications.value];
-    activePopups.value = [...activePopups.value, notification];
 
-    // Play sound
-    _playNotificationSound(appName, title);
+    final isPriority =
+        title.toLowerCase().contains('find my') ||
+        title.toLowerCase().contains('incoming call') ||
+        appName.toLowerCase().contains('phone');
 
-    if (notification.timeout > 0) {
-      Timer(Duration(milliseconds: notification.timeout), () {
-        dismissPopup(notification.id, reason: 1); // 1 = expired
-      });
+    if (!doNotDisturb.value || isPriority) {
+      activePopups.value = [...activePopups.value, notification];
+      _playNotificationSound(appName, title);
+
+      if (notification.timeout > 0) {
+        Timer(Duration(milliseconds: notification.timeout), () {
+          dismissPopup(notification.id, reason: 1); // 1 = expired
+        });
+      }
     }
   }
 
@@ -488,6 +592,20 @@ class SystemState {
     notifications.value = notifications.value.where((n) => n.id != id).toList();
     dismissPopup(id);
     NotificationService.sendNotificationClosed(id, reason);
+  }
+
+  static void dismissAppNotifications(String appName) {
+    final ids = notifications.value
+        .where((n) => n.appName == appName)
+        .map((n) => n.id)
+        .toSet();
+    notifications.value =
+        notifications.value.where((n) => n.appName != appName).toList();
+    activePopups.value =
+        activePopups.value.where((n) => !ids.contains(n.id)).toList();
+    for (final id in ids) {
+      NotificationService.sendNotificationClosed(id, 3);
+    }
   }
 
   static void clearAllNotifications() {

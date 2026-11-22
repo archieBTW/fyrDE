@@ -156,7 +156,11 @@ class _EditorShellState extends State<EditorShell> {
         return KeyEventResult.handled;
       }
       if (key == LogicalKeyboardKey.keyA) {
-        ctrl.selectAll();
+        if (isShift) {
+          ctrl.toggleWorkspaceMode();
+        } else {
+          ctrl.selectAll();
+        }
         return KeyEventResult.handled;
       }
       if (key == LogicalKeyboardKey.keyD) {
@@ -317,8 +321,20 @@ class _EditorShellState extends State<EditorShell> {
       ctrl.setTool(ToolType.eraser);
       return KeyEventResult.handled;
     }
-    if (key == LogicalKeyboardKey.keyS) {
+    if (key == LogicalKeyboardKey.keyS && ctrl.isAdvancedMode) {
       ctrl.setTool(ToolType.cloneStamp);
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.keyO && ctrl.isAdvancedMode) {
+      ctrl.setTool(isShift ? ToolType.burn : ToolType.dodge);
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.keyK && ctrl.isAdvancedMode) {
+      ctrl.setTool(ToolType.sponge);
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.keyJ && ctrl.isAdvancedMode) {
+      ctrl.setTool(ToolType.healingBrush);
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.keyG) {

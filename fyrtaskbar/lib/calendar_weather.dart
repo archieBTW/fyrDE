@@ -48,6 +48,7 @@ class _CalendarMenuPopupState extends State<CalendarMenuPopup>
   DateTime _selectedDate = DateTime.now();
   final TextEditingController _locationController = TextEditingController();
   List<CalendarEvent> _events = [];
+  final Set<String> _collapsedAppGroups = {};
 
   @override
   void initState() {
@@ -420,59 +421,270 @@ class _CalendarMenuPopupState extends State<CalendarMenuPopup>
                 );
               },
             ),
-            ValueListenableBuilder<List<FyrNotification>>(
-              valueListenable: SystemState.notifications,
-              builder: (context, notifications, _) {
-                if (notifications.isEmpty) return const SizedBox.shrink();
-                return Flexible(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Divider(height: 1, color: FyrTheme.cardColor),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              'NOTIFICATIONS',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                                color: FyrTheme.textColorMuted,
-                                letterSpacing: 1.2,
-                              ),
+            ValueListenableBuilder<bool>(
+              valueListenable: SystemState.doNotDisturb,
+              builder: (context, dnd, _) {
+                return ValueListenableBuilder<List<FyrNotification>>(
+                  valueListenable: SystemState.notifications,
+                  builder: (context, notifications, _) {
+                    if (notifications.isEmpty && !dnd) {
+                      return const SizedBox.shrink();
+                    }
+
+                    // Group notifications by appName preserving most-recent order
+                    final groups = <String, List<FyrNotification>>{};
+                    for (final n in notifications) {
+                      final key =
+                          n.appName.trim().isEmpty ? 'System' : n.appName.trim();
+                      groups.putIfAbsent(key, () => []).add(n);
+                    }
+                    final groupEntries = groups.entries.toList();
+
+                    return Flexible(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Divider(height: 1, color: FyrTheme.cardColor),
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  'NOTIFICATIONS',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: FyrTheme.textColorMuted,
+                                    letterSpacing: 1.2,
+                                  ),
+                                ),
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    InkWell(
+                                      onTap: () =>
+                                          SystemState.toggleDoNotDisturb(),
+                                      borderRadius: BorderRadius.circular(10),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 3,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: dnd
+                                              ? FyrTheme.accentColor
+                                                    .withOpacity(0.2)
+                                              : FyrTheme.cardColor,
+                                          borderRadius: BorderRadius.circular(
+                                            10,
+                                          ),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              dnd
+                                                  ? Icons.notifications_off
+                                                  : Icons
+                                                        .notifications_none,
+                                              size: 12,
+                                              color: dnd
+                                                  ? FyrTheme.accentColor
+                                                  : FyrTheme.textColorMuted,
+                                            ),
+                                            const SizedBox(width: 4),
+                                            Text(
+                                              dnd ? 'DND On' : 'DND',
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.w600,
+                                                color: dnd
+                                                    ? FyrTheme.accentColor
+                                                    : FyrTheme.textColorMuted,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                    if (notifications.isNotEmpty) ...[
+                                      const SizedBox(width: 12),
+                                      InkWell(
+                                        onTap: () =>
+                                            SystemState.clearAllNotifications(),
+                                        child: Text(
+                                          'Clear All',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: FyrTheme.accentColor,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ],
                             ),
-                            InkWell(
-                              onTap: () => SystemState.clearAllNotifications(),
+                          ),
+                          if (notifications.isEmpty)
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
                               child: Text(
-                                'Clear All',
+                                'Do Not Disturb is active — popups are muted.',
                                 style: TextStyle(
                                   fontSize: 12,
-                                  color: FyrTheme.accentColor,
+                                  color: FyrTheme.textColorMuted,
                                 ),
                               ),
+                            )
+                          else
+                            Flexible(
+                              child: ListView.builder(
+                                shrinkWrap: true,
+                                padding: const EdgeInsets.fromLTRB(
+                                  12,
+                                  0,
+                                  12,
+                                  12,
+                                ),
+                                itemCount: groupEntries.length,
+                                itemBuilder: (context, index) {
+                                  final entry = groupEntries[index];
+                                  final appName = entry.key;
+                                  final items = entry.value;
+
+                                  if (items.length == 1) {
+                                    return Padding(
+                                      padding: const EdgeInsets.only(bottom: 8),
+                                      child: NotificationCard(
+                                        notification: items.first,
+                                      ),
+                                    );
+                                  }
+
+                                  final isCollapsed = _collapsedAppGroups
+                                      .contains(appName);
+
+                                  return Container(
+                                    margin: const EdgeInsets.only(bottom: 10),
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: FyrTheme.cardColor.withOpacity(
+                                        0.35,
+                                      ),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                        color: FyrTheme.cardColor,
+                                      ),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
+                                      children: [
+                                        InkWell(
+                                          onTap: () {
+                                            setState(() {
+                                              if (isCollapsed) {
+                                                _collapsedAppGroups.remove(
+                                                  appName,
+                                                );
+                                              } else {
+                                                _collapsedAppGroups.add(
+                                                  appName,
+                                                );
+                                              }
+                                            });
+                                          },
+                                          child: Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 4,
+                                              vertical: 4,
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                Icon(
+                                                  isCollapsed
+                                                      ? Icons
+                                                            .keyboard_arrow_right
+                                                      : Icons
+                                                            .keyboard_arrow_down,
+                                                  size: 16,
+                                                  color:
+                                                      FyrTheme.textColorMuted,
+                                                ),
+                                                const SizedBox(width: 4),
+                                                Expanded(
+                                                  child: Text(
+                                                    '${appName.toUpperCase()}  •  ${items.length}',
+                                                    style: TextStyle(
+                                                      fontSize: 11,
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                      color:
+                                                          FyrTheme.accentColor,
+                                                      letterSpacing: 0.8,
+                                                    ),
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                  ),
+                                                ),
+                                                InkWell(
+                                                  onTap: () =>
+                                                      SystemState
+                                                          .dismissAppNotifications(
+                                                        items.first.appName,
+                                                      ),
+                                                  child: Padding(
+                                                    padding:
+                                                        const EdgeInsets.symmetric(
+                                                          horizontal: 4,
+                                                        ),
+                                                    child: Text(
+                                                      'Clear',
+                                                      style: TextStyle(
+                                                        fontSize: 11,
+                                                        color: FyrTheme
+                                                            .textColorMuted,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                        if (isCollapsed)
+                                          Padding(
+                                            padding: const EdgeInsets.only(
+                                              top: 4,
+                                            ),
+                                            child: NotificationCard(
+                                              notification: items.first,
+                                            ),
+                                          )
+                                        else
+                                          ...items.map(
+                                            (n) => Padding(
+                                              padding: const EdgeInsets.only(
+                                                top: 6,
+                                              ),
+                                              child: NotificationCard(
+                                                notification: n,
+                                              ),
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              ),
                             ),
-                          ],
-                        ),
+                        ],
                       ),
-                      Flexible(
-                        child: ListView.builder(
-                          shrinkWrap: true,
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          itemCount: notifications.length,
-                          itemBuilder: (context, index) {
-                            final n = notifications[index];
-                            return Padding(
-                              padding: const EdgeInsets.only(bottom: 8),
-                              child: NotificationCard(notification: n),
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
+                    );
+                  },
                 );
               },
             ),

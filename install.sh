@@ -22,7 +22,7 @@ WIDTH=$(echo $RES | cut -d'x' -f1)
 HEIGHT=$(echo $RES | cut -d'x' -f2)
 echo "Detected resolution: ${WIDTH}x${HEIGHT}"
 
-flutter_apps=("fyrdock" "fyroverview" "fyrwindowoverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrstore" "fyrvirt" "fyrav" "fyrtext" "fyrdaw" "fyrphone" "fyrcalculator" "fyrcode" "fyrvideo" "fyrmusic" "fyrphotos" "fyrcamera" "fyrbrowser" "fyrjournal" "fyrcalender" "fyrclock" "fyrtorrent" "fyrapi" "fyrgraphics" "fyremu" "fyrdirector" "fyrdisks" "fyrmonitor" "fyrdocs" "fyrsheets" "fyrslides" "fyrdb" "fyrpods")
+flutter_apps=("fyrdock" "fyroverview" "fyrwindowoverview" "fyrsearch" "fyrsettings" "fyrtaskbar" "fyrterm" "fyrfiles" "fyrhelp" "fyremoji" "fyrclipboard" "fyrstore" "fyrvirt" "fyrav" "fyrtext" "fyrdaw" "fyrphone" "fyrcalculator" "fyrcode" "fyrvideo" "fyrmusic" "fyrphotos" "fyrcamera" "fyrbrowser" "fyrjournal" "fyrcalender" "fyrclock" "fyrtorrent" "fyrapi" "fyrgraphics" "devign" "fyremu" "fyrdirector" "fyrdisks" "fyrmonitor" "fyrdocs" "fyrsheets" "fyrslides" "fyrdb" "fyrpods")
 
 # --- Progress Tracking & Terminal Management ---
 CURRENT_STEP=0
@@ -254,7 +254,7 @@ reinstall_app() {
 restart_overlay_daemon_if_running() {
     local app=$1
     case "$app" in
-        fyrsearch|fyroverview|fyrwindowoverview|fyremoji)
+        fyrsearch|fyroverview|fyrwindowoverview|fyremoji|fyrclipboard)
             if command -v swaymsg &> /dev/null && swaymsg -t get_version &> /dev/null; then
                 pkill -x "$app" 2>/dev/null || true
                 rm -f "$HOME/.config/fyr/overlay-$app.sock"
@@ -888,6 +888,22 @@ MimeType=image/png;image/jpeg;image/webp;image/bmp;image/gif;image/tiff;applicat
 Keywords=gimp;photoshop;photopea;image;editor;layers;graphics;
 EOF
             ;;
+        "devign")
+            sudo ln -sf /opt/devign/devign /usr/local/bin/devign
+            sudo tee /usr/share/applications/devign.desktop > /dev/null <<'EOF'
+[Desktop Entry]
+Name=devign
+GenericName=UI/UX Design & Prototyping Studio
+Comment=Vector UI design, auto-layout, interactive prototyping, and code export studio for FyrDE
+Exec=/usr/local/bin/devign %f
+Icon=applications-graphics
+Terminal=false
+Type=Application
+Categories=Graphics;2DGraphics;VectorGraphics;Development;
+MimeType=application/x-devign;image/svg+xml;
+Keywords=figma;design;vector;ui;ux;prototype;wireframe;devign;
+EOF
+            ;;
         "fyremu")
             sudo ln -sf /opt/fyremu/fyremu /usr/local/bin/fyremu
             if [ -f "./fyremu/assets/icons/fyremu.png" ]; then
@@ -1010,7 +1026,7 @@ EOF
             fi
             sudo cp ./fyrpods/fyrpods.desktop /usr/share/applications/fyrpods.desktop
             ;;
-        "fyrdock"|"fyrtaskbar"|"fyroverview"|"fyrwindowoverview"|"fyrsearch"|"fyrhelp"|"fyremoji")
+        "fyrdock"|"fyrtaskbar"|"fyroverview"|"fyrwindowoverview"|"fyrsearch"|"fyrhelp"|"fyremoji"|"fyrclipboard")
             sudo ln -sf "/opt/$app/$app" "/usr/local/bin/$app"
             ;;
     esac
@@ -1181,7 +1197,7 @@ setup_sway_config() {
     cat << 'EOF' > ~/.config/fyr/toggle_floating.sh
 #!/bin/bash
 CONF="$HOME/.config/sway/floating.conf"
-EXCLUDED="fyrtaskbar|fyrdock|fyrdesktop|fyrsearch|launcher|fyroverview|fyrwindowoverview|fyrhelp|fyremoji"
+EXCLUDED="fyrtaskbar|fyrdock|fyrdesktop|fyrsearch|launcher|fyroverview|fyrwindowoverview|fyrhelp|fyremoji|fyrclipboard"
 if [ -f "$CONF" ] && grep -q "floating enable" "$CONF"; then
     echo "" > "$CONF"
     if swaymsg 'unfor_window [class=".*"] floating enable' >/dev/null 2>&1; then
@@ -1191,9 +1207,9 @@ if [ -f "$CONF" ] && grep -q "floating enable" "$CONF"; then
         swaymsg 'default_floating_border auto 4' >/dev/null 2>&1 || true
         swaymsg 'gaps inner 20' >/dev/null 2>&1 || true
         swaymsg 'gaps outer 20' >/dev/null 2>&1 || true
-        swaymsg "[floating workspace=\"^[0-9]+$\" app_id=\"^(?!($EXCLUDED)$).*$\"] floating disable; [tiling] border auto 2; gaps inner all set 20; gaps outer all set 20" >/dev/null 2>&1 || true
+        swaymsg "[workspace=\"^[0-9]+$\" app_id=\"^(?!($EXCLUDED)$).*$\"] floating disable; [tiling] border auto 2; gaps inner all set 20; gaps outer all set 20" >/dev/null 2>&1 || true
     else
-        swaymsg "[floating workspace=\"^[0-9]+$\" app_id=\"^(?!($EXCLUDED)$).*$\"] floating disable; [tiling] border auto 2; gaps inner all set 20; gaps outer all set 20" >/dev/null 2>&1 || true
+        swaymsg "[workspace=\"^[0-9]+$\" app_id=\"^(?!($EXCLUDED)$).*$\"] floating disable; [tiling] border auto 2; gaps inner all set 20; gaps outer all set 20" >/dev/null 2>&1 || true
         swaymsg reload >/dev/null 2>&1 || true
     fi
 else
@@ -1231,7 +1247,7 @@ EOF
 
 set -u
 
-HIDE_APPS='^(fyrhelp|fyremoji)$'
+HIDE_APPS='^(fyrhelp|fyremoji|fyrclipboard)$'
 PANEL_APPS='^(fyrtaskbar|fyrdock|fyrdesktop|fyrsearch|launcher|fyroverview|fyrwindowoverview)$'
 
 command -v swaymsg >/dev/null 2>&1 || exit 0
@@ -1295,7 +1311,7 @@ def main():
     def get_windows(node):
         wins = []
         app_id = node.get('app_id'); class_name = node.get('window_properties', {}).get('class'); name = node.get('name')
-        excluded = ['fyrtaskbar', 'fyrdock', 'fyroverview', 'fyrsearch', 'fyrhelp', 'fyremoji']
+        excluded = ['fyrtaskbar', 'fyrdock', 'fyroverview', 'fyrsearch', 'fyrhelp', 'fyremoji', 'fyrclipboard']
         if not (app_id in excluded or class_name in excluded or name in excluded) and node.get('type') in ['con', 'floating_con'] and (app_id or class_name or name):
             if not node.get('nodes'): wins.append(node)
         for child in node.get('nodes', []) + node.get('floating_nodes', []): wins.extend(get_windows(child))
@@ -1408,7 +1424,17 @@ esac
 if command -v wl-copy &> /dev/null; then
     wl-copy -t image/png < "$OUT_FILE"
 fi
-if command -v notify-send &> /dev/null; then
+if command -v canberra-gtk-play &> /dev/null; then
+    canberra-gtk-play -i screen-capture >/dev/null 2>&1 &
+fi
+OSD_SOCK="$HOME/.config/fyr/osd.sock"
+SENT_TOAST=0
+if [ -S "$OSD_SOCK" ] && command -v python3 &> /dev/null; then
+    if python3 -c "import socket,sys; s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); s.settimeout(0.3); s.connect(sys.argv[1]); s.sendall((sys.argv[2]+'\n').encode()); s.close()" "$OSD_SOCK" "screenshot ${LABEL}|${OUT_FILE}" 2>/dev/null; then
+        SENT_TOAST=1
+    fi
+fi
+if [ "$SENT_TOAST" -eq 0 ] && command -v notify-send &> /dev/null; then
     notify-send -i "$OUT_FILE" "$LABEL saved" "Copied to clipboard & saved to ~/Pictures/screenshots/$(basename "$OUT_FILE")" || true
 fi
 EOF
@@ -1531,6 +1557,20 @@ fi
 /opt/fyremoji/fyremoji --show >/dev/null 2>&1 &
 EOF
     chmod +x ~/.config/fyr/emoji_toggle.sh
+
+    # Clipboard History Toggle Script
+    cat << 'EOF' > ~/.config/fyr/clipboard_toggle.sh
+#!/bin/bash
+SOCK="$HOME/.config/fyr/overlay-fyrclipboard.sock"
+COORDS=$(swaymsg -t get_outputs 2>/dev/null | jq -r '.[] | select(.focused) | "\(.rect.x),\(.rect.y)"' | head -n 1)
+
+if [ -S "$SOCK" ]; then
+    python3 -c "import socket,sys; s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); s.settimeout(0.3); s.connect(sys.argv[1]); s.sendall((sys.argv[2]+'\n').encode()); s.close()" "$SOCK" "toggle ${COORDS}" && exit 0
+fi
+
+/opt/fyrclipboard/fyrclipboard --show >/dev/null 2>&1 &
+EOF
+    chmod +x ~/.config/fyr/clipboard_toggle.sh
 
     # Task Manager (fyrMonitor) Toggle Script
     cat << 'EOF' > ~/.config/fyr/monitor_toggle.sh

@@ -1538,7 +1538,8 @@ void container_set_resizing(struct sway_container *con, bool resizing) {
 }
 
 void container_set_floating(struct sway_container *container, bool enable) {
-	if (container_is_floating(container) == enable) {
+	if (container_is_floating(container) == enable &&
+			container_is_floating_or_child(container) == enable) {
 		return;
 	}
 
@@ -1580,7 +1581,11 @@ void container_set_floating(struct sway_container *container, bool enable) {
 		if (container->scratchpad) {
 			root_scratchpad_remove_container(container);
 		}
+		struct sway_container *old_parent = container->pending.parent;
 		container_detach(container);
+		if (old_parent) {
+			container_reap_empty(old_parent);
+		}
 		struct sway_container *reference =
 			seat_get_focus_inactive_tiling(seat, workspace);
 		if (reference) {

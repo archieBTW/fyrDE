@@ -141,6 +141,28 @@ class ProjectIO {
         path.close();
         paintPath(path);
         break;
+      case ShapeKind.star:
+        final points = polygonSides.clamp(3, 16);
+        final center = rect.center;
+        final rx = rect.width / 2.0;
+        final ry = rect.height / 2.0;
+        final path = Path();
+        for (int i = 0; i < points * 2; i++) {
+          final a = -pi / 2 + (pi * i) / points;
+          final factor = i.isEven ? 1.0 : 0.45;
+          final pt = Offset(
+            center.dx + rx * factor * cos(a),
+            center.dy + ry * factor * sin(a),
+          );
+          if (i == 0) {
+            path.moveTo(pt.dx, pt.dy);
+          } else {
+            path.lineTo(pt.dx, pt.dy);
+          }
+        }
+        path.close();
+        paintPath(path);
+        break;
     }
 
     final picture = recorder.endRecording();
@@ -211,6 +233,12 @@ class ProjectIO {
       }
     }
   }
+
+  /// Composites all visible layers of [doc] into a straight-RGBA buffer.
+  static Future<Uint8List> compositeDocumentToStraightRgba(
+    GraphicsDocument doc,
+  ) =>
+      flattenLayers(doc.layers, doc.width, doc.height);
 
   /// Flattens a list of [RasterLayer]s onto a [width] x [height] canvas using
   /// hardware/Skia blend modes so exported output matches the viewport identically.

@@ -32,7 +32,7 @@ chmod +x install.sh
 | Flag | Description |
 |---|---|
 | `-F` | **Force full installation** (Default if no flags provided). |
-| `-a <app>` | Rebuild and reinstall a **specific application** (e.g., `./install.sh -a fyrTaskbar`). |
+| `-a <app>` | Rebuild and reinstall a **specific application** (e.g., `./install.sh -a fyrtaskbar`, `./install.sh -a fyrgraphics`, `./install.sh -a devign`). |
 | `-s` | Reinstall **Sway configuration** and scripts. |
 | `-l` | Reinstall **SDDM theme** and configuration. |
 | `-t` | Reinstall **GTK and icon themes**. |
@@ -69,13 +69,14 @@ The main modifier key (`$mod`) is the **Super/Windows** key.
 | Close Window | `Super + Q` |
 | Open Application Launcher (**fyrSearch**) | `Super + Space` |
 | Toggle Overview (**fyrOverview**) | `Super + Tab` |
-| Show Workspaces Overview | `Super + W` |
+| Show Workspaces Overview (**fyrWindowOverview**) | `Super + W` |
+| Open Clipboard History (**fyrClipboard**) | `Alt + V` |
 | Show Cheatsheet (**fyrHelp**) | `Super + Ctrl` |
 | Open Emoji Picker (**fyrEmoji**) | `Super + .` |
 | Open Task Manager (**fyrMonitor**) | `Ctrl + Shift + Esc` |
 | Open Terminal (**fyrTerm**) | `Super + T` |
 | Open File Manager (**fyrFiles**) | `Super + F` |
-| Toggle Floating Mode | `Super + M` |
+| Toggle Floating / Tiling Mode | `Super + M` |
 | Take a Screenshot (Full Screen) | `Print Screen` |
 | Take a Screenshot (Select Region) | `Shift + Print Screen` |
 | Take a Screenshot (Focused Window) | `Alt + Print Screen` |
@@ -83,8 +84,8 @@ The main modifier key (`$mod`) is the **Super/Windows** key.
 | **Window Management** | |
 | Change Focus | `Super + Arrow Keys` |
 | Resize Window | `Super + Shift + Arrow Keys` |
-| Split Horizontally | `Super + H` |
-| Split Vertically | `Super + V` |
+| Split Horizontally (Tiling Mode) | `Super + H` |
+| Split Vertically (Tiling Mode) | `Super + V` |
 | Focus Next/Prev Window | `Alt + Tab` / `Alt + Shift + Tab` |
 | **Workspaces** | |
 | Switch to Workspace 1-10 | `Super + 1-0` |
@@ -115,18 +116,19 @@ sway
 ---
 
 ### Core Desktop Components
-- **fyrTaskbar**: Top panel with system tray, clock, and quick settings.
+- **fyrTaskbar**: Top panel with desktop layer, notifications, screenshot toasts, system tray, clock, media controls, and frosted Quick Settings.
   ![Taskbar 1](screenshots/taskbar1.png)
   ![Taskbar 2](screenshots/taskbar2.png)
   ![Taskbar 3](screenshots/taskbar3.png)
-- **fyrDock**: macOS-like dock for launching apps and managing open windows.
-- **fyrSearch**: Spotlight-like application launcher and search tool.
+- **fyrDock**: Translucent dock for launching apps and managing open windows.
+- **fyrSearch**: Spotlight-like application launcher, inline calculator, and search tool.
   ![Search](screenshots/search.png)
-- **fyrOverview**: Exposé-like window and workspace overview.
+- **fyrOverview & fyrWindowOverview**: Exposé-like window and workspace overview.
   ![Overview](screenshots/overview.png)
-- **fyrHelp**: A quick-access keyboard shortcut cheatsheet.
+- **fyrClipboard**: Frosted-glass clipboard history manager with text & image history, pinning, filtering, and instant search (`Alt + V`).
+- **fyrHelp**: A quick-access keyboard shortcut cheatsheet (`Super + Ctrl`).
   ![Help](screenshots/fyrhelp.png)
-- **fyrEmoji**: An integrated emoji picker.
+- **fyrEmoji**: An integrated emoji picker (`Super + .`).
   ![Emoji](screenshots/fyremoji.png)
 
 ### Window Management
@@ -176,8 +178,9 @@ sway
   ![Camera](screenshots/camera.png)
 - **fyrTorrent**: BitTorrent and magnet link client.
   ![Torrent](screenshots/fyrtorrent.png)
-- **fyrGraphics**: Layered raster & vector image editor.
+- **fyrGraphics**: Layered raster & vector image editor with **Simple** and **Advanced Pro** workspace modes (Curves, Develop adjustments, Photo Looks, Symmetry drawing, Color Harmonies, Alpha Lock, Clipping Masks, and Stamp Visible).
   ![Graphics](screenshots/fyrgraphics.png)
+- **devign**: Vector UI/UX design & interactive prototyping studio with multi-page frames, Auto-Layout flexbox containers, reusable Master Components & Instances, Bezier pen paths, color tokens, live Prototype Player, and Flutter/CSS/SVG/PNG code & asset export.
 - **fyrEmu**: Multi-platform retro game emulator.
   ![Emulator](screenshots/fyremu.png)
 - **fyrDirector**: Non-linear video editor.
@@ -200,6 +203,9 @@ sway
   ![Calculator](screenshots/calc.png)
 - **Journal** (`fyrJournal`): Personal journal and note-taking application.
   ![Journal](screenshots/journal.png)
+
+### Companion Mobile Launcher
+- **fyrAndroid** (`fyrandroid/`): Lightweight native Kotlin Android launcher bringing the FyrDE aesthetic to mobile — paged `4×5` squircle home grid with frosted dock, swipe-up `fyrSearch` app drawer with immediate autofocus & inline calculator, swipe-down & optional top-edge Fyr Quick Settings sheet, and live Light/Dark mode + Fyr accent color customization.
 
 ---
 

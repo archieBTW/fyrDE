@@ -808,14 +808,6 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
     }
   }
 
-  void _openAppearanceSettings() {
-    final home = Platform.environment['HOME'] ?? '';
-    final bin = (home.isNotEmpty && File('$home/.local/bin/fyrsettings').existsSync())
-        ? '$home/.local/bin/fyrsettings'
-        : 'fyrsettings';
-    Process.start(bin, ['--appearance'], mode: ProcessStartMode.detached);
-  }
-
   Future<void> _extractArchive(String path) async {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Extracting ${p.basename(path)}...')),
@@ -4001,16 +3993,6 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
             },
           ),
         ),
-        PopupMenuItem(
-          child: ListTile(
-            leading: const Icon(Icons.palette),
-            title: const Text('Change Wallpaper / Appearance'),
-            onTap: () {
-              Navigator.pop(context);
-              _openAppearanceSettings();
-            },
-          ),
-        ),
       ],
     );
   }
@@ -4076,16 +4058,6 @@ class _FyrFilesState extends State<FyrFiles> with WindowListener {
             onTap: () {
               Navigator.pop(context);
               Process.run('fyrterm', [], workingDirectory: currentDir.path);
-            },
-          ),
-        ),
-        PopupMenuItem(
-          child: ListTile(
-            leading: const Icon(Icons.palette),
-            title: const Text('Change Wallpaper / Appearance'),
-            onTap: () {
-              Navigator.pop(context);
-              _openAppearanceSettings();
             },
           ),
         ),

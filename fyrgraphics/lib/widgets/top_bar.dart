@@ -4,9 +4,12 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 import '../engine/pixel_ops.dart';
+import '../engine/pro_pixel_ops.dart';
 import '../fyr_theme.dart';
+import '../models/editor_types.dart';
 import '../state/editor_controller.dart';
 import 'dialogs.dart';
+import 'pro_dialogs.dart';
 import 'traffic_lights.dart';
 
 class TopBar extends StatelessWidget {
@@ -139,6 +142,9 @@ class TopBar extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 8),
+                // Prominent Simple / Advanced Mode Toggle Pill
+                _WorkspaceModeToggle(ctrl: ctrl),
+                const SizedBox(width: 8),
                 IconButton(
                   icon: Icon(Icons.undo_rounded,
                       size: 17,
@@ -220,8 +226,11 @@ class TopBar extends StatelessWidget {
             ),
           ),
         ),
-        // Row 2: Photoshop/Photopea style Menu Bar
-        Container(
+        // Row 2: Simple Quick Action Bar OR Advanced Pro Menu Bar
+        if (!ctrl.isAdvancedMode)
+          _buildSimpleQuickBar(context, ctrl, doc)
+        else
+          Container(
           height: 30,
           padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
@@ -322,6 +331,40 @@ class TopBar extends StatelessWidget {
                       () => ctrl.flipCanvas(horizontal: false)),
                   const PopupMenuDivider(),
                   _menuItem(
+                    'Develop & Tone (Exposure / Temp / Vibrance)...',
+                    '',
+                    () => ProDialogs.showDevelopAdjust(context, ctrl),
+                  ),
+                  _menuItem(
+                    'Tone Curves (RGB / R / G / B)...',
+                    '',
+                    () => ProDialogs.showToneCurves(context, ctrl),
+                  ),
+                  _menuItem(
+                    'Photo Looks & Color Grades...',
+                    '',
+                    () => ProDialogs.showPhotoLooks(context, ctrl),
+                  ),
+                  const PopupMenuDivider(),
+                  _menuItem(
+                    'Auto Levels',
+                    '',
+                    () => ctrl.runImmediateFilter(
+                      'Auto Levels',
+                      (s, w, h, m) => ProPixelOps.autoLevels(s, selectionMask: m),
+                    ),
+                  ),
+                  _menuItem(
+                    'Auto White Balance',
+                    '',
+                    () => ctrl.runImmediateFilter(
+                      'Auto White Balance',
+                      (s, w, h, m) =>
+                          ProPixelOps.autoWhiteBalance(s, selectionMask: m),
+                    ),
+                  ),
+                  const PopupMenuDivider(),
+                  _menuItem(
                     'Brightness / Contrast...',
                     '',
                     () => FyrDialogs.showBrightnessContrast(context, ctrl),
@@ -397,6 +440,35 @@ class TopBar extends StatelessWidget {
                   _menuItem('Flip Layer Vertical', '',
                       () => ctrl.flipActiveLayer(horizontal: false)),
                   const PopupMenuDivider(),
+                  _menuItem(
+                    doc?.activeLayer?.alphaLock == true
+                        ? 'Disable Alpha Lock'
+                        : 'Enable Alpha Lock',
+                    '',
+                    doc == null
+                        ? null
+                        : () => ctrl.toggleLayerAlphaLock(doc.activeLayerIndex),
+                  ),
+                  _menuItem(
+                    doc?.activeLayer?.clippingMask == true
+                        ? 'Release Clipping Mask'
+                        : 'Create Clipping Mask',
+                    '',
+                    doc == null
+                        ? null
+                        : () =>
+                            ctrl.toggleLayerClippingMask(doc.activeLayerIndex),
+                  ),
+                  _menuItem(
+                    'Select Layer Pixels',
+                    '',
+                    doc == null
+                        ? null
+                        : () => ctrl.selectLayerPixels(doc.activeLayerIndex),
+                  ),
+                  const PopupMenuDivider(),
+                  _menuItem('Stamp Visible to New Layer', '',
+                      ctrl.stampVisibleLayer),
                   _menuItem('Merge Down', 'Ctrl+E', ctrl.mergeDown),
                   _menuItem('Flatten Image', '', ctrl.flattenImage),
                 ],
@@ -408,6 +480,22 @@ class TopBar extends StatelessWidget {
                   _menuItem('Deselect', 'Ctrl+D', ctrl.deselect),
                   _menuItem(
                       'Invert Selection', 'Ctrl+Shift+I', ctrl.invertSelection),
+                  const PopupMenuDivider(),
+                  _menuItem(
+                    'Feather Selection...',
+                    '',
+                    () => ProDialogs.showFeatherSelection(context, ctrl),
+                  ),
+                  _menuItem(
+                    'Expand / Contract...',
+                    '',
+                    () => ProDialogs.showModifySelection(context, ctrl),
+                  ),
+                  _menuItem(
+                    'Stroke Selection...',
+                    '',
+                    () => ProDialogs.showStrokeSelection(context, ctrl),
+                  ),
                 ],
               ),
               _MenuButton(
@@ -415,8 +503,20 @@ class TopBar extends StatelessWidget {
                 items: [
                   _menuItem('Gaussian Blur...', '',
                       () => FyrDialogs.showGaussianBlur(context, ctrl)),
+                  _menuItem('Motion Blur...', '',
+                      () => ProDialogs.showMotionBlur(context, ctrl)),
+                  _menuItem('Radial Zoom Blur...', '',
+                      () => ProDialogs.showRadialBlur(context, ctrl)),
+                  const PopupMenuDivider(),
+                  _menuItem('Unsharp Mask...', '',
+                      () => ProDialogs.showUnsharpMask(context, ctrl)),
                   _menuItem('Sharpen...', '',
                       () => FyrDialogs.showSharpen(context, ctrl)),
+                  const PopupMenuDivider(),
+                  _menuItem('Chromatic Aberration...', '',
+                      () => ProDialogs.showChromaticAberration(context, ctrl)),
+                  _menuItem('Halftone Dot Screen...', '',
+                      () => ProDialogs.showHalftone(context, ctrl)),
                   _menuItem('Pixelate / Mosaic...', '',
                       () => FyrDialogs.showPixelate(context, ctrl)),
                   _menuItem('Add Noise...', '',
@@ -462,6 +562,37 @@ class TopBar extends StatelessWidget {
                     'Ctrl+R',
                     ctrl.toggleRulers,
                   ),
+                  const PopupMenuDivider(),
+                  _menuItem('Guide: None', '',
+                      () => ctrl.setCompositionGuide(CompositionGuide.none)),
+                  _menuItem(
+                      'Guide: Rule of Thirds',
+                      '',
+                      () => ctrl.setCompositionGuide(
+                          CompositionGuide.ruleOfThirds)),
+                  _menuItem(
+                      'Guide: Golden Ratio',
+                      '',
+                      () => ctrl
+                          .setCompositionGuide(CompositionGuide.goldenRatio)),
+                  _menuItem(
+                      'Guide: Center Crosshair',
+                      '',
+                      () => ctrl.setCompositionGuide(
+                          CompositionGuide.centerCrosshair)),
+                  _menuItem(
+                    'Add Center H/V Guides',
+                    '',
+                    doc == null
+                        ? null
+                        : () {
+                            ctrl.addGuide(
+                                horizontal: true, pos: doc.height / 2.0);
+                            ctrl.addGuide(
+                                horizontal: false, pos: doc.width / 2.0);
+                          },
+                  ),
+                  _menuItem('Clear Guides', '', ctrl.clearGuides),
                 ],
               ),
               _MenuButton(
@@ -485,6 +616,143 @@ class TopBar extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildSimpleQuickBar(
+    BuildContext context,
+    EditorController ctrl,
+    GraphicsDocument? doc,
+  ) {
+    Widget quickBtn(IconData icon, String label, VoidCallback? onTap) {
+      return Padding(
+        padding: const EdgeInsets.only(right: 4),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(6),
+          onTap: onTap,
+          child: Container(
+            height: 24,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            decoration: BoxDecoration(
+              color: FyrTheme.cardColor.withValues(alpha: 0.7),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: FyrTheme.dividerColor),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, size: 13, color: FyrTheme.textColor),
+                const SizedBox(width: 5),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                    color: FyrTheme.textColor,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      height: 34,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: FyrTheme.contentColor,
+        border: Border(bottom: BorderSide(color: FyrTheme.dividerColor)),
+      ),
+      child: Row(
+        children: [
+          quickBtn(Icons.folder_open_rounded, 'Open', () async {
+            final res = await FilePicker.pickFiles(
+              type: FileType.custom,
+              allowedExtensions: [
+                'png',
+                'jpg',
+                'jpeg',
+                'webp',
+                'bmp',
+                'gif',
+                'fyrg',
+              ],
+            );
+            if (res != null && res.files.single.path != null) {
+              await ctrl.openFileFromPath(res.files.single.path!);
+            }
+          }),
+          quickBtn(Icons.auto_fix_high_rounded, 'Auto Enhance', () {
+            ctrl.runImmediateFilter(
+              'Auto Enhance',
+              (s, w, h, m) => ProPixelOps.autoLevels(
+                ProPixelOps.autoWhiteBalance(s, selectionMask: m),
+                selectionMask: m,
+              ),
+            );
+          }),
+          quickBtn(Icons.tune_rounded, 'Adjust',
+              () => ProDialogs.showDevelopAdjust(context, ctrl, simpleMode: true)),
+          quickBtn(Icons.palette_outlined, 'Photo Looks',
+              () => ProDialogs.showPhotoLooks(context, ctrl)),
+          quickBtn(Icons.blur_on_rounded, 'Blur',
+              () => FyrDialogs.showGaussianBlur(context, ctrl)),
+          quickBtn(Icons.rotate_right_rounded, 'Rotate',
+              () => ctrl.rotateCanvas(90)),
+          quickBtn(Icons.flip_rounded, 'Flip',
+              () => ctrl.flipCanvas(horizontal: true)),
+          const SizedBox(width: 8),
+          if (ctrl.statusMessage != null)
+            Expanded(
+              child: Text(
+                ctrl.statusMessage!,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: FyrTheme.accentColor,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            )
+          else
+            const Spacer(),
+          const SizedBox(width: 8),
+          InkWell(
+            borderRadius: BorderRadius.circular(6),
+            onTap: () => ctrl.setWorkspaceMode(WorkspaceMode.advanced),
+            child: Container(
+              height: 24,
+              padding: const EdgeInsets.symmetric(horizontal: 9),
+              decoration: BoxDecoration(
+                color: FyrTheme.accentColor.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  color: FyrTheme.accentColor.withValues(alpha: 0.45),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.auto_awesome,
+                      size: 12, color: FyrTheme.accentColor),
+                  const SizedBox(width: 5),
+                  Text(
+                    'Switch to Advanced Pro Studio',
+                    style: TextStyle(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w600,
+                      color: FyrTheme.accentColor,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -512,6 +780,87 @@ class TopBar extends StatelessWidget {
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+class _WorkspaceModeToggle extends StatelessWidget {
+  final EditorController ctrl;
+  const _WorkspaceModeToggle({required this.ctrl});
+
+  @override
+  Widget build(BuildContext context) {
+    final isAdv = ctrl.isAdvancedMode;
+    return Tooltip(
+      message: 'Switch between Simple and Advanced Pro Studio (Ctrl+Shift+A)',
+      child: Container(
+        height: 28,
+        padding: const EdgeInsets.all(2),
+        decoration: BoxDecoration(
+          color: FyrTheme.cardColor,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: FyrTheme.dividerColor),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _pill(
+              label: 'Simple',
+              icon: Icons.bolt_rounded,
+              selected: !isAdv,
+              onTap: () => ctrl.setWorkspaceMode(WorkspaceMode.simple),
+            ),
+            _pill(
+              label: 'Advanced',
+              icon: Icons.auto_awesome,
+              selected: isAdv,
+              onTap: () => ctrl.setWorkspaceMode(WorkspaceMode.advanced),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _pill({
+    required String label,
+    required IconData icon,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+        decoration: BoxDecoration(
+          color: selected ? FyrTheme.accentColor : Colors.transparent,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 12,
+              color: selected
+                  ? FyrTheme.getContrastingColor(FyrTheme.accentColor)
+                  : FyrTheme.textColorMuted,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: selected
+                    ? FyrTheme.getContrastingColor(FyrTheme.accentColor)
+                    : FyrTheme.textColorMuted,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

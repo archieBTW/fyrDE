@@ -67,9 +67,9 @@ bindsym $mod+l exec ~/.config/fyr/lock.sh
 # -------------------------------------------------------------
 # Window Splits
 # -------------------------------------------------------------
-# Split the current container vertically or horizontally
-bindsym $mod+v split v
-bindsym $mod+h split h
+# Split the current container vertically or horizontally (only when tiling)
+bindsym $mod+v [con_id=__focused__ tiling] split v
+bindsym $mod+h [con_id=__focused__ tiling] split h
 
 # -------------------------------------------------------------
 # Workspaces
@@ -171,8 +171,16 @@ bindsym $mod+Ctrl exec ~/.config/fyr/help_toggle.sh
 # Fyremoji Sway Configuration
 # ==========================================
 exec /opt/fyremoji/fyremoji
-layer_effects "fyremoji" blur enable; corner_radius 16
+layer_effects "fyremoji" blur enable; blur_ignore_transparent enable; corner_radius 20; shadows enable
 bindsym $mod+period exec ~/.config/fyr/emoji_toggle.sh
+
+
+# ==========================================
+# Fyrclipboard Sway Configuration
+# ==========================================
+exec /opt/fyrclipboard/fyrclipboard
+layer_effects "fyrclipboard" blur enable; blur_ignore_transparent enable; corner_radius 20; shadows enable
+bindsym Mod1+v exec ~/.config/fyr/clipboard_toggle.sh
 
 
 # ==========================================
@@ -187,7 +195,7 @@ bindsym Ctrl+Shift+Escape exec ~/.config/fyr/monitor_toggle.sh
 
 include ~/.config/sway/floating.conf
 # Keep Fyr overlay/panel surfaces borderless and native Flutter CSD apps free of duplicate SSD titlebars
-for_window [app_id="^(fyrtaskbar|fyrdock|fyrdesktop|fyrsearch|launcher|fyroverview|fyrwindowoverview|fyrhelp|fyremoji)$"] border none
+for_window [app_id="^(fyrtaskbar|fyrdock|fyrdesktop|fyrsearch|launcher|fyroverview|fyrwindowoverview|fyrhelp|fyremoji|fyrclipboard)$"] border none
 for_window [app_id="^dev\.fyrde\..+$"] border pixel 4
 
 # User-managed settings (preserved across updates)

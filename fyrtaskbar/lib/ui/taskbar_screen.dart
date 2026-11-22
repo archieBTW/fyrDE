@@ -4,16 +4,21 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:fyrtaskbar/calendar_weather.dart';
 import 'package:fyrtaskbar/fyr_theme.dart';
 import 'package:fyrtaskbar/phone_service.dart';
 import 'package:fyrtaskbar/services/app_service.dart';
+import 'package:fyrtaskbar/services/tray_service.dart';
 import 'package:fyrtaskbar/state/system_state.dart';
 import 'package:fyrtaskbar/ui/clock_widget.dart';
+import 'package:fyrtaskbar/ui/media_controls.dart';
 import 'package:fyrtaskbar/ui/notification_popup_overlay.dart';
 import 'package:fyrtaskbar/ui/phone_menu.dart';
 import 'package:fyrtaskbar/ui/quick_settings.dart';
+import 'package:fyrtaskbar/ui/screenshot_toast.dart';
 import 'package:fyrtaskbar/ui/start_menu.dart';
+import 'package:fyrtaskbar/ui/tray_menu_popup.dart';
 import 'package:fyrtaskbar/workspace_switcher.dart';
 import 'package:wayland_layer_shell/types.dart';
 import 'package:wayland_layer_shell/wayland_layer_shell.dart';
@@ -28,12 +33,14 @@ class TaskbarScreen extends StatefulWidget {
 
 class _TaskbarScreenState extends State<TaskbarScreen> {
   StreamSubscription<void>? _appsSub;
+  final FocusNode _focusNode = FocusNode();
 
   @override
   void initState() {
     super.initState();
     AppService.getInstalledAppsSync();
     SystemState.activePopups.addListener(_onPopupsChanged);
+    SystemState.activeScreenshotToast.addListener(_onPopupsChanged);
     _appsSub = AppService.onAppsChanged.listen((_) {
       if (mounted) _precacheStartMenuIcons();
     });
@@ -66,6 +73,8 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
   void dispose() {
     _appsSub?.cancel();
     SystemState.activePopups.removeListener(_onPopupsChanged);
+    SystemState.activeScreenshotToast.removeListener(_onPopupsChanged);
+    _focusNode.dispose();
     super.dispose();
   }
 
@@ -79,6 +88,16 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
   bool _isQuickSettingsOpen = false;
   bool _isCalendarOpen = false;
   bool _isPhoneMenuOpen = false;
+  TrayItem? _activeTrayItem;
+  List<TrayMenuEntry> _activeTrayEntries = const [];
+  double _trayMenuRight = 240;
+
+  bool get _hasOpenMenu =>
+      _isStartMenuOpen ||
+      _isQuickSettingsOpen ||
+      _isCalendarOpen ||
+      _isPhoneMenuOpen ||
+      _activeTrayItem != null;
 
   void _toggleStartMenu() async {
     setState(() {
@@ -87,8 +106,10 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
         _isQuickSettingsOpen = false;
         _isCalendarOpen = false;
         _isPhoneMenuOpen = false;
+        _activeTrayItem = null;
       }
     });
+    if (_isStartMenuOpen) _focusNode.requestFocus();
     _updateWindowSize();
   }
 
@@ -99,8 +120,10 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
         _isStartMenuOpen = false;
         _isCalendarOpen = false;
         _isPhoneMenuOpen = false;
+        _activeTrayItem = null;
       }
     });
+    if (_isQuickSettingsOpen) _focusNode.requestFocus();
     _updateWindowSize();
   }
 
@@ -111,21 +134,21 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
         _isStartMenuOpen = false;
         _isQuickSettingsOpen = false;
         _isPhoneMenuOpen = false;
+        _activeTrayItem = null;
       }
     });
+    if (_isCalendarOpen) _focusNode.requestFocus();
     _updateWindowSize();
   }
 
   void _closeMenus() {
-    if (_isStartMenuOpen ||
-        _isQuickSettingsOpen ||
-        _isCalendarOpen ||
-        _isPhoneMenuOpen) {
+    if (_hasOpenMenu) {
       setState(() {
         _isStartMenuOpen = false;
         _isQuickSettingsOpen = false;
         _isCalendarOpen = false;
         _isPhoneMenuOpen = false;
+        _activeTrayItem = null;
       });
       _updateWindowSize();
     }
@@ -138,21 +161,113 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
         _isStartMenuOpen = false;
         _isQuickSettingsOpen = false;
         _isCalendarOpen = false;
+        _activeTrayItem = null;
       }
     });
+    if (_isPhoneMenuOpen) _focusNode.requestFocus();
     _updateWindowSize();
   }
 
-  bool _isOverlayLayer = false;
+  Future<void> _openTrayMenu(TrayItem item, Offset globalPos) async {
+    if (_activeTrayItem?.serviceKey == item.serviceKey) {
+      setState(() => _activeTrayItem = null);
+      _updateWindowSize();
+      return;
+    }
+    final entries = await TrayService.fetchMenu(item);
+    if (!mounted) return;
+    final rightOffset = (SystemState.screenWidth - globalPos.dx - 120)
+        .clamp(12.0, math.max(12.0, SystemState.screenWidth - 260.0))
+        .toDouble();
+    setState(() {
+      _isStartMenuOpen = false;
+      _isQuickSettingsOpen = false;
+      _isCalendarOpen = false;
+      _isPhoneMenuOpen = false;
+      _activeTrayItem = item;
+      _activeTrayEntries = entries;
+      _trayMenuRight = rightOffset;
+    });
+    _focusNode.requestFocus();
+    _updateWindowSize();
+  }
 
-  void _updateWindowSize() async {
+  Widget _buildTrayIcon(TrayItem item) {
+    if (item.resolvedIconFile != null) {
+      final path = item.resolvedIconFile!;
+      if (path.toLowerCase().endsWith('.svg')) {
+        return SvgPicture.file(
+          File(path),
+          width: 18,
+          height: 18,
+          fit: BoxFit.contain,
+        );
+      }
+      return Image.file(
+        File(path),
+        width: 18,
+        height: 18,
+        fit: BoxFit.contain,
+        errorBuilder: (_, __, ___) => Icon(
+          Icons.apps,
+          size: 16,
+          color: FyrTheme.textColor.withOpacity(0.85),
+        ),
+      );
+    }
+    if (item.pixmapImage != null) {
+      return RawImage(
+        image: item.pixmapImage,
+        width: 18,
+        height: 18,
+        fit: BoxFit.contain,
+      );
+    }
+    return Icon(
+      Icons.circle,
+      size: 10,
+      color: FyrTheme.accentColor,
+    );
+  }
+
+  bool _isOverlayLayer = false;
+  bool _isExclusiveKeyboard = false;
+  bool _updatingWindowSize = false;
+  bool _pendingWindowSizeUpdate = false;
+  int _lastWindowWidth = -1;
+  int _lastWindowHeight = -1;
+  String _lastInputRegionKey = '';
+
+  void _updateWindowSize() {
+    if (_updatingWindowSize) {
+      _pendingWindowSizeUpdate = true;
+      return;
+    }
+    _updatingWindowSize = true;
+    () async {
+      try {
+        do {
+          _pendingWindowSizeUpdate = false;
+          await _applyWindowState();
+        } while (_pendingWindowSizeUpdate && mounted);
+      } finally {
+        _updatingWindowSize = false;
+      }
+    }();
+  }
+
+  Future<void> _applyWindowState() async {
     const channel = MethodChannel('fyrtaskbar/resize');
     final waylandLayerShellPlugin = WaylandLayerShell();
-    final expanded = _isStartMenuOpen ||
-        _isQuickSettingsOpen ||
-        _isCalendarOpen ||
-        _isPhoneMenuOpen ||
-        SystemState.activePopups.value.isNotEmpty;
+    final hasOpenMenu = _hasOpenMenu;
+    final hasScreenshot = SystemState.activeScreenshotToast.value != null;
+    final popupCount = SystemState.activePopups.value.length;
+    final hasToast = hasScreenshot || popupCount > 0;
+    final expanded = hasOpenMenu || hasToast;
+
+    final int screenWidth = SystemState.screenWidth;
+    final int screenHeight = SystemState.screenHeight;
+    final int targetHeight = expanded ? screenHeight : 56;
 
     if (expanded) {
       if (!_isOverlayLayer) {
@@ -161,26 +276,103 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
           await waylandLayerShellPlugin.setLayer(ShellLayer.layerOverlay);
         } catch (_) {}
       }
-      try {
-        await channel.invokeMethod('setSize', {
-          'width': SystemState.screenWidth,
-          'height': SystemState.screenHeight,
-        });
-      } catch (_) {}
-      await windowManager.setSize(
-        Size(
-          SystemState.screenWidth.toDouble(),
-          SystemState.screenHeight.toDouble(),
-        ),
-      );
+
+      if (hasOpenMenu != _isExclusiveKeyboard) {
+        _isExclusiveKeyboard = hasOpenMenu;
+        try {
+          await waylandLayerShellPlugin.setKeyboardMode(
+            hasOpenMenu
+                ? ShellKeyboardMode.keyboardModeExclusive
+                : ShellKeyboardMode.keyboardModeOnDemand,
+          );
+        } catch (_) {}
+      }
+
+      if (_lastWindowWidth != screenWidth ||
+          _lastWindowHeight != targetHeight) {
+        _lastWindowWidth = screenWidth;
+        _lastWindowHeight = targetHeight;
+        try {
+          await channel.invokeMethod('setSize', {
+            'width': screenWidth,
+            'height': targetHeight,
+          });
+        } catch (_) {}
+        try {
+          await windowManager.setSize(
+            Size(screenWidth.toDouble(), targetHeight.toDouble()),
+          );
+        } catch (_) {}
+      }
+
+      if (hasOpenMenu) {
+        if (_lastInputRegionKey != 'full') {
+          _lastInputRegionKey = 'full';
+          try {
+            await channel.invokeMethod('setInputRegion', {'full': true});
+          } catch (_) {}
+        }
+      } else {
+        // Passive toasts/notifications only: restrict input to the top bar and
+        // the top-right overlay area so the rest of the desktop stays clickable.
+        final int toastWidth = math.min(356, screenWidth);
+        final int toastX = math.max(0, screenWidth - toastWidth);
+        final int maxToastHeight = math.max(0, screenHeight - 56);
+        final int desiredToastHeight = popupCount > 0
+            ? (hasScreenshot ? 290 : 12) + math.min(popupCount, 3) * 180 + 24
+            : 290;
+        final int toastHeight = math.min(maxToastHeight, desiredToastHeight);
+        final regionKey =
+            'toast:$screenWidth:$toastX:$toastWidth:$toastHeight';
+        if (_lastInputRegionKey != regionKey) {
+          _lastInputRegionKey = regionKey;
+          try {
+            await channel.invokeMethod('setInputRegion', {
+              'rects': [
+                {'x': 0, 'y': 0, 'width': screenWidth, 'height': 56},
+                if (toastHeight > 0)
+                  {
+                    'x': toastX,
+                    'y': 56,
+                    'width': toastWidth,
+                    'height': toastHeight,
+                  },
+              ],
+            });
+          } catch (_) {}
+        }
+      }
     } else {
-      try {
-        await channel.invokeMethod('setSize', {
-          'width': SystemState.screenWidth,
-          'height': 56,
-        });
-      } catch (_) {}
-      await windowManager.setSize(Size(SystemState.screenWidth.toDouble(), 56));
+      if (_isExclusiveKeyboard) {
+        _isExclusiveKeyboard = false;
+        try {
+          await waylandLayerShellPlugin.setKeyboardMode(
+            ShellKeyboardMode.keyboardModeOnDemand,
+          );
+        } catch (_) {}
+      }
+
+      if (_lastWindowWidth != screenWidth || _lastWindowHeight != 56) {
+        _lastWindowWidth = screenWidth;
+        _lastWindowHeight = 56;
+        try {
+          await channel.invokeMethod('setSize', {
+            'width': screenWidth,
+            'height': 56,
+          });
+        } catch (_) {}
+        try {
+          await windowManager.setSize(Size(screenWidth.toDouble(), 56));
+        } catch (_) {}
+      }
+
+      if (_lastInputRegionKey != 'full') {
+        _lastInputRegionKey = 'full';
+        try {
+          await channel.invokeMethod('setInputRegion', {'full': true});
+        } catch (_) {}
+      }
+
       if (_isOverlayLayer) {
         _isOverlayLayer = false;
         try {
@@ -193,7 +385,7 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
   @override
   Widget build(BuildContext context) {
     return KeyboardListener(
-      focusNode: FocusNode()..requestFocus(),
+      focusNode: _focusNode,
       onKeyEvent: (event) {
         if (event is KeyDownEvent &&
             event.logicalKey == LogicalKeyboardKey.escape) {
@@ -203,7 +395,7 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
       child: Scaffold(
         backgroundColor: Colors.transparent,
         body: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Container(
               height: 56,
@@ -223,7 +415,6 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                       ),
                     ),
                   ),
-                  const NotificationPopupOverlay(),
                   Positioned(
                     left: 0,
                     top: 0,
@@ -245,6 +436,7 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                           ),
                         ),
                         const WorkspaceSwitcher(),
+                        TaskbarMediaPill(onOpenDetails: _toggleQuickSettings),
                       ],
                     ),
                   ),
@@ -255,6 +447,71 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        ValueListenableBuilder<List<TrayItem>>(
+                          valueListenable: TrayService.items,
+                          builder: (context, trayItems, _) {
+                            if (trayItems.isEmpty) {
+                              return const SizedBox.shrink();
+                            }
+                            return Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                ...trayItems.map((item) {
+                                  return Tooltip(
+                                    message: item.displayLabel,
+                                    child: GestureDetector(
+                                      behavior: HitTestBehavior.opaque,
+                                      onTapUp: (details) async {
+                                        if (item.itemIsMenu &&
+                                            item.menuPath != null) {
+                                          await _openTrayMenu(
+                                            item,
+                                            details.globalPosition,
+                                          );
+                                        } else {
+                                          final ok = await TrayService.activate(
+                                            item,
+                                            details.globalPosition.dx.round(),
+                                            details.globalPosition.dy.round(),
+                                          );
+                                          if (!ok && item.menuPath != null) {
+                                            await _openTrayMenu(
+                                              item,
+                                              details.globalPosition,
+                                            );
+                                          }
+                                        }
+                                      },
+                                      onSecondaryTapUp: (details) async {
+                                        if (item.menuPath != null) {
+                                          await _openTrayMenu(
+                                            item,
+                                            details.globalPosition,
+                                          );
+                                        }
+                                      },
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                        ),
+                                        alignment: Alignment.center,
+                                        child: _buildTrayIcon(item),
+                                      ),
+                                    ),
+                                  );
+                                }),
+                                Container(
+                                  width: 1,
+                                  height: 18,
+                                  margin: const EdgeInsets.symmetric(
+                                    horizontal: 4,
+                                  ),
+                                  color: FyrTheme.textColor.withOpacity(0.15),
+                                ),
+                              ],
+                            );
+                          },
+                        ),
                         GestureDetector(
                           onTap: () async {
                             final home = Platform.environment['HOME'] ?? '';
@@ -593,6 +850,21 @@ class _TaskbarScreenState extends State<TaskbarScreen> {
                             ),
                           ),
                         ),
+                      if (_activeTrayItem != null)
+                        Positioned(
+                          top: 8,
+                          right: _trayMenuRight,
+                          child: GestureDetector(
+                            onTap: () {},
+                            child: TrayMenuPopup(
+                              item: _activeTrayItem!,
+                              entries: _activeTrayEntries,
+                              onClose: _closeMenus,
+                            ),
+                          ),
+                        ),
+                      const ScreenshotToastOverlay(),
+                      const NotificationPopupOverlay(),
                     ],
                   ),
                 ),

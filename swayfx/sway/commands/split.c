@@ -18,6 +18,9 @@ static struct cmd_results *do_split(int layout) {
 			return cmd_results_new(CMD_FAILURE,
 					"Cannot split a hidden scratchpad container");
 		}
+		if (container_is_floating_or_child(con)) {
+			return cmd_results_new(CMD_SUCCESS, NULL);
+		}
 		container_split(con, layout);
 	} else {
 		workspace_split(ws, layout);
