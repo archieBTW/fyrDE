@@ -85,6 +85,11 @@ void main() {
     }
 
     for (final app in fyrAppsCatalog) {
+      expect(
+        app.screenshot,
+        isNotNull,
+        reason: 'Every app must have a screenshot (${app.name} is missing one)',
+      );
       for (final assetPath in app.allScreenshotAssets) {
         final file = File(assetPath);
         expect(file.existsSync(), isTrue, reason: 'Missing ${file.path}');
@@ -95,6 +100,10 @@ void main() {
         );
       }
     }
+
+    // fyrEmu belongs under Creative & Media, not Dev & Virt.
+    final fyrEmu = fyrAppsCatalog.firstWhere((a) => a.id == 'fyremu');
+    expect(fyrEmu.category, FyrCategory.creative);
   });
 
   testWidgets(

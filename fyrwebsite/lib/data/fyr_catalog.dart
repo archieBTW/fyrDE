@@ -20,10 +20,10 @@ enum FyrCategory {
     accent: FyrColors.accentCyan,
   ),
   creative(
-    label: 'Creative Studio',
+    label: 'Creative & Media',
     shortLabel: 'Creative',
     eyebrow: 'fyrCreative',
-    subtitle: 'Raster, vector UI design, video editing, audio DAW, and media.',
+    subtitle: 'Design, video, audio DAW, photos, media players, and retro gaming.',
     icon: Icons.palette_rounded,
     accent: FyrColors.accentPink,
   ),
@@ -39,7 +39,7 @@ enum FyrCategory {
     label: 'Dev & Virt',
     shortLabel: 'Dev',
     eyebrow: 'fyrDev',
-    subtitle: 'Agentic IDE, API testing, SQL, containers, VMs, and retro emu.',
+    subtitle: 'Agentic IDE, API testing, SQL, containers, and KVM/QEMU VMs.',
     icon: Icons.code_rounded,
     accent: FyrColors.accentEmerald,
   ),
@@ -205,6 +205,7 @@ const List<FyrAppItem> fyrAppsCatalog = [
     badge: 'App Dock',
     description:
         'Translucent animated dock for pinned launchers, running indicators, and rapid window switching.',
+    screenshot: 'fyrdock.png',
     icon: Icons.dock_rounded,
     category: FyrCategory.shell,
     highlights: [
@@ -267,6 +268,7 @@ const List<FyrAppItem> fyrAppsCatalog = [
     badge: 'Clipboard',
     description:
         'Frosted-glass clipboard history manager with text & image capture, pinning, filtering, and instant search.',
+    screenshot: 'fyrclipboard.png',
     shortcut: 'Alt + V',
     icon: Icons.content_paste_rounded,
     category: FyrCategory.shell,
@@ -561,6 +563,7 @@ const List<FyrAppItem> fyrAppsCatalog = [
     badge: 'UI/UX Design',
     description:
         'Vector UI/UX design & prototyping studio with Auto-Layout, Master Components, Bezier pen, tokens, and Flutter/CSS/SVG export.',
+    screenshot: 'devign.png',
     icon: Icons.design_services_rounded,
     category: FyrCategory.creative,
     isNew: true,
@@ -665,6 +668,21 @@ const List<FyrAppItem> fyrAppsCatalog = [
       'Borderless theater mode that shines on SwayFX',
     ],
   ),
+  FyrAppItem(
+    id: 'fyremu',
+    name: 'fyrEmu',
+    badge: 'Retro Gaming',
+    description:
+        'Multi-platform retro game emulator frontend with library box art, save states, and controller mapping.',
+    screenshot: 'fyremu.png',
+    icon: Icons.sports_esports_rounded,
+    category: FyrCategory.creative,
+    highlights: [
+      'Unified library for classic console ROMs with cover art',
+      'Instant save states, shaders, and rewind support',
+      'Plug-and-play gamepad configuration',
+    ],
+  ),
 
   // ===========================================================================
   // OFFICE SUITE — 5 apps
@@ -717,9 +735,10 @@ const List<FyrAppItem> fyrAppsCatalog = [
   FyrAppItem(
     id: 'fyrpdf',
     name: 'fyrPDF',
-    badge: 'PDF Suite',
+    badge: 'PDF Reader',
     description:
-        'Fast native PDF reader, annotator, and document workbench with thumbnails, search, and page tools.',
+        'Fast native PDF reader with thumbnails, table of contents outline, bookmarks, in-document search, and dark reading mode.',
+    screenshot: 'fyrpdf.png',
     icon: Icons.picture_as_pdf_rounded,
     category: FyrCategory.office,
     isNew: true,
@@ -824,21 +843,6 @@ const List<FyrAppItem> fyrAppsCatalog = [
       'Clean desktop alternative to legacy libvirt frontends',
     ],
   ),
-  FyrAppItem(
-    id: 'fyremu',
-    name: 'fyrEmu',
-    badge: 'Retro Emu',
-    description:
-        'Multi-platform retro game emulator frontend with library box art, save states, and controller mapping.',
-    screenshot: 'fyremu.png',
-    icon: Icons.sports_esports_rounded,
-    category: FyrCategory.dev,
-    highlights: [
-      'Unified library for classic console ROMs with cover art',
-      'Instant save states, shaders, and rewind support',
-      'Plug-and-play gamepad configuration',
-    ],
-  ),
 
   // ===========================================================================
   // CLI & MOBILE — 3 apps
@@ -849,6 +853,7 @@ const List<FyrAppItem> fyrAppsCatalog = [
     badge: 'Go CLI / AUR',
     description:
         'Native Go package manager, yay-compatible AUR helper, and built-in fyrDE updater & diagnostics CLI.',
+    screenshot: 'fyrpak.png',
     icon: Icons.bolt_rounded,
     category: FyrCategory.cliMobile,
     isNew: true,
@@ -864,6 +869,7 @@ const List<FyrAppItem> fyrAppsCatalog = [
     badge: 'Kotlin Launcher',
     description:
         'Native Kotlin Android launcher bringing the FyrDE squircle grid, frosted dock, fyrSearch drawer, and Quick Settings to mobile.',
+    screenshot: 'fyrandroid.png',
     icon: Icons.smartphone_rounded,
     category: FyrCategory.cliMobile,
     isNew: true,
@@ -879,6 +885,7 @@ const List<FyrAppItem> fyrAppsCatalog = [
     badge: 'System Fetch',
     description:
         'Custom lightweight terminal system-information fetch utility styled with fyrDE ASCII branding and palette.',
+    screenshot: 'fyrfetch.png',
     icon: Icons.auto_awesome_rounded,
     category: FyrCategory.cliMobile,
     highlights: [

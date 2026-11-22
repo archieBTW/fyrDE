@@ -75,7 +75,13 @@ class _SinglePdfTabView extends StatelessWidget {
         backgroundColor: canvasBg,
         textSelectionParams: const PdfTextSelectionParams(enabled: true),
         pagePaintCallbacks: [
-          tab.textSearcher.pageTextMatchPaintCallback,
+          (canvas, pageRect, page) {
+            tab.textSearcher?.pageTextMatchPaintCallback(
+              canvas,
+              pageRect,
+              page,
+            );
+          },
         ],
         onViewerReady: (document, controller) {
           ctrl.onViewerReady(tab, document, controller);

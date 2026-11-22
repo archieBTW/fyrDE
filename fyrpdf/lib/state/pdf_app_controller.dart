@@ -108,7 +108,6 @@ class PdfAppController extends ChangeNotifier {
     );
 
     tab.viewerController.addListener(() => _onViewerMatrixChanged(tab));
-    tab.textSearcher.addListener(notifyListeners);
 
     _tabs.add(tab);
     _activeTabIndex = _tabs.length - 1;
@@ -144,6 +143,7 @@ class PdfAppController extends ChangeNotifier {
     tab.currentZoom = controller.isReady ? controller.currentZoom : 1.0;
     tab.isReady = true;
     tab.errorMessage = null;
+    tab.ensureTextSearcher(notifyListeners);
     notifyListeners();
 
     // Update page count in recent files metadata
@@ -372,7 +372,7 @@ class PdfAppController extends ChangeNotifier {
     if (tab == null) return;
     tab.showSearchBar = false;
     tab.searchQuery = '';
-    tab.textSearcher.resetTextSearch();
+    tab.textSearcher?.resetTextSearch();
     notifyListeners();
   }
 
@@ -390,10 +390,11 @@ class PdfAppController extends ChangeNotifier {
     final tab = activeTab;
     if (tab == null) return;
     tab.searchQuery = query;
+    final searcher = tab.ensureTextSearcher(notifyListeners);
     if (query.trim().isEmpty) {
-      tab.textSearcher.resetTextSearch();
+      searcher?.resetTextSearch();
     } else {
-      tab.textSearcher.startTextSearch(
+      searcher?.startTextSearch(
         query,
         caseInsensitive: !tab.searchCaseSensitive,
         goToFirstMatch: true,
@@ -406,8 +407,9 @@ class PdfAppController extends ChangeNotifier {
     final tab = activeTab;
     if (tab == null) return;
     tab.searchCaseSensitive = !tab.searchCaseSensitive;
+    final searcher = tab.ensureTextSearcher(notifyListeners);
     if (tab.searchQuery.trim().isNotEmpty) {
-      tab.textSearcher.startTextSearch(
+      searcher?.startTextSearch(
         tab.searchQuery,
         caseInsensitive: !tab.searchCaseSensitive,
         goToFirstMatch: true,
@@ -418,15 +420,17 @@ class PdfAppController extends ChangeNotifier {
 
   Future<void> nextSearchMatch() async {
     final tab = activeTab;
-    if (tab == null || !tab.textSearcher.hasMatches) return;
-    await tab.textSearcher.goToNextMatch();
+    final searcher = tab?.textSearcher;
+    if (searcher == null || !searcher.hasMatches) return;
+    await searcher.goToNextMatch();
     notifyListeners();
   }
 
   Future<void> prevSearchMatch() async {
     final tab = activeTab;
-    if (tab == null || !tab.textSearcher.hasMatches) return;
-    await tab.textSearcher.goToPrevMatch();
+    final searcher = tab?.textSearcher;
+    if (searcher == null || !searcher.hasMatches) return;
+    await searcher.goToPrevMatch();
     notifyListeners();
   }
 

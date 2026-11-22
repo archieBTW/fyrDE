@@ -58,13 +58,15 @@ class _SearchBarOverlayState extends State<SearchBarOverlay> {
     }
 
     final searcher = tab.textSearcher;
-    final total = searcher.matches.length;
-    final current = searcher.currentIndex != null ? searcher.currentIndex! + 1 : 0;
+    final total = searcher?.matches.length ?? 0;
+    final current = (searcher?.currentIndex != null)
+        ? searcher!.currentIndex! + 1
+        : 0;
 
     final String matchLabel;
     if (tab.searchQuery.trim().isEmpty) {
       matchLabel = '';
-    } else if (searcher.isSearching && total == 0) {
+    } else if ((searcher?.isSearching ?? false) && total == 0) {
       matchLabel = '...';
     } else if (total == 0) {
       matchLabel = '0 / 0';
@@ -113,7 +115,7 @@ class _SearchBarOverlayState extends State<SearchBarOverlay> {
                   onChanged: ctrl.updateSearchQuery,
                 ),
               ),
-              if (searcher.isSearching)
+              if (searcher?.isSearching ?? false)
                 Padding(
                   padding: const EdgeInsets.only(right: 6),
                   child: SizedBox(
@@ -133,7 +135,7 @@ class _SearchBarOverlayState extends State<SearchBarOverlay> {
                     style: TextStyle(
                       fontSize: 11.5,
                       fontWeight: FontWeight.w600,
-                      color: total == 0 && !searcher.isSearching
+                      color: total == 0 && !(searcher?.isSearching ?? false)
                           ? Colors.redAccent
                           : FyrTheme.textColorMuted,
                     ),
@@ -175,12 +177,14 @@ class _SearchBarOverlayState extends State<SearchBarOverlay> {
               _SearchActionButton(
                 icon: Icons.keyboard_arrow_up_rounded,
                 tooltip: 'Previous Match (Shift+Enter)',
-                onPressed: searcher.hasMatches ? ctrl.prevSearchMatch : null,
+                onPressed:
+                    (searcher?.hasMatches ?? false) ? ctrl.prevSearchMatch : null,
               ),
               _SearchActionButton(
                 icon: Icons.keyboard_arrow_down_rounded,
                 tooltip: 'Next Match (Enter)',
-                onPressed: searcher.hasMatches ? ctrl.nextSearchMatch : null,
+                onPressed:
+                    (searcher?.hasMatches ?? false) ? ctrl.nextSearchMatch : null,
               ),
               _SearchActionButton(
                 icon: Icons.close_rounded,

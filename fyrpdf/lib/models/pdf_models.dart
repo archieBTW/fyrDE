@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:pdfrx/pdfrx.dart';
 
@@ -102,7 +103,7 @@ class PdfTabState {
   final String fileName;
   final int fileSizeBytes;
   final PdfViewerController viewerController;
-  late final PdfTextSearcher textSearcher;
+  PdfTextSearcher? textSearcher;
 
   PdfDocument? document;
   List<PdfOutlineNode> outline = const [];
@@ -128,8 +129,16 @@ class PdfTabState {
     PdfViewerController? viewerController,
   })  : fileName = fileName ?? p.basename(filePath),
         fileSizeBytes = fileSizeBytes ?? _safeFileSize(filePath),
-        viewerController = viewerController ?? PdfViewerController() {
-    textSearcher = PdfTextSearcher(this.viewerController);
+        viewerController = viewerController ?? PdfViewerController();
+
+  /// Lazily attaches [PdfTextSearcher] once [viewerController] is ready.
+  /// In pdfrx 2.x, `PdfTextSearcher` immediately accesses `controller!.document`
+  /// on construction, so it must only be created after `onViewerReady`.
+  PdfTextSearcher? ensureTextSearcher(VoidCallback onChanged) {
+    if (textSearcher != null) return textSearcher;
+    if (!viewerController.isReady) return null;
+    textSearcher = PdfTextSearcher(viewerController)..addListener(onChanged);
+    return textSearcher;
   }
 
   static int _safeFileSize(String path) {
@@ -155,6 +164,7 @@ class PdfTabState {
   }
 
   void dispose() {
-    textSearcher.dispose();
+    textSearcher?.dispose();
+    textSearcher = null;
   }
 }
