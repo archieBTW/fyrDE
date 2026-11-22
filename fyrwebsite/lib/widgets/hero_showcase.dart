@@ -334,68 +334,72 @@ class _DesktopShowcaseCard extends StatelessWidget {
                       const SizedBox(width: 16),
                     ],
                     Expanded(
-                      child: Wrap(
-                        alignment: WrapAlignment.center,
-                        runAlignment: WrapAlignment.center,
-                        spacing: 6,
-                        runSpacing: 6,
-                        children: List.generate(
-                          fyrDesktopShowcases.length,
-                          (index) {
-                            final item = fyrDesktopShowcases[index];
-                            final selected = index == activeIndex;
-                            return MouseRegion(
-                              cursor: SystemMouseCursors.click,
-                              child: GestureDetector(
-                                onTap: () => onSelect(index),
-                                child: AnimatedContainer(
-                                  duration: const Duration(milliseconds: 180),
-                                  padding: EdgeInsets.symmetric(
-                                    horizontal: isMobile ? 10 : 12,
-                                    vertical: 5,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(999),
-                                    color: selected
-                                        ? FyrColors.accentVibrant
-                                            .withValues(alpha: 0.25)
-                                        : Colors.white.withValues(alpha: 0.04),
-                                    border: Border.all(
-                                      color: selected
-                                          ? FyrColors.accent
-                                              .withValues(alpha: 0.7)
-                                          : FyrColors.borderSubtle,
-                                    ),
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(
-                                        item.icon,
-                                        size: 13,
-                                        color: selected
-                                            ? FyrColors.accentCyan
-                                            : Colors.white54,
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: List.generate(
+                            fyrDesktopShowcases.length,
+                            (index) {
+                              final item = fyrDesktopShowcases[index];
+                              final selected = index == activeIndex;
+                              return Padding(
+                                padding: const EdgeInsets.only(right: 6),
+                                child: MouseRegion(
+                                  cursor: SystemMouseCursors.click,
+                                  child: GestureDetector(
+                                    onTap: () => onSelect(index),
+                                    child: AnimatedContainer(
+                                      duration:
+                                          const Duration(milliseconds: 180),
+                                      padding: EdgeInsets.symmetric(
+                                        horizontal: isMobile ? 10 : 12,
+                                        vertical: 5,
                                       ),
-                                      const SizedBox(width: 5),
-                                      Text(
-                                        item.label,
-                                        style: FyrFonts.mono(
-                                          fontSize: 11.5,
-                                          fontWeight: selected
-                                              ? FontWeight.w700
-                                              : FontWeight.w500,
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(999),
+                                        color: selected
+                                            ? FyrColors.accentVibrant
+                                                .withValues(alpha: 0.25)
+                                            : Colors.white
+                                                .withValues(alpha: 0.04),
+                                        border: Border.all(
                                           color: selected
-                                              ? Colors.white
-                                              : Colors.white60,
+                                              ? FyrColors.accent
+                                                  .withValues(alpha: 0.7)
+                                              : FyrColors.borderSubtle,
                                         ),
                                       ),
-                                    ],
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            item.icon,
+                                            size: 13,
+                                            color: selected
+                                                ? FyrColors.accentCyan
+                                                : Colors.white54,
+                                          ),
+                                          const SizedBox(width: 5),
+                                          Text(
+                                            item.label,
+                                            style: FyrFonts.mono(
+                                              fontSize: 11.5,
+                                              fontWeight: selected
+                                                  ? FontWeight.w700
+                                                  : FontWeight.w500,
+                                              color: selected
+                                                  ? Colors.white
+                                                  : Colors.white60,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
                                   ),
                                 ),
-                              ),
-                            );
-                          },
+                              );
+                            },
+                          ),
                         ),
                       ),
                     ),

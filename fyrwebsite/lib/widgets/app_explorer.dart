@@ -97,29 +97,31 @@ class _TabbedAppExplorerState extends State<TabbedAppExplorer> {
 
               SizedBox(height: isMobile ? 14 : 20),
 
-              // Wrapping category filter pills (all categories visible without horizontal scrolling)
-              Wrap(
-                alignment: WrapAlignment.center,
-                runAlignment: WrapAlignment.center,
-                spacing: 8,
-                runSpacing: 8,
-                children: FyrCategory.values.map((category) {
-                  final selected = !isSearching && category == activeCategory;
-                  final count = appsForCategory(category).length;
-                  return _CategoryTabPill(
-                    category: category,
-                    count: count,
-                    selected: selected,
-                    compact: isMobile,
-                    onTap: () {
-                      if (_query.isNotEmpty) {
-                        _searchController.clear();
-                        setState(() => _query = '');
-                      }
-                      widget.onCategoryChanged(category);
-                    },
-                  );
-                }).toList(),
+              // Horizontally scrollable pill tab bar
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: FyrCategory.values.map((category) {
+                    final selected = !isSearching && category == activeCategory;
+                    final count = appsForCategory(category).length;
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: _CategoryTabPill(
+                        category: category,
+                        count: count,
+                        selected: selected,
+                        compact: isMobile,
+                        onTap: () {
+                          if (_query.isNotEmpty) {
+                            _searchController.clear();
+                            setState(() => _query = '');
+                          }
+                          widget.onCategoryChanged(category);
+                        },
+                      ),
+                    );
+                  }).toList(),
+                ),
               ),
 
               SizedBox(height: isMobile ? 14 : 22),
