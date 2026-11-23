@@ -34,10 +34,17 @@ namespace webview_cef {
 		{
 			m_handler->onPaintCallback = [=](int browserId, const void* buffer, int32_t width, int32_t height)
 			{
-				std::lock_guard<std::recursive_mutex> lock(m_mutex);
-				if (m_renderers.count(browserId))
+				std::shared_ptr<WebviewTexture> renderer;
 				{
-					m_renderers[browserId]->onFrame(buffer, width, height);
+					std::lock_guard<std::recursive_mutex> lock(m_mutex);
+					auto it = m_renderers.find(browserId);
+					if (it != m_renderers.end()) {
+						renderer = it->second;
+					}
+				}
+				if (renderer)
+				{
+					renderer->onFrame(buffer, width, height);
 				}
 				else if (m_logFunc) {
 					m_logFunc("onPaintCallback: No renderer for browserId " + std::to_string(browserId));
@@ -433,11 +440,15 @@ namespace webview_cef {
 
 			m_handler->onPopupCreated = [=](int browserId)
 			{
-				std::lock_guard<std::recursive_mutex> lock(m_mutex);
-				if (m_invokeFunc)
-				{
+				auto setupPopup = [=]() {
+					if (!m_invokeFunc || !m_createTextureFunc) {
+						return;
+					}
 					std::shared_ptr<WebviewTexture> renderer = m_createTextureFunc();
-					m_renderers[browserId] = renderer;
+					{
+						std::lock_guard<std::recursive_mutex> lock(m_mutex);
+						m_renderers[browserId] = renderer;
+					}
 
 					WValue* bId = webview_value_new_int(browserId);
 					WValue* tId = webview_value_new_int(renderer->textureId);
@@ -448,6 +459,12 @@ namespace webview_cef {
 					webview_value_unref(bId);
 					webview_value_unref(tId);
 					webview_value_unref(retMap);
+				};
+
+				if (m_runOnMainFunc) {
+					m_runOnMainFunc(std::move(setupPopup));
+				} else {
+					setupPopup();
 				}
 			};
 
@@ -497,13 +514,13 @@ namespace webview_cef {
 
 
     void WebviewPlugin::HandleMethodCall(std::string name, WValue* values, std::function<void(int ,WValue*)> result) {
-		std::lock_guard<std::recursive_mutex> lock(m_mutex);
 		if (name.compare("init") == 0){
 			if(!isCefInitialized){
 				if(values != nullptr){
 					userAgent = CefString(webview_value_get_string(values));
 				}
 				startCEF();
+				isCefInitialized = true;
 			}
 			initCallback();
 			result(1, nullptr);
@@ -515,24 +532,46 @@ namespace webview_cef {
 		}
 		else if (name.compare("create") == 0) {
 			std::string url = webview_value_get_string(values);
-			m_handler->createBrowser(url, [=](int browserId) {
-				std::shared_ptr<WebviewTexture> renderer = m_createTextureFunc();
-				m_renderers[browserId] = renderer;
-				WValue	*response = webview_value_new_list();
-				webview_value_append(response, webview_value_new_int(browserId));
-				webview_value_append(response, webview_value_new_int(renderer->textureId));
+			// Create & register the Flutter texture on the platform main thread before
+			// posting browser creation to the CEF UI thread.
+			std::shared_ptr<WebviewTexture> renderer = m_createTextureFunc();
+			m_handler->createBrowser(url, [this, renderer, result](int browserId) {
+				{
+					std::lock_guard<std::recursive_mutex> lock(m_mutex);
+					m_renderers[browserId] = renderer;
+				}
+				WValue *response = webview_value_new_list();
+				WValue *bId = webview_value_new_int(browserId);
+				WValue *tId = webview_value_new_int(renderer->textureId);
+				webview_value_append(response, bId);
+				webview_value_append(response, tId);
+				webview_value_unref(bId);
+				webview_value_unref(tId);
 				result(1, response);
 				webview_value_unref(response);
 			});
 		}
 		else if (name.compare("close") == 0) {
 			int browserId = int(webview_value_get_int(values));
-			if (m_focusedBrowserId == browserId) {
-				m_focusedBrowserId = -1;
+			bool wasFocused = false;
+			std::shared_ptr<WebviewTexture> removedRenderer;
+			{
+				std::lock_guard<std::recursive_mutex> lock(m_mutex);
+				if (m_focusedBrowserId == browserId) {
+					m_focusedBrowserId = -1;
+					wasFocused = true;
+				}
+				auto it = m_renderers.find(browserId);
+				if (it != m_renderers.end()) {
+					removedRenderer = std::move(it->second);
+					m_renderers.erase(it);
+				}
+			}
+			if (wasFocused) {
 				m_handler->setClientFocus(browserId, false);
 			}
 			m_handler->closeBrowser(browserId);
-			m_renderers.erase(browserId);
+			removedRenderer.reset();
 			result(1, nullptr);
 		}
 		else if (name.compare("loadUrl") == 0) {
@@ -652,24 +691,34 @@ namespace webview_cef {
 		else if (name.compare("setClientFocus") == 0) {
 			int browserId = int(webview_value_get_int(webview_value_get_list_value(values, 0)));
 			bool focus = webview_value_get_bool(webview_value_get_list_value(values, 1));
-			if (focus) {
-				for (auto& kv : m_renderers) {
-					if (kv.second) {
-						kv.second->isFocused = (kv.first == browserId);
+			bool shouldNotifyFocus = false;
+			bool notifyValue = false;
+			{
+				std::lock_guard<std::recursive_mutex> lock(m_mutex);
+				if (focus) {
+					for (auto& kv : m_renderers) {
+						if (kv.second) {
+							kv.second->isFocused = (kv.first == browserId);
+						}
+					}
+					if (m_renderers.find(browserId) != m_renderers.end() && m_renderers[browserId] != nullptr) {
+						m_focusedBrowserId = browserId;
+						shouldNotifyFocus = true;
+						notifyValue = true;
+					}
+				} else {
+					if (m_renderers.find(browserId) != m_renderers.end() && m_renderers[browserId] != nullptr) {
+						m_renderers[browserId]->isFocused = false;
+					}
+					if (m_focusedBrowserId == browserId) {
+						m_focusedBrowserId = -1;
+						shouldNotifyFocus = true;
+						notifyValue = false;
 					}
 				}
-				if (m_renderers.find(browserId) != m_renderers.end() && m_renderers[browserId] != nullptr) {
-					m_focusedBrowserId = browserId;
-					m_handler->setClientFocus(browserId, true);
-				}
-			} else {
-				if (m_renderers.find(browserId) != m_renderers.end() && m_renderers[browserId] != nullptr) {
-					m_renderers[browserId]->isFocused = false;
-				}
-				if (m_focusedBrowserId == browserId) {
-					m_focusedBrowserId = -1;
-					m_handler->setClientFocus(browserId, false);
-				}
+			}
+			if (shouldNotifyFocus) {
+				m_handler->setClientFocus(browserId, notifyValue);
 			}
 			result(1, nullptr);
 		}
@@ -830,14 +879,20 @@ namespace webview_cef {
 
 	void WebviewPlugin::sendKeyEvent(CefKeyEvent& ev)
 	{
-		std::lock_guard<std::recursive_mutex> lock(m_mutex);
-		if (m_focusedBrowserId == -1 || m_renderers.find(m_focusedBrowserId) == m_renderers.end()) {
+		int focusedId = -1;
+		{
+			std::lock_guard<std::recursive_mutex> lock(m_mutex);
+			if (m_focusedBrowserId != -1 && m_renderers.find(m_focusedBrowserId) != m_renderers.end()) {
+				focusedId = m_focusedBrowserId;
+			}
+		}
+		if (focusedId == -1) {
 			return;
 		}
-		m_handler->sendKeyEvent(m_focusedBrowserId, ev);
+		m_handler->sendKeyEvent(focusedId, ev);
 
 		if(ev.type == KEYEVENT_RAWKEYDOWN && ev.windows_key_code == 0x7B && (ev.modifiers & EVENTFLAG_CONTROL_DOWN) != 0){
-			m_handler->openDevTools(m_focusedBrowserId);
+			m_handler->openDevTools(focusedId);
 		}
 	}
 
@@ -852,6 +907,11 @@ namespace webview_cef {
 	void WebviewPlugin::setCreateTextureFunc(std::function<std::shared_ptr<WebviewTexture>()> func)
 	{
 		m_createTextureFunc = func;
+	}
+
+	void WebviewPlugin::setRunOnMainThreadFunc(std::function<void(std::function<void()>)> func)
+	{
+		m_runOnMainFunc = std::move(func);
 	}
 	
 	bool WebviewPlugin::getAnyBrowserFocused(){

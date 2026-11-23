@@ -115,11 +115,17 @@ bool WebviewHandler::OnProcessMessageReceived(
         CefRefPtr<CefValue> param = message->GetArgumentList()->GetValue(1);
 
         if(!callbackId.empty()){
-            std::lock_guard<std::recursive_mutex> lock(m_mutex);
-            auto it = js_callbacks_.find(callbackId.ToString());
-            if(it != js_callbacks_.end()){
-                it->second(param);
-                js_callbacks_.erase(it);
+            std::function<void(CefRefPtr<CefValue>)> cb;
+            {
+                std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                auto it = js_callbacks_.find(callbackId.ToString());
+                if(it != js_callbacks_.end()){
+                    cb = std::move(it->second);
+                    js_callbacks_.erase(it);
+                }
+            }
+            if (cb) {
+                cb(param);
             }
         }
     }
@@ -176,18 +182,23 @@ bool WebviewHandler::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
 }
 
 void WebviewHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
-    std::lock_guard<std::recursive_mutex> lock(m_mutex);
-    browser_map_.emplace(browser->GetIdentifier(), browser_info());
-    browser_map_[browser->GetIdentifier()].browser = browser;
-    
-    if (browser->IsPopup()) {
-        // Set a default size for popups so they can render before being resized by the UI
-        browser_map_[browser->GetIdentifier()].width = 1280;
-        browser_map_[browser->GetIdentifier()].height = 720;
-        
-        if (onPopupCreated) {
-            onPopupCreated(browser->GetIdentifier());
+    const int browserId = browser->GetIdentifier();
+    const bool isPopup = browser->IsPopup();
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        browser_map_.emplace(browserId, browser_info());
+        browser_map_[browserId].browser = browser;
+
+        if (isPopup) {
+            // Set a default size for popups so they can render before being resized by the UI
+            browser_map_[browserId].width = 1280;
+            browser_map_[browserId].height = 720;
         }
+    }
+
+    // Invoke outside m_mutex to avoid AB-BA deadlocks with WebviewPlugin::m_mutex.
+    if (isPopup && onPopupCreated) {
+        onPopupCreated(browserId);
     }
 }
 
@@ -314,13 +325,20 @@ void WebviewHandler::OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame
 }
 
 void WebviewHandler::CloseAllBrowsers(bool force_close) {
+    if (!CefCurrentlyOn(TID_UI)) {
+        CefPostTask(TID_UI, base::BindOnce(&WebviewHandler::CloseAllBrowsers, this, force_close));
+        return;
+    }
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     if (browser_map_.empty()){
         return;
     }
     
     for (auto& it : browser_map_){
-        it.second.browser->GetHost()->CloseBrowser(force_close);
-        it.second.browser = nullptr;
+        if (it.second.browser) {
+            it.second.browser->GetHost()->CloseBrowser(force_close);
+            it.second.browser = nullptr;
+        }
     }
     browser_map_.clear();
 }
@@ -338,11 +356,17 @@ bool WebviewHandler::IsChromeRuntimeEnabled() {
 
 void WebviewHandler::closeBrowser(int browserId)
 {
+    if (!CefCurrentlyOn(TID_UI)) {
+        CefPostTask(TID_UI, base::BindOnce(&WebviewHandler::closeBrowser, this, browserId));
+        return;
+    }
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browserId);
     if(it != browser_map_.end()){
-        it->second.browser->GetHost()->CloseBrowser(true);
-        it->second.browser = nullptr;
+        if (it->second.browser) {
+            it->second.browser->GetHost()->CloseBrowser(true);
+            it->second.browser = nullptr;
+        }
         browser_map_.erase(it);
     }
 }
@@ -365,33 +389,35 @@ void WebviewHandler::createBrowser(std::string url, std::function<void(int)> cal
 }
 
 void WebviewHandler::sendScrollEvent(int browserId, int x, int y, int deltaX, int deltaY) {
+    if (!CefCurrentlyOn(TID_UI)) {
+        CefPostTask(TID_UI, base::BindOnce(&WebviewHandler::sendScrollEvent, this, browserId, x, y, deltaX, deltaY));
+        return;
+    }
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browserId);
-    if (it != browser_map_.end()) {
+    if (it != browser_map_.end() && it->second.browser) {
         CefMouseEvent ev;
         ev.x = x;
         ev.y = y;
 
 #ifndef __APPLE__
-        // The scrolling direction on Windows and Linux is different from MacOS
         deltaY = -deltaY;
-        // Flutter scrolls too slowly, but we now handle smoothing in the Dart layer.
         it->second.browser->GetHost()->SendMouseWheelEvent(ev, deltaX, deltaY);
-
-
 #else
         it->second.browser->GetHost()->SendMouseWheelEvent(ev, deltaX, deltaY);
 #endif
-
-
     }
 }
 
 void WebviewHandler::changeSize(int browserId, float a_dpi, int w, int h)
 {
+    if (!CefCurrentlyOn(TID_UI)) {
+        CefPostTask(TID_UI, base::BindOnce(&WebviewHandler::changeSize, this, browserId, a_dpi, w, h));
+        return;
+    }
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browserId);
-    if (it != browser_map_.end()) {
+    if (it != browser_map_.end() && it->second.browser) {
         it->second.dpi = a_dpi;
         it->second.width = w;
         it->second.height = h;
@@ -401,9 +427,13 @@ void WebviewHandler::changeSize(int browserId, float a_dpi, int w, int h)
 
 void WebviewHandler::cursorClick(int browserId, int x, int y, bool up, int button)
 {
+    if (!CefCurrentlyOn(TID_UI)) {
+        CefPostTask(TID_UI, base::BindOnce(&WebviewHandler::cursorClick, this, browserId, x, y, up, button));
+        return;
+    }
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browserId);
-    if (it != browser_map_.end()) {
+    if (it != browser_map_.end() && it->second.browser) {
         CefMouseEvent ev;
         ev.x = x;
         ev.y = y;
@@ -431,9 +461,13 @@ void WebviewHandler::cursorClick(int browserId, int x, int y, bool up, int butto
 
 void WebviewHandler::cursorMove(int browserId, int x , int y, bool dragging)
 {
+    if (!CefCurrentlyOn(TID_UI)) {
+        CefPostTask(TID_UI, base::BindOnce(&WebviewHandler::cursorMove, this, browserId, x, y, dragging));
+        return;
+    }
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browserId);
-    if (it != browser_map_.end()) {
+    if (it != browser_map_.end() && it->second.browser) {
         CefMouseEvent ev;
         ev.x = x;
         ev.y = y;
@@ -491,8 +525,12 @@ void WebviewHandler::OnImeCompositionRangeChanged(CefRefPtr<CefBrowser> browser,
     }
 }
 
-void WebviewHandler::sendKeyEvent(int browserId, CefKeyEvent& ev)
+void WebviewHandler::sendKeyEvent(int browserId, CefKeyEvent ev)
 {
+    if (!CefCurrentlyOn(TID_UI)) {
+        CefPostTask(TID_UI, base::BindOnce(&WebviewHandler::sendKeyEvent, this, browserId, ev));
+        return;
+    }
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browserId);
     if (it != browser_map_.end() && it->second.browser.get()) {
@@ -502,14 +540,22 @@ void WebviewHandler::sendKeyEvent(int browserId, CefKeyEvent& ev)
 
 void WebviewHandler::loadUrl(int browserId, std::string url)
 {
+    if (!CefCurrentlyOn(TID_UI)) {
+        CefPostTask(TID_UI, base::BindOnce(&WebviewHandler::loadUrl, this, browserId, url));
+        return;
+    }
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browserId);
-    if (it != browser_map_.end()) {
+    if (it != browser_map_.end() && it->second.browser.get()) {
         it->second.browser->GetMainFrame()->LoadURL(url);
     }
 }
 
 void WebviewHandler::goForward(int browserId) {
+    if (!CefCurrentlyOn(TID_UI)) {
+        CefPostTask(TID_UI, base::BindOnce(&WebviewHandler::goForward, this, browserId));
+        return;
+    }
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browserId);
     if (it != browser_map_.end() && it->second.browser.get()) {
@@ -518,6 +564,10 @@ void WebviewHandler::goForward(int browserId) {
 }
 
 void WebviewHandler::goBack(int browserId) {
+    if (!CefCurrentlyOn(TID_UI)) {
+        CefPostTask(TID_UI, base::BindOnce(&WebviewHandler::goBack, this, browserId));
+        return;
+    }
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browserId);
     if (it != browser_map_.end() && it->second.browser.get()) {
@@ -526,6 +576,10 @@ void WebviewHandler::goBack(int browserId) {
 }
 
 void WebviewHandler::reload(int browserId) {
+    if (!CefCurrentlyOn(TID_UI)) {
+        CefPostTask(TID_UI, base::BindOnce(&WebviewHandler::reload, this, browserId));
+        return;
+    }
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browserId);
     if (it != browser_map_.end() && it->second.browser.get()) {
@@ -534,6 +588,10 @@ void WebviewHandler::reload(int browserId) {
 }
 
 void WebviewHandler::stopLoad(int browserId) {
+    if (!CefCurrentlyOn(TID_UI)) {
+        CefPostTask(TID_UI, base::BindOnce(&WebviewHandler::stopLoad, this, browserId));
+        return;
+    }
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browserId);
     if (it != browser_map_.end() && it->second.browser.get()) {
@@ -542,6 +600,10 @@ void WebviewHandler::stopLoad(int browserId) {
 }
 
 void WebviewHandler::findInPage(int browserId, const std::string& searchText, bool forward, bool matchCase, bool findNext) {
+    if (!CefCurrentlyOn(TID_UI)) {
+        CefPostTask(TID_UI, base::BindOnce(&WebviewHandler::findInPage, this, browserId, searchText, forward, matchCase, findNext));
+        return;
+    }
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browserId);
     if (it != browser_map_.end() && it->second.browser.get()) {
@@ -550,6 +612,10 @@ void WebviewHandler::findInPage(int browserId, const std::string& searchText, bo
 }
 
 void WebviewHandler::stopFinding(int browserId, bool clearSelection) {
+    if (!CefCurrentlyOn(TID_UI)) {
+        CefPostTask(TID_UI, base::BindOnce(&WebviewHandler::stopFinding, this, browserId, clearSelection));
+        return;
+    }
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browserId);
     if (it != browser_map_.end() && it->second.browser.get()) {
@@ -558,6 +624,10 @@ void WebviewHandler::stopFinding(int browserId, bool clearSelection) {
 }
 
 void WebviewHandler::setZoomLevel(int browserId, double zoomLevel) {
+    if (!CefCurrentlyOn(TID_UI)) {
+        CefPostTask(TID_UI, base::BindOnce(&WebviewHandler::setZoomLevel, this, browserId, zoomLevel));
+        return;
+    }
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browserId);
     if (it != browser_map_.end() && it->second.browser.get()) {
@@ -593,6 +663,10 @@ bool WebviewHandler::isHostInSet(const std::string& host, const std::unordered_s
 }
 
 void WebviewHandler::openDevTools(int browserId) {
+    if (!CefCurrentlyOn(TID_UI)) {
+        CefPostTask(TID_UI, base::BindOnce(&WebviewHandler::openDevTools, this, browserId));
+        return;
+    }
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browserId);
     if (it != browser_map_.end() && it->second.browser.get()) {
@@ -606,6 +680,10 @@ void WebviewHandler::openDevTools(int browserId) {
 
 void WebviewHandler::imeSetComposition(int browserId, std::string text)
 {
+    if (!CefCurrentlyOn(TID_UI)) {
+        CefPostTask(TID_UI, base::BindOnce(&WebviewHandler::imeSetComposition, this, browserId, text));
+        return;
+    }
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browserId);
     if (it==browser_map_.end() || !it->second.browser.get()) {
@@ -632,6 +710,10 @@ void WebviewHandler::imeSetComposition(int browserId, std::string text)
 
 void WebviewHandler::imeCommitText(int browserId, std::string text)
 {
+    if (!CefCurrentlyOn(TID_UI)) {
+        CefPostTask(TID_UI, base::BindOnce(&WebviewHandler::imeCommitText, this, browserId, text));
+        return;
+    }
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browserId);
     if (it==browser_map_.end() || !it->second.browser.get()) {
@@ -653,6 +735,10 @@ void WebviewHandler::imeCommitText(int browserId, std::string text)
 
 void WebviewHandler::setClientFocus(int browserId, bool focus)
 {
+    if (!CefCurrentlyOn(TID_UI)) {
+        CefPostTask(TID_UI, base::BindOnce(&WebviewHandler::setClientFocus, this, browserId, focus));
+        return;
+    }
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = browser_map_.find(browserId);
     if (it==browser_map_.end() || !it->second.browser.get()) {
@@ -732,6 +818,10 @@ void WebviewHandler::setJavaScriptChannels(int browserId, const std::vector<std:
 
 void WebviewHandler::sendJavaScriptChannelCallBack(const bool error, const std::string result, const std::string callbackId, const int browserId, const std::string frameId)
 {
+    if (!CefCurrentlyOn(TID_UI)) {
+        CefPostTask(TID_UI, base::BindOnce(&WebviewHandler::sendJavaScriptChannelCallBack, this, error, result, callbackId, browserId, frameId));
+        return;
+    }
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     CefRefPtr<CefProcessMessage> message = CefProcessMessage::Create(kExecuteJsCallbackMessage);
     CefRefPtr<CefListValue> args = message->GetArgumentList();
@@ -739,7 +829,7 @@ void WebviewHandler::sendJavaScriptChannelCallBack(const bool error, const std::
     args->SetBool(1, error);
     args->SetString(2, result);
     auto bit = browser_map_.find(browserId);
-    if(bit != browser_map_.end()){
+    if(bit != browser_map_.end() && bit->second.browser){
         int64_t frameIdInt = atoll(frameId.c_str());
 
         CefRefPtr<CefFrame> frame = bit->second.browser->GetMainFrame();
@@ -747,9 +837,9 @@ void WebviewHandler::sendJavaScriptChannelCallBack(const bool error, const std::
         // Return types for frame->GetIdentifier() changed, use the Linux way when updating MacOS or Windows
         // versions in download.cmake
 #if __linux__
-        bool identifierMatch = std::stoll(frame->GetIdentifier().ToString()) == frameIdInt;
+        bool identifierMatch = frame && std::stoll(frame->GetIdentifier().ToString()) == frameIdInt;
 #else
-        bool identifierMatch = frame->GetIdentifier() == frameIdInt;
+        bool identifierMatch = frame && frame->GetIdentifier() == frameIdInt;
 #endif
         if (identifierMatch)
         {
@@ -767,6 +857,10 @@ static std::string GetCallbackId()
 
 void WebviewHandler::executeJavaScript(int browserId, const std::string code, std::function<void(CefRefPtr<CefValue>)> callback)
 {
+    if (!CefCurrentlyOn(TID_UI)) {
+        CefPostTask(TID_UI, base::BindOnce(&WebviewHandler::executeJavaScript, this, browserId, code, callback));
+        return;
+    }
     if(!code.empty())
     {
         std::lock_guard<std::recursive_mutex> lock(m_mutex);
@@ -787,8 +881,12 @@ void WebviewHandler::executeJavaScript(int browserId, const std::string code, st
                     js_callbacks_[callbackId] = callback;
                 }
 			    frame->ExecuteJavaScript(finalCode, frame->GetURL(), 0);
+                return;
             }
         }
+    }
+    if (callback != nullptr) {
+        callback(nullptr);
     }
 }
 

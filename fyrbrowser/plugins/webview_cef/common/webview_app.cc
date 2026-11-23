@@ -108,17 +108,20 @@ void WebviewApp::OnBeforeCommandLineProcessing(const CefString &process_type, Ce
 			command_line->AppendSwitch("disable-gpu");
 			command_line->AppendSwitch("disable-gpu-compositing");
 		}
+		else
+		{
+			command_line->AppendSwitch("enable-gpu");
+			command_line->AppendSwitch("ignore-gpu-blocklist");
+			command_line->AppendSwitch("enable-accelerated-2d-canvas");
+			command_line->AppendSwitch("enable-gpu-rasterization");
+			command_line->AppendSwitch("enable-oop-rasterization");
+		}
 
 		// Don't create a "GPUCache" directory when cache-path is unspecified.
 		command_line->AppendSwitch("disable-gpu-shader-disk-cache");
 		command_line->AppendSwitch("no-sandbox");
-		command_line->AppendSwitch("enable-gpu");
-		command_line->AppendSwitch("ignore-gpu-blocklist");
 		command_line->AppendSwitch("enable-webgl");
-		command_line->AppendSwitch("enable-accelerated-2d-canvas");
 		command_line->AppendSwitch("enable-unsafe-swiftshader");
-		command_line->AppendSwitch("enable-gpu-rasterization");
-		command_line->AppendSwitch("enable-oop-rasterization");
 
 		//http://www.chromium.org/developers/design-documents/process-models
 		if (m_uMode == 1)

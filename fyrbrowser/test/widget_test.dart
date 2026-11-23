@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fyrbrowser/adblock_engine.dart';
 import 'package:fyrbrowser/browser_models.dart';
 import 'package:fyrbrowser/home_page.dart';
+import 'package:fyrbrowser/url_bar.dart';
 import 'package:webview_cef/webview_cef.dart';
 
 void main() {
@@ -104,6 +106,157 @@ void main() {
       await tester.tap(find.text('Go Home'));
       expect(retried, isTrue);
       expect(wentHome, isTrue);
+    });
+  });
+
+  group('FyrUrlBar History Suggestions', () {
+    final sampleBookmarks = [
+      {'title': 'GitHub', 'url': 'https://github.com'},
+    ];
+    final sampleHistory = [
+      {'title': 'GitLab Projects', 'url': 'https://gitlab.com/projects'},
+      {'title': 'Arch Linux Wiki', 'url': 'https://wiki.archlinux.org'},
+    ];
+
+    testWidgets('clicking a history suggestion submits its URL',
+        (tester) async {
+      final controller = TextEditingController();
+      final focusNode = FocusNode();
+      String? submittedUrl;
+      addTearDown(() {
+        controller.dispose();
+        focusNode.dispose();
+      });
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Padding(
+              padding: const EdgeInsets.all(24),
+              child: FyrUrlBar(
+                controller: controller,
+                focusNode: focusNode,
+                currentUrl: 'https://start.duckduckgo.com',
+                searchEngineLabel: 'DuckDuckGo',
+                isError: false,
+                isBookmarked: false,
+                showInstallPwa: false,
+                bookmarks: sampleBookmarks,
+                history: sampleHistory,
+                onSubmit: (url) => submittedUrl = url,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.byKey(const Key('browser-url-field')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('browser-url-field')), 'git');
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('url-suggestion-0')), findsOneWidget);
+      expect(find.byKey(const Key('url-suggestion-1')), findsOneWidget);
+
+      // Tap the second suggestion (GitLab Projects) and ensure it submits
+      // without being dismissed by focus loss on pointer down.
+      await tester.tap(find.byKey(const Key('url-suggestion-1')));
+      await tester.pumpAndSettle();
+
+      expect(submittedUrl, 'https://gitlab.com/projects');
+    });
+
+    testWidgets('arrow keys + enter navigate and select history suggestions',
+        (tester) async {
+      final controller = TextEditingController();
+      final focusNode = FocusNode();
+      String? submittedUrl;
+      addTearDown(() {
+        controller.dispose();
+        focusNode.dispose();
+      });
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Padding(
+              padding: const EdgeInsets.all(24),
+              child: FyrUrlBar(
+                controller: controller,
+                focusNode: focusNode,
+                currentUrl: 'https://start.duckduckgo.com',
+                searchEngineLabel: 'DuckDuckGo',
+                isError: false,
+                isBookmarked: false,
+                showInstallPwa: false,
+                bookmarks: sampleBookmarks,
+                history: sampleHistory,
+                onSubmit: (url) => submittedUrl = url,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.byKey(const Key('browser-url-field')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('browser-url-field')), 'git');
+      await tester.pumpAndSettle();
+
+      // Down twice -> selects index 1 (GitLab), then Up once -> back to index 0 (GitHub), then Down -> index 1
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+
+      expect(submittedUrl, 'https://gitlab.com/projects');
+    });
+
+    testWidgets('escape closes suggestions dropdown', (tester) async {
+      final controller = TextEditingController();
+      final focusNode = FocusNode();
+      addTearDown(() {
+        controller.dispose();
+        focusNode.dispose();
+      });
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Padding(
+              padding: const EdgeInsets.all(24),
+              child: FyrUrlBar(
+                controller: controller,
+                focusNode: focusNode,
+                currentUrl: 'https://start.duckduckgo.com',
+                searchEngineLabel: 'DuckDuckGo',
+                isError: false,
+                isBookmarked: false,
+                showInstallPwa: false,
+                bookmarks: sampleBookmarks,
+                history: sampleHistory,
+                onSubmit: (_) {},
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.byKey(const Key('browser-url-field')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('browser-url-field')), 'arch');
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('url-suggestion-0')), findsOneWidget);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('url-suggestion-0')), findsNothing);
     });
   });
 }

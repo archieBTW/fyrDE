@@ -144,9 +144,10 @@ class WebviewManager extends ValueNotifier<bool> {
 
         await _injectUserScriptIfNeeds(browserId, _injectUserScripts?.retrieveLoadStartInjectScripts() ?? []);
 
-        WebViewController controller =
-        _webViews[browserId] as WebViewController;
-        _webViews[browserId]?.listener?.onLoadStart?.call(controller, urlId);
+        final controller = _webViews[browserId];
+        if (controller != null) {
+          controller.listener?.onLoadStart?.call(controller, urlId);
+        }
         return;
       case 'onLoadEnd':
         int browserId = call.arguments["browserId"] as int;
@@ -154,9 +155,10 @@ class WebviewManager extends ValueNotifier<bool> {
 
         await _injectUserScriptIfNeeds(browserId, _injectUserScripts?.retrieveLoadEndInjectScripts() ?? []);
 
-        WebViewController controller =
-        _webViews[browserId] as WebViewController;
-        _webViews[browserId]?.listener?.onLoadEnd?.call(controller, urlId);
+        final controller = _webViews[browserId];
+        if (controller != null) {
+          controller.listener?.onLoadEnd?.call(controller, urlId);
+        }
         return;
       case 'onLoadError':
         int browserId = call.arguments["browserId"] as int;

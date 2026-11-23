@@ -364,6 +364,11 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
   double _pendingScrollDy = 0;
   Offset _lastScrollPos = Offset.zero;
 
+  Timer? _moveThrottleTimer;
+  Offset? _pendingMovePos;
+  bool _pendingMoveDragging = false;
+  DateTime _lastMoveSentAt = DateTime.fromMillisecondsSinceEpoch(0);
+
   WebViewController get _controller => widget.controller;
 
   @override
@@ -463,12 +468,60 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
   void dispose() {
     _scrollTimer?.cancel();
     _scrollTimer = null;
+    _moveThrottleTimer?.cancel();
+    _moveThrottleTimer = null;
     _focusNode.dispose();
     _controller._onFocusedNodeChangeMessage = null;
     _controller._onImeCompositionRangeChangedMessage = null;
     _controller._onToolTip = null;
     _controller._onCursorChanged = null;
     super.dispose();
+  }
+
+  void _dispatchPointerMove(Offset pos, {required bool dragging}) {
+    final now = DateTime.now();
+    const minInterval = Duration(milliseconds: 8);
+    if (now.difference(_lastMoveSentAt) >= minInterval) {
+      _lastMoveSentAt = now;
+      _pendingMovePos = null;
+      _moveThrottleTimer?.cancel();
+      _moveThrottleTimer = null;
+      if (dragging) {
+        _controller._cursorDragging(pos);
+      } else {
+        _controller._cursorMove(pos);
+      }
+      return;
+    }
+    _pendingMovePos = pos;
+    _pendingMoveDragging = dragging;
+    _moveThrottleTimer ??= Timer(minInterval, () {
+      _moveThrottleTimer = null;
+      final pending = _pendingMovePos;
+      if (!mounted || pending == null) return;
+      _pendingMovePos = null;
+      _lastMoveSentAt = DateTime.now();
+      if (_pendingMoveDragging) {
+        _controller._cursorDragging(pending);
+      } else {
+        _controller._cursorMove(pending);
+      }
+    });
+  }
+
+  void _flushPendingMove() {
+    final pending = _pendingMovePos;
+    _pendingMovePos = null;
+    _moveThrottleTimer?.cancel();
+    _moveThrottleTimer = null;
+    if (pending != null) {
+      _lastMoveSentAt = DateTime.now();
+      if (_pendingMoveDragging) {
+        _controller._cursorDragging(pending);
+      } else {
+        _controller._cursorMove(pending);
+      }
+    }
   }
 
   void _startSmoothScrollLoop() {
@@ -544,10 +597,11 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
       child: SizeChangedLayoutNotifier(
         child: Listener(
           onPointerHover: (ev) {
-            _controller._cursorMove(ev.localPosition);
+            _dispatchPointerMove(ev.localPosition, dragging: false);
             _tooltip?.cursorOffset = ev.position;
           },
           onPointerDown: (ev) {
+            _flushPendingMove();
             if (!_focusNode.hasFocus) {
               _focusNode.requestFocus();
             }
@@ -562,13 +616,15 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
             _controller._cursorClickDown(ev.localPosition, button);
           },
           onPointerUp: (ev) {
+            _flushPendingMove();
             _controller._cursorClickUp(ev.localPosition, _lastButton);
           },
           onPointerCancel: (ev) {
+            _flushPendingMove();
             _controller._cursorClickUp(ev.localPosition, _lastButton);
           },
           onPointerMove: (ev) {
-            _controller._cursorDragging(ev.localPosition);
+            _dispatchPointerMove(ev.localPosition, dragging: true);
           },
           onPointerSignal: (signal) {
             if (signal is PointerScrollEvent) {

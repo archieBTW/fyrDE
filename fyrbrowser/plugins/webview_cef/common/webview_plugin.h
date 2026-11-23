@@ -27,6 +27,7 @@ namespace webview_cef {
         void setInvokeMethodFunc(std::function<void(std::string, WValue*)> func);
         void setLogNativeFunc(std::function<void(std::string)> func);
         void setCreateTextureFunc(std::function<std::shared_ptr<WebviewTexture>()> func);
+        void setRunOnMainThreadFunc(std::function<void(std::function<void()>)> func);
         bool getAnyBrowserFocused();
 
     private :
@@ -34,6 +35,7 @@ namespace webview_cef {
     	std::function<void(std::string, WValue*)> m_invokeFunc;
         std::function<void(std::string)> m_logFunc;
 	    std::function<std::shared_ptr<WebviewTexture>()> m_createTextureFunc;
+        std::function<void(std::function<void()>)> m_runOnMainFunc;
         CefRefPtr<WebviewHandler> m_handler;
 	    CefRefPtr<WebviewApp> m_app;
     	std::unordered_map<int, std::shared_ptr<WebviewTexture>> m_renderers;

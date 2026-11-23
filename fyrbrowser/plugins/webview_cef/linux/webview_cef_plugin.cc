@@ -4,7 +4,11 @@
 #include <gtk/gtk.h>
 #include <sys/utsname.h>
 
+#include <atomic>
 #include <cstring>
+#include <functional>
+#include <memory>
+#include <mutex>
 #include <unordered_map>
 #include <webview_plugin.h>
 #include "webview_cef_keyevent.h"
@@ -19,49 +23,90 @@ struct _WebviewCefPlugin
   GObject parent_instance;
   std::shared_ptr<webview_cef::WebviewPlugin> m_plugin;
   FlTextureRegistrar *m_textureRegister;
+  FlMethodChannel *m_channel;
+  std::shared_ptr<std::atomic<bool>> m_alive;
   int64_t m_window;
 };
 
 G_DEFINE_TYPE(WebviewCefPlugin, webview_cef_plugin, g_object_get_type())
 
 std::unordered_map<int64_t, std::shared_ptr<webview_cef::WebviewPlugin>> webviewPlugins;
+std::mutex webviewPluginsMutex;
 
 class WebviewTextureRenderer : public webview_cef::WebviewTexture
 {
 public:
-  WebviewTextureRenderer(FlTextureRegistrar *texture_register)
+  WebviewTextureRenderer(FlTextureRegistrar *texture_register,
+                         std::shared_ptr<std::atomic<bool>> plugin_alive)
+      : register_(texture_register), alive_(std::move(plugin_alive))
   {
-    register_ = texture_register;
     texture = webview_cef_texture_new();
+    g_object_ref(register_);
     fl_texture_registrar_register_texture(register_, FL_TEXTURE(texture));
-    textureId = (int64_t)texture;
+    textureId = reinterpret_cast<int64_t>(texture);
   }
 
   virtual ~WebviewTextureRenderer()
   {
-    fl_texture_registrar_unregister_texture(register_, FL_TEXTURE(texture));
+    active_.store(false, std::memory_order_release);
+    FlTextureRegistrar *reg = register_;
+    WebviewCefTexture *tex = texture;
+    auto alive = alive_;
     register_ = nullptr;
+    texture = nullptr;
+    if (reg == nullptr || tex == nullptr) {
+      return;
+    }
+
+    auto cleanup = [reg, tex, alive]() {
+      if (alive && alive->load(std::memory_order_acquire)) {
+        fl_texture_registrar_unregister_texture(reg, FL_TEXTURE(tex));
+      }
+      g_object_unref(tex);
+      g_object_unref(reg);
+    };
+
+    if (g_main_context_is_owner(g_main_context_default())) {
+      cleanup();
+    } else {
+      auto *fn = new std::function<void()>(std::move(cleanup));
+      g_main_context_invoke(
+          nullptr,
+          [](gpointer user_data) -> gboolean {
+            auto *cb = static_cast<std::function<void()> *>(user_data);
+            (*cb)();
+            delete cb;
+            return G_SOURCE_REMOVE;
+          },
+          fn);
+    }
   }
 
   virtual void onFrame(const void *buffer, int32_t width, int32_t height) override
   {
-    g_mutex_lock(&texture->mutex);
-    if (texture->width != (uint32_t)width || texture->height != (uint32_t)height) {
-      texture->width = width;
-      texture->height = height;
-      delete[] texture->buffer;
-      texture->buffer = new uint8_t[width * height * 4];
+    if (!active_.load(std::memory_order_acquire) ||
+        (alive_ && !alive_->load(std::memory_order_acquire)) ||
+        texture == nullptr || register_ == nullptr) {
+      return;
     }
-    webview_cef::SwapBufferFromBgraToRgba((void *)texture->buffer, buffer, width, height);
-    g_mutex_unlock(&texture->mutex);
-    fl_texture_registrar_mark_texture_frame_available(register_, FL_TEXTURE(texture));
+    webview_cef_texture_submit_frame(texture, buffer, width, height);
+    if (active_.load(std::memory_order_acquire) &&
+        (!alive_ || alive_->load(std::memory_order_acquire))) {
+      fl_texture_registrar_mark_texture_frame_available(register_, FL_TEXTURE(texture));
+    }
   }
-  FlTextureRegistrar *register_;
-  WebviewCefTexture *texture;
+
+  FlTextureRegistrar *register_ = nullptr;
+  WebviewCefTexture *texture = nullptr;
+  std::shared_ptr<std::atomic<bool>> alive_;
+  std::atomic<bool> active_{true};
 };
 
 static FlValue *encode_wavlue_to_flvalue(WValue *args)
 {
+  if (args == nullptr) {
+    return fl_value_new_null();
+  }
   WValueType type = webview_value_get_type(args);
   switch (type)
   {
@@ -138,6 +183,9 @@ static FlValue *encode_wavlue_to_flvalue(WValue *args)
 
 static WValue *encode_flvalue_to_wvalue(FlValue *args)
 {
+  if (args == nullptr) {
+    return webview_value_new_null();
+  }
   FlValueType argsType = fl_value_get_type(args);
   switch (argsType)
   {
@@ -210,6 +258,33 @@ static WValue *encode_flvalue_to_wvalue(FlValue *args)
   }
 }
 
+struct MethodRespondData {
+  FlMethodCall *method_call;
+  int ret;
+  FlValue *value;
+  std::shared_ptr<std::atomic<bool>> alive;
+};
+
+static void respond_on_main_thread(FlMethodCall *method_call,
+                                   int ret,
+                                   FlValue *fl_val,
+                                   const std::shared_ptr<std::atomic<bool>> &alive)
+{
+  if (alive && alive->load(std::memory_order_acquire)) {
+    if (ret > 0) {
+      fl_method_call_respond_success(method_call, fl_val, nullptr);
+    } else if (ret < 0) {
+      fl_method_call_respond_error(method_call, "error", "error", fl_val, nullptr);
+    } else {
+      fl_method_call_respond_not_implemented(method_call, nullptr);
+    }
+  }
+  if (fl_val != nullptr) {
+    fl_value_unref(fl_val);
+  }
+  g_object_unref(method_call);
+}
+
 // Called when a method call is received from Flutter.
 static void webview_cef_plugin_handle_method_call(
     WebviewCefPlugin *self,
@@ -218,26 +293,42 @@ static void webview_cef_plugin_handle_method_call(
   const gchar *method = fl_method_call_get_name(method_call);
   WValue *encodeArgs = encode_flvalue_to_wvalue(fl_method_call_get_args(method_call));
   g_object_ref(method_call);
-  self->m_plugin->HandleMethodCall(method, encodeArgs, [=](int ret, WValue *responseArgs){
-    if (ret > 0){
-      fl_method_call_respond_success(method_call, encode_wavlue_to_flvalue(responseArgs), nullptr);
+  auto alive = self->m_alive;
+  self->m_plugin->HandleMethodCall(method, encodeArgs, [method_call, alive](int ret, WValue *responseArgs) {
+    FlValue *fl_val = (ret != 0) ? encode_wavlue_to_flvalue(responseArgs) : nullptr;
+    if (g_main_context_is_owner(g_main_context_default())) {
+      respond_on_main_thread(method_call, ret, fl_val, alive);
+    } else {
+      auto *data = new MethodRespondData{method_call, ret, fl_val, alive};
+      g_main_context_invoke(
+          nullptr,
+          [](gpointer user_data) -> gboolean {
+            auto *d = static_cast<MethodRespondData *>(user_data);
+            respond_on_main_thread(d->method_call, d->ret, d->value, d->alive);
+            delete d;
+            return G_SOURCE_REMOVE;
+          },
+          data);
     }
-    else if (ret < 0){
-      fl_method_call_respond_error(method_call, "error", "error", encode_wavlue_to_flvalue(responseArgs), nullptr);
-    }
-    else{
-      fl_method_call_respond_not_implemented(method_call, nullptr);
-    }
-    g_object_unref(method_call); 
   });
   webview_value_unref(encodeArgs);
 }
 
 static void webview_cef_plugin_dispose(GObject *object)
 {
-  webviewPlugins.erase(WEBVIEW_CEF_PLUGIN(object)->m_window);
-  WEBVIEW_CEF_PLUGIN(object)->m_plugin = nullptr; 
-  if(webviewPlugins.empty()){
+  WebviewCefPlugin *self = WEBVIEW_CEF_PLUGIN(object);
+  if (self->m_alive) {
+    self->m_alive->store(false, std::memory_order_release);
+  }
+  bool shouldStopCef = false;
+  {
+    std::lock_guard<std::mutex> lock(webviewPluginsMutex);
+    webviewPlugins.erase(self->m_window);
+    shouldStopCef = webviewPlugins.empty();
+  }
+  self->m_plugin = nullptr;
+  g_clear_object(&self->m_channel);
+  if (shouldStopCef) {
     webview_cef::stopCEF();
   }
   G_OBJECT_CLASS(webview_cef_plugin_parent_class)->dispose(object);
@@ -250,6 +341,10 @@ static void webview_cef_plugin_class_init(WebviewCefPluginClass *klass)
 
 static void webview_cef_plugin_init(WebviewCefPlugin *self) {
   self->m_plugin = std::make_shared<webview_cef::WebviewPlugin>();
+  self->m_alive = std::make_shared<std::atomic<bool>>(true);
+  self->m_channel = nullptr;
+  self->m_textureRegister = nullptr;
+  self->m_window = 0;
 }
 
 static void method_call_cb(FlMethodChannel *channel, FlMethodCall *method_call,
@@ -265,42 +360,106 @@ void webview_cef_plugin_register_with_registrar(FlPluginRegistrar *registrar)
       g_object_new(webview_cef_plugin_get_type(), nullptr));
 
   plugin->m_window = int64_t(fl_plugin_registrar_get_view(registrar));
-  webviewPlugins.emplace(plugin->m_window, plugin->m_plugin);
+  {
+    std::lock_guard<std::mutex> lock(webviewPluginsMutex);
+    webviewPlugins.emplace(plugin->m_window, plugin->m_plugin);
+  }
 
   plugin->m_textureRegister = fl_plugin_registrar_get_texture_registrar(registrar);
 
   g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
-  g_autoptr(FlMethodChannel) channel =
+  FlMethodChannel *channel =
       fl_method_channel_new(fl_plugin_registrar_get_messenger(registrar),
                             "webview_cef",
                             FL_METHOD_CODEC(codec));
+  plugin->m_channel = channel; // plugin owns the initial reference
   fl_method_channel_set_method_call_handler(channel, method_call_cb,
                                             g_object_ref(plugin),
                                             g_object_unref);
 
-  plugin->m_plugin->setLogNativeFunc([=](std::string message) {
-    g_main_context_invoke(NULL, [](gpointer user_data) -> gboolean {
-      auto data = static_cast<std::pair<FlMethodChannel*, std::string>*>(user_data);
-      g_autoptr(FlValue) args = fl_value_new_string(data->second.c_str());
-      fl_method_channel_invoke_method(data->first, "onNativeLog", args, NULL, NULL, NULL);
-      delete data;
-      return FALSE;
-    }, new std::pair<FlMethodChannel*, std::string>(channel, message));
+  auto alive = plugin->m_alive;
+
+  plugin->m_plugin->setRunOnMainThreadFunc([alive](std::function<void()> task) {
+    if (!alive || !alive->load(std::memory_order_acquire)) {
+      return;
+    }
+    if (g_main_context_is_owner(g_main_context_default())) {
+      task();
+      return;
+    }
+    auto *payload = new std::pair<std::shared_ptr<std::atomic<bool>>, std::function<void()>>(
+        alive, std::move(task));
+    g_main_context_invoke(
+        nullptr,
+        [](gpointer user_data) -> gboolean {
+          auto *p = static_cast<std::pair<std::shared_ptr<std::atomic<bool>>, std::function<void()>> *>(user_data);
+          if (p->first && p->first->load(std::memory_order_acquire)) {
+            p->second();
+          }
+          delete p;
+          return G_SOURCE_REMOVE;
+        },
+        payload);
   });
 
-  plugin->m_plugin->setInvokeMethodFunc([=](std::string method, WValue *arguments) {
+  plugin->m_plugin->setLogNativeFunc([channel, alive](std::string message) {
+    if (!alive || !alive->load(std::memory_order_acquire)) {
+      return;
+    }
+    g_object_ref(channel);
+    struct LogData {
+      FlMethodChannel *ch;
+      std::shared_ptr<std::atomic<bool>> alive;
+      std::string msg;
+    };
+    auto *data = new LogData{channel, alive, std::move(message)};
+    g_main_context_invoke(
+        nullptr,
+        [](gpointer user_data) -> gboolean {
+          auto *d = static_cast<LogData *>(user_data);
+          if (d->alive && d->alive->load(std::memory_order_acquire)) {
+            g_autoptr(FlValue) args = fl_value_new_string(d->msg.c_str());
+            fl_method_channel_invoke_method(d->ch, "onNativeLog", args, nullptr, nullptr, nullptr);
+          }
+          g_object_unref(d->ch);
+          delete d;
+          return G_SOURCE_REMOVE;
+        },
+        data);
+  });
+
+  plugin->m_plugin->setInvokeMethodFunc([channel, alive](std::string method, WValue *arguments) {
+    if (!alive || !alive->load(std::memory_order_acquire)) {
+      return;
+    }
     FlValue *args = encode_wavlue_to_flvalue(arguments);
-    g_main_context_invoke(NULL, [](gpointer user_data) -> gboolean {
-      auto data = static_cast<std::pair<FlMethodChannel*, std::pair<std::string, FlValue*>>*>(user_data);
-      fl_method_channel_invoke_method(data->first, data->second.first.c_str(), data->second.second, NULL, NULL, NULL);
-      fl_value_unref(data->second.second);
-      delete data;
-      return FALSE;
-    }, new std::pair<FlMethodChannel*, std::pair<std::string, FlValue*>>(channel, {method, args}));
+    g_object_ref(channel);
+    struct InvokeData {
+      FlMethodChannel *ch;
+      std::shared_ptr<std::atomic<bool>> alive;
+      std::string method;
+      FlValue *args;
+    };
+    auto *data = new InvokeData{channel, alive, std::move(method), args};
+    g_main_context_invoke(
+        nullptr,
+        [](gpointer user_data) -> gboolean {
+          auto *d = static_cast<InvokeData *>(user_data);
+          if (d->alive && d->alive->load(std::memory_order_acquire)) {
+            fl_method_channel_invoke_method(d->ch, d->method.c_str(), d->args, nullptr, nullptr, nullptr);
+          }
+          fl_value_unref(d->args);
+          g_object_unref(d->ch);
+          delete d;
+          return G_SOURCE_REMOVE;
+        },
+        data);
   });
 
-  plugin->m_plugin->setCreateTextureFunc([=](){
-    std::shared_ptr<WebviewTextureRenderer> renderer = std::make_shared<WebviewTextureRenderer>(plugin->m_textureRegister);
+  FlTextureRegistrar *texReg = plugin->m_textureRegister;
+  plugin->m_plugin->setCreateTextureFunc([texReg, alive]() {
+    std::shared_ptr<WebviewTextureRenderer> renderer =
+        std::make_shared<WebviewTextureRenderer>(texReg, alive);
     return std::dynamic_pointer_cast<webview_cef::WebviewTexture>(renderer);
   });
 
@@ -338,7 +497,16 @@ FLUTTER_PLUGIN_EXPORT gboolean processKeyEventForCEF(GtkWidget *widget, GdkEvent
   }
 
   int64_t _id = int64_t(widget);
-  if (webviewPlugins.find(_id) != webviewPlugins.end() && webviewPlugins[_id]->getAnyBrowserFocused())
+  std::shared_ptr<webview_cef::WebviewPlugin> plugin;
+  {
+    std::lock_guard<std::mutex> lock(webviewPluginsMutex);
+    auto it = webviewPlugins.find(_id);
+    if (it != webviewPlugins.end()) {
+      plugin = it->second;
+    }
+  }
+
+  if (plugin && plugin->getAnyBrowserFocused())
   {
     CefKeyEvent key_event = {};
     KeyboardCode windows_key_code = GdkEventToWindowsKeyCode(event);
@@ -358,21 +526,10 @@ FLUTTER_PLUGIN_EXPORT gboolean processKeyEventForCEF(GtkWidget *widget, GdkEvent
 
     if (windows_key_code == VKEY_RETURN)
     {
-      // We need to treat the enter key as a key press of character \r.  This
-      // is apparently just how webkit handles it and what it expects.
+      // Treat Enter as \r as expected by Blink/WebKit.
       key_event.unmodified_character = '\r';
     }
-    else if((windows_key_code == KeyboardCode::VKEY_V) && (key_event.modifiers & EVENTFLAG_CONTROL_DOWN) && (event->type == GDK_KEY_PRESS)){
-      //try to fix copy request freeze process problem(flutter engine will send a copy request when ctrl+v pressed)
-      int res = 0;
-      if(system("xclip -o -sel clipboard | xclip -i -sel clipboard  &>/dev/null") == 0){
-        res = system("xclip -o -sel clipboard | xclip -i &>/dev/null");
-      }
-      // Suppress unused variable warning
-      (void)res;
-    }
     else {
-      // FIXME: fix for non BMP chars
       key_event.unmodified_character =
           static_cast<int>(gdk_keyval_to_unicode(event->keyval));
     }
@@ -390,21 +547,21 @@ FLUTTER_PLUGIN_EXPORT gboolean processKeyEventForCEF(GtkWidget *widget, GdkEvent
     if (event->type == GDK_KEY_PRESS)
     {
       key_event.type = KEYEVENT_RAWKEYDOWN;
-      webviewPlugins[_id]->sendKeyEvent(key_event);
+      plugin->sendKeyEvent(key_event);
       if (key_event.character != 0 &&
           !(key_event.modifiers & EVENTFLAG_CONTROL_DOWN)) {
         key_event.type = KEYEVENT_CHAR;
-        webviewPlugins[_id]->sendKeyEvent(key_event);
+        plugin->sendKeyEvent(key_event);
       }
     }
     else
     {
       key_event.type = KEYEVENT_KEYUP;
-      webviewPlugins[_id]->sendKeyEvent(key_event);
+      plugin->sendKeyEvent(key_event);
     }
 
     return TRUE;
   }
-  // processKeyEventForFlutter need return FALSE
+  // Let Flutter handle the key event when no CEF browser has focus.
   return FALSE;
 }

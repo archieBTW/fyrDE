@@ -19,6 +19,7 @@ import 'fyr_theme.dart';
 import 'home_page.dart';
 import 'logger_service.dart';
 import 'settings_dialog.dart';
+import 'url_bar.dart';
 
 const String _kUserAgent =
     'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
@@ -46,8 +47,6 @@ class _BrowserScreenState extends State<BrowserScreen> {
 
   final TextEditingController _urlController = TextEditingController();
   final FocusNode _urlFocusNode = FocusNode();
-  final LayerLink _urlBarLink = LayerLink();
-  OverlayEntry? _autocompleteOverlay;
 
   final TextEditingController _findController = TextEditingController();
   final FocusNode _findFocusNode = FocusNode();
@@ -71,8 +70,6 @@ class _BrowserScreenState extends State<BrowserScreen> {
   void initState() {
     super.initState();
     HardwareKeyboard.instance.addHandler(_handleGlobalKeyEvent);
-    _urlFocusNode.addListener(_onUrlFocusChanged);
-    _urlController.addListener(_onUrlTextChanged);
     _initBrowser();
   }
 
@@ -80,10 +77,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
   void dispose() {
     _saveDebounce?.cancel();
     _writeDataToDisk();
-    _removeAutocompleteOverlay();
     HardwareKeyboard.instance.removeHandler(_handleGlobalKeyEvent);
-    _urlFocusNode.removeListener(_onUrlFocusChanged);
-    _urlController.removeListener(_onUrlTextChanged);
     _urlFocusNode.dispose();
     _urlController.dispose();
     _findFocusNode.dispose();
@@ -557,7 +551,6 @@ Categories=Network;WebBrowser;
 
     final resolved = resolveNavigationInput(rawInput, _settings.searchEngine);
     _urlFocusNode.unfocus();
-    _removeAutocompleteOverlay();
 
     setState(() {
       tab.url = resolved;
@@ -685,6 +678,10 @@ Categories=Network;WebBrowser;
       return true;
     }
     if (key == LogicalKeyboardKey.keyL) {
+      final tab = _activeTab;
+      if (tab != null && tab.isReady && tab.controller.value) {
+        tab.controller.setClientFocus(false);
+      }
       _urlFocusNode.requestFocus();
       _urlController.selection = TextSelection(
         baseOffset: 0,
@@ -717,134 +714,6 @@ Categories=Network;WebBrowser;
       return true;
     }
     return false;
-  }
-
-  void _onUrlFocusChanged() {
-    if (_urlFocusNode.hasFocus) {
-      _urlController.selection = TextSelection(
-        baseOffset: 0,
-        extentOffset: _urlController.text.length,
-      );
-      _updateAutocompleteOverlay();
-    } else {
-      _removeAutocompleteOverlay();
-      final tab = _activeTab;
-      if (tab != null) {
-        _urlController.text = tab.url;
-      }
-    }
-  }
-
-  void _onUrlTextChanged() {
-    if (_urlFocusNode.hasFocus) {
-      _updateAutocompleteOverlay();
-    }
-  }
-
-  List<Map<String, String>> _buildSuggestions(String query) {
-    final q = query.trim().toLowerCase();
-    if (q.isEmpty) return const [];
-    final seen = <String>{};
-    final results = <Map<String, String>>[];
-    for (final list in [_bookmarks, _history]) {
-      for (final item in list) {
-        final url = item['url'] ?? '';
-        final title = item['title'] ?? '';
-        if (url.isEmpty || isInternalUrl(url) || seen.contains(url)) continue;
-        if (url.toLowerCase().contains(q) ||
-            title.toLowerCase().contains(q)) {
-          seen.add(url);
-          results.add({'title': title, 'url': url});
-          if (results.length >= 6) return results;
-        }
-      }
-    }
-    return results;
-  }
-
-  void _updateAutocompleteOverlay() {
-    _removeAutocompleteOverlay();
-    if (!_urlFocusNode.hasFocus) return;
-    final suggestions = _buildSuggestions(_urlController.text);
-    if (suggestions.isEmpty) return;
-
-    final overlay = Overlay.of(context);
-    _autocompleteOverlay = OverlayEntry(
-      builder: (context) => Positioned(
-        width: 520,
-        child: CompositedTransformFollower(
-          link: _urlBarLink,
-          showWhenUnlinked: false,
-          offset: const Offset(0, 40),
-          child: Material(
-            elevation: 8,
-            color: FyrTheme.bgColor,
-            borderRadius: BorderRadius.circular(10),
-            child: Container(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                  color: FyrTheme.dividerColor.withValues(alpha: 0.35),
-                ),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: suggestions.map((s) {
-                  final url = s['url'] ?? '';
-                  final title = (s['title'] ?? '').trim();
-                  return InkWell(
-                    onTap: () => _navigateActiveTabTo(url),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 8),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.public,
-                            size: 14,
-                            color: FyrTheme.textColor.withValues(alpha: 0.55),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              title.isNotEmpty ? title : url,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: FyrTheme.textColor,
-                                fontSize: 12,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Flexible(
-                            child: Text(
-                              url,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: FyrTheme.accentColor,
-                                fontSize: 11,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                }).toList(),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-    overlay.insert(_autocompleteOverlay!);
-  }
-
-  void _removeAutocompleteOverlay() {
-    _autocompleteOverlay?.remove();
-    _autocompleteOverlay = null;
   }
 
   void _showExternalProtocolPrompt(String url) {
@@ -1365,84 +1234,25 @@ Categories=Network;WebBrowser;
 
   Widget _buildUrlBar(BrowserTab? tab) {
     final url = tab?.url ?? kDefaultHomePage;
-    final isSecure = url.startsWith('https://');
-    final isError = tab?.loadError != null;
-    final bookmarked = tab != null && _isBookmarked(url);
-
-    return CompositedTransformTarget(
-      link: _urlBarLink,
-      child: Container(
-        height: 36,
-        decoration: BoxDecoration(
-          color: FyrTheme.isDark
-              ? Colors.white.withValues(alpha: 0.09)
-              : Colors.black.withValues(alpha: 0.05),
-          borderRadius: BorderRadius.circular(10),
-          border: _urlFocusNode.hasFocus
-              ? Border.all(color: FyrTheme.accentColor.withValues(alpha: 0.6))
-              : null,
-        ),
-        child: Row(
-          children: [
-            const SizedBox(width: 10),
-            Icon(
-              isError
-                  ? Icons.warning_amber_rounded
-                  : isSecure
-                      ? Icons.lock_outline
-                      : Icons.lock_open,
-              size: 14,
-              color: isError
-                  ? Colors.orangeAccent
-                  : isSecure
-                      ? Colors.greenAccent
-                      : FyrTheme.textColor.withValues(alpha: 0.55),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: TextField(
-                controller: _urlController,
-                focusNode: _urlFocusNode,
-                style: TextStyle(color: FyrTheme.textColor, fontSize: 13),
-                decoration: InputDecoration(
-                  hintText:
-                      'Search with ${_settings.searchEngine.label} or enter URL',
-                  hintStyle: TextStyle(
-                    color: FyrTheme.textColor.withValues(alpha: 0.4),
-                    fontSize: 13,
-                  ),
-                  border: InputBorder.none,
-                  isDense: true,
-                  contentPadding: EdgeInsets.zero,
-                ),
-                onSubmitted: _navigateActiveTabTo,
-              ),
-            ),
-            if (tab != null) ...[
-              if (tab.isPwa)
-                IconButton(
-                  icon: Icon(
-                    Icons.install_desktop,
-                    size: 17,
-                    color: FyrTheme.accentColor,
-                  ),
-                  tooltip: 'Install PWA',
-                  onPressed: () => _installPwa(tab),
-                ),
-              IconButton(
-                onPressed: () => _toggleBookmark(tab),
-                tooltip: bookmarked ? 'Remove Bookmark' : 'Bookmark Page',
-                iconSize: 16,
-                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                icon: Icon(
-                  bookmarked ? Icons.star : Icons.star_border,
-                  color: bookmarked ? FyrTheme.accentColor : FyrTheme.textColor.withValues(alpha: 0.5),
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
+    return FyrUrlBar(
+      controller: _urlController,
+      focusNode: _urlFocusNode,
+      currentUrl: url,
+      searchEngineLabel: _settings.searchEngine.label,
+      isError: tab?.loadError != null,
+      isBookmarked: tab != null && _isBookmarked(url),
+      showInstallPwa: tab?.isPwa == true,
+      bookmarks: _bookmarks,
+      history: _history,
+      onFocusGained: () {
+        final active = _activeTab;
+        if (active != null && active.isReady && active.controller.value) {
+          active.controller.setClientFocus(false);
+        }
+      },
+      onSubmit: _navigateActiveTabTo,
+      onToggleBookmark: tab != null ? () => _toggleBookmark(tab) : null,
+      onInstallPwa: tab != null ? () => _installPwa(tab) : null,
     );
   }
 
