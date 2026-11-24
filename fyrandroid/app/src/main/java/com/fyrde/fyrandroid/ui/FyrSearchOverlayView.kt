@@ -15,6 +15,8 @@ import android.text.TextWatcher
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.MotionEvent
+import android.view.VelocityTracker
 import android.view.View
 import android.view.ViewGroup
 import android.view.animation.DecelerateInterpolator
@@ -31,6 +33,7 @@ import com.fyrde.fyrandroid.model.AppEntry
 import com.fyrde.fyrandroid.model.AppRepository
 import com.fyrde.fyrandroid.search.FyrSearchEvaluator
 import com.fyrde.fyrandroid.theme.FyrThemeManager
+import kotlin.math.abs
 import kotlin.math.max
 
 /**
@@ -73,6 +76,13 @@ class FyrSearchOverlayView(
 
     var isOpen: Boolean = false
         private set
+
+    private var touchStartX = 0f
+    private var touchStartY = 0f
+    private var canPullDownToClose = false
+    private var gestureDecided = false
+    private var isDraggingDown = false
+    private var velocityTracker: VelocityTracker? = null
 
     init {
         visibility = View.GONE
@@ -258,10 +268,13 @@ class FyrSearchOverlayView(
 
     fun openAndFocus() {
         isOpen = true
+        isDraggingDown = false
+        gestureDecided = false
         onVisibilityChanged(true)
         applyTheme()
         searchInput.setText("")
         updateFilter("")
+        animate().cancel()
         visibility = View.VISIBLE
         alpha = 0f
         translationY = dp(40f).toFloat()
@@ -283,17 +296,110 @@ class FyrSearchOverlayView(
     fun close() {
         if (!isOpen) return
         isOpen = false
+        isDraggingDown = false
+        gestureDecided = false
         onVisibilityChanged(false)
         val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
         imm?.hideSoftInputFromWindow(searchInput.windowToken, 0)
+        animate().cancel()
         animate()
             .alpha(0f)
-            .translationY(dp(32f).toFloat())
-            .setDuration(140L)
+            .translationY(max(translationY + dp(48f), dp(120f).toFloat()))
+            .setDuration(150L)
             .withEndAction {
                 visibility = View.GONE
+                translationY = 0f
             }
             .start()
+    }
+
+    private fun isGridAtTop(): Boolean {
+        if (appGridView.childCount == 0) return true
+        if (appGridView.firstVisiblePosition > 0) return false
+        val firstChild = appGridView.getChildAt(0) ?: return true
+        return firstChild.top >= appGridView.paddingTop - dp(4f)
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (!isOpen) return super.dispatchTouchEvent(ev)
+
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                touchStartX = ev.rawX
+                touchStartY = ev.rawY
+                isDraggingDown = false
+                gestureDecided = false
+                val touchedAboveGrid = ev.y < appGridView.top
+                canPullDownToClose = touchedAboveGrid || isGridAtTop()
+                velocityTracker?.recycle()
+                velocityTracker = VelocityTracker.obtain().apply { addMovement(ev) }
+                return super.dispatchTouchEvent(ev)
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                velocityTracker?.addMovement(ev)
+                val dx = ev.rawX - touchStartX
+                val dy = ev.rawY - touchStartY
+
+                if (!isDraggingDown && !gestureDecided) {
+                    if (abs(dy) > dp(10f) || abs(dx) > dp(10f)) {
+                        val canDismiss = canPullDownToClose || isGridAtTop()
+                        if (dy > dp(10f) && dy > abs(dx) * 1.05f && canDismiss) {
+                            isDraggingDown = true
+                            gestureDecided = true
+                            // Cancel any child touch/scroll gesture cleanly before taking over.
+                            val cancelEv = MotionEvent.obtain(ev).apply {
+                                action = MotionEvent.ACTION_CANCEL
+                            }
+                            super.dispatchTouchEvent(cancelEv)
+                            cancelEv.recycle()
+                        } else {
+                            gestureDecided = true
+                        }
+                    }
+                }
+
+                if (isDraggingDown) {
+                    val clampedY = dy.coerceAtLeast(0f)
+                    translationY = clampedY
+                    alpha = (1f - clampedY / dp(260f).toFloat()).coerceIn(0.30f, 1f)
+                    return true
+                }
+                return super.dispatchTouchEvent(ev)
+            }
+
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                val dy = ev.rawY - touchStartY
+                var velocityY = 0f
+                velocityTracker?.let { vt ->
+                    vt.addMovement(ev)
+                    vt.computeCurrentVelocity(1000)
+                    velocityY = vt.yVelocity
+                    vt.recycle()
+                }
+                velocityTracker = null
+
+                if (isDraggingDown) {
+                    isDraggingDown = false
+                    gestureDecided = false
+                    if (dy > dp(52f) || velocityY > dp(360f)) {
+                        close()
+                    } else {
+                        animate()
+                            .translationY(0f)
+                            .alpha(1f)
+                            .setDuration(140L)
+                            .setInterpolator(DecelerateInterpolator(1.6f))
+                            .start()
+                    }
+                    return true
+                }
+                gestureDecided = false
+                return super.dispatchTouchEvent(ev)
+            }
+        }
+
+        return super.dispatchTouchEvent(ev)
     }
 
     private fun updateFilter(query: String) {

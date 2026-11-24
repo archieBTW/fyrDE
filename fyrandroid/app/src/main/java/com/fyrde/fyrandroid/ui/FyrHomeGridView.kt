@@ -11,17 +11,19 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.text.TextUtils
 import android.util.TypedValue
-import android.view.GestureDetector
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
+import android.view.VelocityTracker
 import android.view.View
+import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.GridLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.fyrde.fyrandroid.model.AppEntry
 import com.fyrde.fyrandroid.model.AppRepository
+import com.fyrde.fyrandroid.model.HomeItem
 import com.fyrde.fyrandroid.theme.FyrThemeManager
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -33,19 +35,23 @@ import kotlin.math.min
 
 /**
  * Fyr Home Screen Layout with FyrDE glass aesthetic:
- * - Top Fyr status pill (clock, date, quick actions trigger)
- * - Horizontal paged 4x5 squircle icon grids with smooth gesture paging
- * - Page indicator dots + "Swipe up to search" pill
- * - Translucent frosted-glass 4-icon bottom Dock (`28dp` corner radius)
- * - Swipe UP anywhere on the home screen opens FyrSearch (`onSwipeUpSearch`)
- * - Swipe DOWN anywhere on the home screen opens Fyr Quick Settings (`onSwipeDownQuickSettings`)
+ * - Top Fyr header (clock, date, subtle Wi-Fi/Bluetooth Quick Settings trigger)
+ * - Smooth horizontal slide-animated 4x5 paged icon grid
+ * - Long-press & drag to reorder icons across cells/pages, or drop onto another icon/folder to group
+ * - Stationary long-press opens the app/folder context menu
+ * - Page indicator dots + translucent frosted-glass 4-icon bottom Dock (`28dp` corner radius)
+ * - Swipe UP anywhere -> FyrSearch, Swipe DOWN anywhere -> Fyr Quick Settings
  */
 @SuppressLint("ViewConstructor")
 class FyrHomeGridView(
     context: Context,
     private val repo: AppRepository,
     private val onLaunchApp: (AppEntry) -> Unit,
+    private val onOpenFolder: (HomeItem.Folder) -> Unit,
     private val onAppLongPressMenu: (View, AppEntry) -> Unit,
+    private val onFolderLongPressMenu: (View, HomeItem.Folder) -> Unit,
+    private val onMoveHomeItem: (Int, Int) -> Unit,
+    private val onGroupHomeItems: (Int, Int) -> Unit,
     private val onSwipeUpSearch: () -> Unit,
     private val onSwipeDownQuickSettings: () -> Unit
 ) : FrameLayout(context) {
@@ -57,59 +63,52 @@ class FyrHomeGridView(
     private val rows = 5
     private val itemsPerPage = columns * rows
 
-    private var pages: List<List<AppEntry>> = emptyList()
+    private var allHomeItems: List<HomeItem> = emptyList()
+    private var pages: List<List<HomeItem>> = emptyList()
     private var currentPage = 0
 
     private val headerTimeView: TextView
     private val headerDateView: TextView
-    private val gridContainer: GridLayout
+    private val pagerViewport: FrameLayout
+    private var activePageGrid: GridLayout
+    private var adjacentPageGrid: GridLayout
+    private val dropIndicatorView: View
     private val pageDotsContainer: LinearLayout
     private val dockContainer: LinearLayout
     private val dockBackground = GradientDrawable()
-    private val searchPillBackground = GradientDrawable()
 
-    private val gestureDetector = GestureDetector(
-        context,
-        object : GestureDetector.SimpleOnGestureListener() {
-            override fun onDown(e: MotionEvent): Boolean = true
+    // Interactive horizontal slide & vertical swipe tracking
+    private enum class SwipeMode { NONE, HORIZONTAL, VERTICAL }
+    private var swipeMode = SwipeMode.NONE
+    private var touchDownX = 0f
+    private var touchDownY = 0f
+    private var lastRawX = 0f
+    private var lastRawY = 0f
+    private var swipeTargetPage = -1
+    private var isPageAnimating = false
+    private var velocityTracker: VelocityTracker? = null
 
-            override fun onFling(
-                e1: MotionEvent?,
-                e2: MotionEvent,
-                velocityX: Float,
-                velocityY: Float
-            ): Boolean {
-                val start = e1 ?: return false
-                val dx = e2.x - start.x
-                val dy = e2.y - start.y
-
-                // Prioritize vertical swipes (Up -> FyrSearch, Down -> Fyr Quick Settings)
-                if (abs(dy) > abs(dx) * 1.15f && abs(dy) > dp(42f)) {
-                    if (dy < 0) {
-                        onSwipeUpSearch()
-                    } else {
-                        onSwipeDownQuickSettings()
-                    }
-                    return true
-                }
-
-                // Horizontal page switch
-                if (abs(dx) > abs(dy) && abs(dx) > dp(48f)) {
-                    if (dx < 0 && currentPage < pages.size - 1) {
-                        setCurrentPage(currentPage + 1)
-                        return true
-                    } else if (dx > 0 && currentPage > 0) {
-                        setCurrentPage(currentPage - 1)
-                        return true
-                    }
-                }
-                return false
-            }
+    // Drag-and-drop reorder / folder grouping state
+    private enum class DropMode { NONE, MOVE, GROUP }
+    private var isDraggingItem = false
+    private var dragMoved = false
+    private var dragSourceIndex = -1
+    private var dragSourceItem: HomeItem? = null
+    private var dragSourceView: View? = null
+    private var dragStartRawX = 0f
+    private var dragStartRawY = 0f
+    private var dragGhostView: View? = null
+    private var dragTargetIndex = -1
+    private var dragDropMode = DropMode.NONE
+    private var pendingEdgeFlipDir = 0
+    private val edgeFlipRunnable = Runnable {
+        if (!isDraggingItem || pendingEdgeFlipDir == 0) return@Runnable
+        val next = currentPage + pendingEdgeFlipDir
+        if (next in pages.indices) {
+            setCurrentPage(next, animate = true)
         }
-    )
-
-    private var interceptStartX = 0f
-    private var interceptStartY = 0f
+        pendingEdgeFlipDir = 0
+    }
 
     init {
         val rootColumn = LinearLayout(context).apply {
@@ -118,7 +117,7 @@ class FyrHomeGridView(
             setPadding(dp(18f), dp(42f), dp(18f), dp(20f))
         }
 
-        // Top Fyr Header (Clock + Date + Quick Settings hint)
+        // Top Fyr Header (Clock + Date + Quick Settings status pill)
         val headerRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -173,52 +172,41 @@ class FyrHomeGridView(
             LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
         )
 
-        // Main 4x5 App Grid
-        gridContainer = GridLayout(context).apply {
-            columnCount = columns
-            rowCount = rows
+        // Slide-animated dual-grid Pager Viewport
+        pagerViewport = FrameLayout(context).apply {
+            clipChildren = true
+            clipToPadding = true
         }
+        activePageGrid = createPageGrid()
+        adjacentPageGrid = createPageGrid().apply { visibility = View.GONE }
+        dropIndicatorView = View(context).apply {
+            visibility = View.GONE
+        }
+
+        pagerViewport.addView(
+            dropIndicatorView,
+            LayoutParams(dp(70f), dp(70f))
+        )
+        pagerViewport.addView(
+            activePageGrid,
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+        )
+        pagerViewport.addView(
+            adjacentPageGrid,
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+        )
         rootColumn.addView(
-            gridContainer,
+            pagerViewport,
             LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f)
         )
 
-        // Page indicator dots + Fyr "Search" pill
-        val bottomIndicatorCol = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(0, dp(6f), 0, dp(10f))
-        }
-
+        // Page indicator dots above the dock
         pageDotsContainer = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setPadding(0, 0, 0, dp(8f))
+            setPadding(0, dp(8f), 0, dp(12f))
         }
-
-        val searchHintPill = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16f), dp(7f), dp(18f), dp(7f))
-            background = searchPillBackground
-            setOnClickListener { onSwipeUpSearch() }
-        }
-        searchHintPill.addView(
-            FyrIconView(context, FyrIcon.SEARCH, 0xCCFFFFFF.toInt()),
-            LinearLayout.LayoutParams(dp(14f), dp(14f)).apply { rightMargin = dp(7f) }
-        )
-        searchHintPill.addView(
-            TextView(context).apply {
-                text = "Search"
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
-                setTextColor(0xCCFFFFFF.toInt())
-                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            }
-        )
-
-        bottomIndicatorCol.addView(pageDotsContainer)
-        bottomIndicatorCol.addView(searchHintPill)
-        rootColumn.addView(bottomIndicatorCol)
+        rootColumn.addView(pageDotsContainer)
 
         // Frosted Glass Bottom Dock (4 pinned apps)
         dockContainer = LinearLayout(context).apply {
@@ -241,6 +229,11 @@ class FyrHomeGridView(
         applyTheme()
     }
 
+    private fun createPageGrid(): GridLayout = GridLayout(context).apply {
+        columnCount = columns
+        rowCount = rows
+    }
+
     fun refreshClock() {
         val now = Date()
         headerTimeView.text = SimpleDateFormat("h:mm", Locale.getDefault()).format(now)
@@ -254,45 +247,86 @@ class FyrHomeGridView(
             setColor(FyrThemeManager.panelBgColor)
             setStroke(max(1, dp(1f)), FyrThemeManager.accentWithAlpha(0.35f))
         }
-        searchPillBackground.apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = dp(50f).toFloat()
-            setColor(FyrThemeManager.panelBgColor)
-            setStroke(max(1, dp(1f)), FyrThemeManager.dividerColor)
-        }
         updatePageDots()
+        populateGrid(activePageGrid, currentPage)
         invalidate()
     }
 
-    fun bindApps(allApps: List<AppEntry>, dockApps: List<AppEntry>) {
-        val dockKeys = dockApps.map { it.componentKey }.toSet()
-        val homeApps = allApps.filter { it.componentKey !in dockKeys }
-        val totalPages = max(1, ceil(homeApps.size / itemsPerPage.toDouble()).toInt())
-        val paged = ArrayList<List<AppEntry>>(totalPages)
+    fun bindLayout(homeItems: List<HomeItem>, dockApps: List<AppEntry>) {
+        allHomeItems = homeItems
+        val totalPages = max(1, ceil(homeItems.size / itemsPerPage.toDouble()).toInt())
+        val paged = ArrayList<List<HomeItem>>(totalPages)
         for (p in 0 until totalPages) {
             val start = p * itemsPerPage
-            val end = min(homeApps.size, start + itemsPerPage)
-            paged.add(if (start < end) homeApps.subList(start, end) else emptyList())
+            val end = min(homeItems.size, start + itemsPerPage)
+            paged.add(if (start < end) homeItems.subList(start, end) else emptyList())
         }
         pages = paged
         currentPage = currentPage.coerceIn(0, pages.size - 1)
-        renderCurrentPage()
+        activePageGrid.animate().cancel()
+        adjacentPageGrid.animate().cancel()
+        activePageGrid.translationX = 0f
+        adjacentPageGrid.visibility = View.GONE
+        isPageAnimating = false
+        populateGrid(activePageGrid, currentPage)
+        updatePageDots()
         renderDock(dockApps)
     }
 
-    fun setCurrentPage(pageIndex: Int) {
+    fun setCurrentPage(pageIndex: Int, animate: Boolean = true) {
         if (pages.isEmpty()) return
         val clamped = pageIndex.coerceIn(0, pages.size - 1)
-        if (clamped == currentPage && gridContainer.childCount > 0) return
-        currentPage = clamped
-        gridContainer.alpha = 0.4f
-        renderCurrentPage()
-        gridContainer.animate().alpha(1f).setDuration(140L).start()
+        if (clamped == currentPage && activePageGrid.childCount > 0) return
+
+        val vpWidth = pagerViewport.width.toFloat()
+        if (!animate || vpWidth <= 0f) {
+            currentPage = clamped
+            activePageGrid.translationX = 0f
+            adjacentPageGrid.visibility = View.GONE
+            populateGrid(activePageGrid, currentPage)
+            updatePageDots()
+            return
+        }
+
+        val direction = if (clamped > currentPage) 1 else -1
+        isPageAnimating = true
+        populateGrid(adjacentPageGrid, clamped)
+        adjacentPageGrid.visibility = View.VISIBLE
+        adjacentPageGrid.translationX = direction * vpWidth
+        activePageGrid.translationX = 0f
+
+        val interp = DecelerateInterpolator(1.8f)
+        activePageGrid.animate()
+            .translationX(-direction * vpWidth)
+            .setDuration(220L)
+            .setInterpolator(interp)
+            .start()
+        adjacentPageGrid.animate()
+            .translationX(0f)
+            .setDuration(220L)
+            .setInterpolator(interp)
+            .withEndAction {
+                commitSwappedPage(clamped)
+            }
+            .start()
     }
 
-    private fun renderCurrentPage() {
-        gridContainer.removeAllViews()
-        val pageApps = pages.getOrNull(currentPage) ?: emptyList()
+    private fun commitSwappedPage(newPage: Int) {
+        currentPage = newPage
+        val oldActive = activePageGrid
+        activePageGrid = adjacentPageGrid
+        adjacentPageGrid = oldActive
+        activePageGrid.translationX = 0f
+        adjacentPageGrid.visibility = View.GONE
+        adjacentPageGrid.translationX = 0f
+        isPageAnimating = false
+        updatePageDots()
+    }
+
+    private fun populateGrid(grid: GridLayout, pageIdx: Int) {
+        grid.removeAllViews()
+        val pageItems = pages.getOrNull(pageIdx) ?: emptyList()
+        val pageOffset = pageIdx * itemsPerPage
 
         for (i in 0 until itemsPerPage) {
             val row = i / columns
@@ -304,17 +338,20 @@ class FyrHomeGridView(
                 width = 0
                 height = 0
             }
-            val app = pageApps.getOrNull(i)
-            val cell = if (app != null) createAppTile(app, showLabel = true) else View(context)
-            gridContainer.addView(cell, lp)
+            val item = pageItems.getOrNull(i)
+            val cell = if (item != null) {
+                createHomeItemTile(item, globalIndex = pageOffset + i)
+            } else {
+                View(context)
+            }
+            grid.addView(cell, lp)
         }
-        updatePageDots()
     }
 
     private fun renderDock(dockApps: List<AppEntry>) {
         dockContainer.removeAllViews()
         for (app in dockApps) {
-            val tile = createAppTile(app, showLabel = false)
+            val tile = createDockAppTile(app)
             val lp = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
             dockContainer.addView(tile, lp)
         }
@@ -345,36 +382,59 @@ class FyrHomeGridView(
         }
     }
 
-    private fun createAppTile(app: AppEntry, showLabel: Boolean): View {
+    private fun createHomeItemTile(item: HomeItem, globalIndex: Int): View {
         val box = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(dp(4f), dp(6f), dp(4f), dp(6f))
         }
 
+        val iconView: View = when (item) {
+            is HomeItem.App -> SquircleIconView(context, item.entry, repo)
+            is HomeItem.Folder -> FolderIconView(context, item, repo)
+        }
+        box.addView(iconView, LinearLayout.LayoutParams(dp(58f), dp(58f)))
+
+        val labelView = TextView(context).apply {
+            text = item.label
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+            setTextColor(Color.WHITE)
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            gravity = Gravity.CENTER
+            setPadding(dp(2f), dp(5f), dp(2f), 0)
+            setShadowLayer(4f, 0f, 1f, 0x99000000.toInt())
+        }
+        box.addView(
+            labelView,
+            LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+        )
+
+        box.setOnClickListener {
+            if (isDraggingItem) return@setOnClickListener
+            when (item) {
+                is HomeItem.App -> onLaunchApp(item.entry)
+                is HomeItem.Folder -> onOpenFolder(item)
+            }
+        }
+        box.setOnLongClickListener { v ->
+            v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            startItemDrag(v, item, globalIndex)
+            true
+        }
+        return box
+    }
+
+    private fun createDockAppTile(app: AppEntry): View {
+        val box = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(4f), dp(6f), dp(4f), dp(6f))
+        }
         val iconView = SquircleIconView(context, app, repo)
         box.addView(iconView, LinearLayout.LayoutParams(dp(58f), dp(58f)))
 
-        if (showLabel) {
-            val labelView = TextView(context).apply {
-                text = app.label
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
-                setTextColor(Color.WHITE)
-                maxLines = 1
-                ellipsize = TextUtils.TruncateAt.END
-                gravity = Gravity.CENTER
-                setPadding(dp(2f), dp(5f), dp(2f), 0)
-                setShadowLayer(4f, 0f, 1f, 0x99000000.toInt())
-            }
-            box.addView(
-                labelView,
-                LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
-            )
-        }
-
-        box.setOnClickListener {
-            onLaunchApp(app)
-        }
+        box.setOnClickListener { onLaunchApp(app) }
         box.setOnLongClickListener { v ->
             v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
             onAppLongPressMenu(v, app)
@@ -383,19 +443,226 @@ class FyrHomeGridView(
         return box
     }
 
+    // =========================================================================
+    // Drag-and-Drop Reordering & Folder Grouping
+    // =========================================================================
+
+    private fun startItemDrag(sourceView: View, item: HomeItem, globalIndex: Int) {
+        if (isDraggingItem) return
+        isDraggingItem = true
+        dragMoved = false
+        dragSourceIndex = globalIndex
+        dragSourceItem = item
+        dragSourceView = sourceView
+        dragStartRawX = lastRawX
+        dragStartRawY = lastRawY
+        dragTargetIndex = globalIndex
+        dragDropMode = DropMode.NONE
+        swipeMode = SwipeMode.NONE
+
+        sourceView.alpha = 0.22f
+
+        val ghost = FrameLayout(context).apply {
+            val icon: View = when (item) {
+                is HomeItem.App -> SquircleIconView(context, item.entry, repo)
+                is HomeItem.Folder -> FolderIconView(context, item, repo)
+            }
+            addView(icon, LayoutParams(dp(64f), dp(64f), Gravity.CENTER))
+            scaleX = 1.12f
+            scaleY = 1.12f
+            alpha = 0.94f
+            elevation = dp(14f).toFloat()
+        }
+        dragGhostView = ghost
+        addView(ghost, LayoutParams(dp(72f), dp(72f)))
+        positionGhostAtRaw(lastRawX, lastRawY)
+    }
+
+    private fun positionGhostAtRaw(rawX: Float, rawY: Float) {
+        val ghost = dragGhostView ?: return
+        val loc = IntArray(2)
+        getLocationOnScreen(loc)
+        ghost.x = (rawX - loc[0]) - dp(36f)
+        ghost.y = (rawY - loc[1]) - dp(42f)
+    }
+
+    private fun updateDragHover(rawX: Float, rawY: Float) {
+        positionGhostAtRaw(rawX, rawY)
+
+        val selfLoc = IntArray(2)
+        getLocationOnScreen(selfLoc)
+        val localX = rawX - selfLoc[0]
+
+        // Edge auto-page-turn while dragging across pages
+        val edgeZone = dp(36f).toFloat()
+        val desiredDir = when {
+            localX < edgeZone && currentPage > 0 -> -1
+            localX > width - edgeZone && currentPage < pages.lastIndex -> 1
+            else -> 0
+        }
+        if (desiredDir != pendingEdgeFlipDir) {
+            removeCallbacks(edgeFlipRunnable)
+            pendingEdgeFlipDir = desiredDir
+            if (desiredDir != 0) {
+                postDelayed(edgeFlipRunnable, 420L)
+            }
+        }
+
+        // Compute hovered cell in pagerViewport
+        val vpLoc = IntArray(2)
+        pagerViewport.getLocationOnScreen(vpLoc)
+        val vpX = rawX - vpLoc[0]
+        val vpY = rawY - vpLoc[1]
+        val vpW = pagerViewport.width.toFloat()
+        val vpH = pagerViewport.height.toFloat()
+        if (vpW <= 0f || vpH <= 0f || vpY < 0f || vpY > vpH) {
+            dropIndicatorView.visibility = View.GONE
+            dragTargetIndex = -1
+            dragDropMode = DropMode.NONE
+            return
+        }
+
+        val cellW = vpW / columns.toFloat()
+        val cellH = vpH / rows.toFloat()
+        val col = (vpX / cellW).toInt().coerceIn(0, columns - 1)
+        val row = (vpY / cellH).toInt().coerceIn(0, rows - 1)
+        val slotInPage = row * columns + col
+        val targetGlobal = currentPage * itemsPerPage + slotInPage
+
+        val cellCenterX = (col + 0.5f) * cellW
+        val cellCenterY = (row + 0.5f) * cellH
+        val distRatioX = abs(vpX - cellCenterX) / (cellW * 0.5f)
+        val distRatioY = abs(vpY - cellCenterY) / (cellH * 0.5f)
+        val isOverCenter = distRatioX < 0.58f && distRatioY < 0.58f
+
+        val targetExists = targetGlobal in allHomeItems.indices && targetGlobal != dragSourceIndex
+        dragTargetIndex = targetGlobal
+        dragDropMode = if (targetExists && isOverCenter) DropMode.GROUP else DropMode.MOVE
+
+        // Render crisp visual cue: glowing purple circle for folder grouping vs soft rounded frame for reorder
+        val indSize = if (dragDropMode == DropMode.GROUP) dp(72f) else dp(66f)
+        val lp = dropIndicatorView.layoutParams as LayoutParams
+        if (lp.width != indSize || lp.height != indSize) {
+            lp.width = indSize
+            lp.height = indSize
+            dropIndicatorView.layoutParams = lp
+        }
+        dropIndicatorView.x = cellCenterX - indSize / 2f
+        dropIndicatorView.y = cellCenterY - indSize / 2f - dp(8f)
+        dropIndicatorView.background = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = if (dragDropMode == DropMode.GROUP) dp(22f).toFloat() else dp(18f).toFloat()
+            if (dragDropMode == DropMode.GROUP) {
+                setColor(FyrThemeManager.accentWithAlpha(0.28f))
+                setStroke(max(2, dp(2f)), FyrThemeManager.accentColor)
+            } else {
+                setColor(0x22FFFFFF)
+                setStroke(max(1, dp(1.5f)), 0x66FFFFFF)
+            }
+        }
+        dropIndicatorView.visibility = if (targetGlobal == dragSourceIndex) View.GONE else View.VISIBLE
+    }
+
+    private fun finishItemDrag(commitDrop: Boolean) {
+        removeCallbacks(edgeFlipRunnable)
+        pendingEdgeFlipDir = 0
+        dropIndicatorView.visibility = View.GONE
+
+        val sourceIdx = dragSourceIndex
+        val sourceItem = dragSourceItem
+        val sourceView = dragSourceView
+        val moved = dragMoved
+        val targetIdx = dragTargetIndex
+        val mode = dragDropMode
+
+        dragGhostView?.let { removeView(it) }
+        dragGhostView = null
+        sourceView?.alpha = 1f
+
+        isDraggingItem = false
+        dragMoved = false
+        dragSourceIndex = -1
+        dragSourceItem = null
+        dragSourceView = null
+        dragTargetIndex = -1
+        dragDropMode = DropMode.NONE
+
+        if (!moved) {
+            // Stationary long-press opens the app or folder context menu
+            if (sourceView != null && sourceItem != null) {
+                when (sourceItem) {
+                    is HomeItem.App -> onAppLongPressMenu(sourceView, sourceItem.entry)
+                    is HomeItem.Folder -> onFolderLongPressMenu(sourceView, sourceItem)
+                }
+            }
+            return
+        }
+
+        if (!commitDrop || sourceIdx < 0 || targetIdx < 0 || targetIdx == sourceIdx) return
+
+        if (mode == DropMode.GROUP && targetIdx in allHomeItems.indices) {
+            onGroupHomeItems(sourceIdx, targetIdx)
+        } else if (allHomeItems.isNotEmpty()) {
+            onMoveHomeItem(sourceIdx, targetIdx.coerceIn(0, allHomeItems.lastIndex))
+        }
+    }
+
+    // =========================================================================
+    // Unified Touch Handling: Drag-and-Drop + Interactive Horizontal Slide + Vertical Swipes
+    // =========================================================================
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        lastRawX = ev.rawX
+        lastRawY = ev.rawY
+
+        if (isDraggingItem) {
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_MOVE -> {
+                    if (!dragMoved &&
+                        (abs(ev.rawX - dragStartRawX) > dp(12f) ||
+                            abs(ev.rawY - dragStartRawY) > dp(12f))
+                    ) {
+                        dragMoved = true
+                    }
+                    updateDragHover(ev.rawX, ev.rawY)
+                }
+                MotionEvent.ACTION_UP -> finishItemDrag(commitDrop = true)
+                MotionEvent.ACTION_CANCEL -> finishItemDrag(commitDrop = false)
+            }
+            return true
+        }
+
+        return super.dispatchTouchEvent(ev)
+    }
+
     override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
-        gestureDetector.onTouchEvent(ev)
+        if (isPageAnimating) return true
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                interceptStartX = ev.x
-                interceptStartY = ev.y
+                touchDownX = ev.rawX
+                touchDownY = ev.rawY
+                swipeMode = SwipeMode.NONE
+                swipeTargetPage = -1
+                velocityTracker?.recycle()
+                velocityTracker = VelocityTracker.obtain().apply { addMovement(ev) }
             }
             MotionEvent.ACTION_MOVE -> {
-                val dx = abs(ev.x - interceptStartX)
-                val dy = abs(ev.y - interceptStartY)
-                if (dx > dp(20f) || dy > dp(20f)) {
+                velocityTracker?.addMovement(ev)
+                val dx = ev.rawX - touchDownX
+                val dy = ev.rawY - touchDownY
+                if (abs(dx) > dp(14f) && abs(dx) > abs(dy) * 1.15f) {
+                    swipeMode = SwipeMode.HORIZONTAL
                     return true
                 }
+                if (abs(dy) > dp(16f) && abs(dy) > abs(dx) * 1.15f) {
+                    swipeMode = SwipeMode.VERTICAL
+                    return true
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                velocityTracker?.recycle()
+                velocityTracker = null
+                swipeMode = SwipeMode.NONE
             }
         }
         return super.onInterceptTouchEvent(ev)
@@ -403,7 +670,216 @@ class FyrHomeGridView(
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        return gestureDetector.onTouchEvent(event) || super.onTouchEvent(event)
+        if (isPageAnimating) return true
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                touchDownX = event.rawX
+                touchDownY = event.rawY
+                swipeMode = SwipeMode.NONE
+                swipeTargetPage = -1
+                velocityTracker?.recycle()
+                velocityTracker = VelocityTracker.obtain().apply { addMovement(event) }
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                velocityTracker?.addMovement(event)
+                val dx = event.rawX - touchDownX
+                val dy = event.rawY - touchDownY
+
+                if (swipeMode == SwipeMode.NONE) {
+                    if (abs(dx) > dp(14f) && abs(dx) > abs(dy) * 1.15f) {
+                        swipeMode = SwipeMode.HORIZONTAL
+                    } else if (abs(dy) > dp(16f) && abs(dy) > abs(dx) * 1.15f) {
+                        swipeMode = SwipeMode.VERTICAL
+                    }
+                }
+
+                if (swipeMode == SwipeMode.HORIZONTAL) {
+                    updateHorizontalDrag(dx)
+                }
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                val dx = event.rawX - touchDownX
+                val dy = event.rawY - touchDownY
+                var vx = 0f
+                var vy = 0f
+                velocityTracker?.let { vt ->
+                    vt.addMovement(event)
+                    vt.computeCurrentVelocity(1000)
+                    vx = vt.xVelocity
+                    vy = vt.yVelocity
+                    vt.recycle()
+                }
+                velocityTracker = null
+
+                when (swipeMode) {
+                    SwipeMode.HORIZONTAL -> finishHorizontalDrag(dx, vx)
+                    SwipeMode.VERTICAL -> {
+                        if (dy < -dp(36f) || vy < -dp(360f)) {
+                            onSwipeUpSearch()
+                        } else if (dy > dp(36f) || vy > dp(360f)) {
+                            onSwipeDownQuickSettings()
+                        }
+                    }
+                    SwipeMode.NONE -> {}
+                }
+                swipeMode = SwipeMode.NONE
+                return true
+            }
+        }
+        return super.onTouchEvent(event)
+    }
+
+    private fun updateHorizontalDrag(dx: Float) {
+        val vpWidth = pagerViewport.width.toFloat()
+        if (vpWidth <= 0f) return
+
+        val desiredTarget = when {
+            dx < 0 && currentPage < pages.lastIndex -> currentPage + 1
+            dx > 0 && currentPage > 0 -> currentPage - 1
+            else -> -1
+        }
+
+        if (desiredTarget == -1) {
+            // Soft rubber-band resistance at first/last page boundary
+            if (swipeTargetPage != -1) {
+                adjacentPageGrid.visibility = View.GONE
+                swipeTargetPage = -1
+            }
+            activePageGrid.translationX = dx * 0.25f
+            return
+        }
+
+        if (desiredTarget != swipeTargetPage) {
+            swipeTargetPage = desiredTarget
+            populateGrid(adjacentPageGrid, desiredTarget)
+            adjacentPageGrid.visibility = View.VISIBLE
+        }
+
+        val dir = if (desiredTarget > currentPage) 1 else -1
+        activePageGrid.translationX = dx
+        adjacentPageGrid.translationX = dir * vpWidth + dx
+    }
+
+    private fun finishHorizontalDrag(dx: Float, velocityX: Float) {
+        val vpWidth = pagerViewport.width.toFloat()
+        val target = swipeTargetPage
+        swipeTargetPage = -1
+
+        if (vpWidth <= 0f) return
+
+        val shouldSwitch = target != -1 && (
+            abs(dx) > vpWidth * 0.22f ||
+                (target > currentPage && velocityX < -dp(420f)) ||
+                (target < currentPage && velocityX > dp(420f))
+            )
+
+        val interp = DecelerateInterpolator(1.8f)
+        if (shouldSwitch) {
+            val dir = if (target > currentPage) 1 else -1
+            isPageAnimating = true
+            activePageGrid.animate()
+                .translationX(-dir * vpWidth)
+                .setDuration(210L)
+                .setInterpolator(interp)
+                .start()
+            adjacentPageGrid.animate()
+                .translationX(0f)
+                .setDuration(210L)
+                .setInterpolator(interp)
+                .withEndAction { commitSwappedPage(target) }
+                .start()
+        } else {
+            val dir = if (target > currentPage) 1 else -1
+            activePageGrid.animate()
+                .translationX(0f)
+                .setDuration(180L)
+                .setInterpolator(interp)
+                .start()
+            if (target != -1) {
+                adjacentPageGrid.animate()
+                    .translationX(dir * vpWidth)
+                    .setDuration(180L)
+                    .setInterpolator(interp)
+                    .withEndAction {
+                        adjacentPageGrid.visibility = View.GONE
+                        adjacentPageGrid.translationX = 0f
+                    }
+                    .start()
+            }
+        }
+    }
+}
+
+/**
+ * Frosted glass folder squircle showing a clean 2x2 preview of up to 4 apps inside the folder.
+ */
+@SuppressLint("ViewConstructor")
+class FolderIconView(
+    context: Context,
+    folder: HomeItem.Folder,
+    repo: AppRepository
+) : View(context) {
+
+    private val previewApps: List<AppEntry> = folder.apps.take(4)
+    private val bitmaps = arrayOfNulls<Bitmap>(4)
+
+    private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 1.25f * resources.displayMetrics.density
+    }
+    private val fallbackPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val rect = RectF()
+    private val cellRect = RectF()
+
+    init {
+        previewApps.forEachIndexed { idx, app ->
+            val cached = repo.getCachedIcon(app)
+            if (cached != null) {
+                bitmaps[idx] = cached
+            } else {
+                repo.loadIconAsync(app) { loaded ->
+                    bitmaps[idx] = loaded
+                    invalidate()
+                }
+            }
+        }
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val w = width.toFloat()
+        val h = height.toFloat()
+        if (w <= 0f || h <= 0f) return
+
+        val radius = w * 0.225f
+        rect.set(0f, 0f, w, h)
+        bgPaint.color = FyrThemeManager.panelBgColor
+        borderPaint.color = FyrThemeManager.dividerColor
+        canvas.drawRoundRect(rect, radius, radius, bgPaint)
+        canvas.drawRoundRect(rect, radius, radius, borderPaint)
+
+        val pad = w * 0.14f
+        val gap = w * 0.08f
+        val miniSize = (w - pad * 2f - gap) / 2f
+        val miniRadius = miniSize * 0.24f
+
+        for (i in previewApps.indices) {
+            val r = i / 2
+            val c = i % 2
+            val x = pad + c * (miniSize + gap)
+            val y = pad + r * (miniSize + gap)
+            cellRect.set(x, y, x + miniSize, y + miniSize)
+            val bmp = bitmaps[i]
+            if (bmp != null && !bmp.isRecycled) {
+                canvas.drawBitmap(bmp, null, cellRect, null)
+            } else {
+                fallbackPaint.color = FyrThemeManager.accentWithAlpha(0.35f)
+                canvas.drawRoundRect(cellRect, miniRadius, miniRadius, fallbackPaint)
+            }
+        }
     }
 }
 

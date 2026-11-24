@@ -1,6 +1,7 @@
 package com.fyrde.fyrandroid
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -12,25 +13,21 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.View
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.PopupMenu
 import android.widget.Toast
 import com.fyrde.fyrandroid.model.AppEntry
 import com.fyrde.fyrandroid.model.AppRepository
+import com.fyrde.fyrandroid.model.HomeItem
 import com.fyrde.fyrandroid.theme.FyrThemeManager
+import com.fyrde.fyrandroid.ui.FyrFolderOverlayView
+import com.fyrde.fyrandroid.ui.FyrHomeGridView
 import com.fyrde.fyrandroid.ui.FyrQuickSettingsSheet
 import com.fyrde.fyrandroid.ui.FyrSearchOverlayView
-import com.fyrde.fyrandroid.ui.FyrHomeGridView
 
 /**
  * Main FyrDE Android Launcher Activity (`HOME` & `DEFAULT` intent category).
- *
- * Designed for ultra-low memory and CPU consumption:
- * - Zero polling timers (clock updates strictly on Android's `ACTION_TIME_TICK` while visible).
- * - Hardware-accelerated native View hierarchy with pre-clipped squircle icon bitmaps.
- * - Upward swipe -> FyrSearch drawer with immediate autofocus & soft keyboard.
- * - Downward swipe (or top-edge swipe via [com.fyrde.fyrandroid.service.TopEdgeGestureService])
- *   -> Fyr Quick Settings menu.
  */
 class LauncherActivity : Activity() {
 
@@ -40,6 +37,7 @@ class LauncherActivity : Activity() {
 
     private lateinit var repo: AppRepository
     private lateinit var homeGridView: FyrHomeGridView
+    private lateinit var folderOverlay: FyrFolderOverlayView
     private lateinit var searchOverlay: FyrSearchOverlayView
     private lateinit var quickSettingsSheet: FyrQuickSettingsSheet
 
@@ -53,6 +51,7 @@ class LauncherActivity : Activity() {
     private val themeListener: () -> Unit = {
         runOnUiThread {
             homeGridView.applyTheme()
+            folderOverlay.applyTheme()
             searchOverlay.applyTheme()
             quickSettingsSheet.applyTheme()
         }
@@ -71,9 +70,21 @@ class LauncherActivity : Activity() {
             context = this,
             repo = repo,
             onLaunchApp = { app -> launchApp(app) },
+            onOpenFolder = { folder -> openFolder(folder) },
             onAppLongPressMenu = { anchor, app -> showAppContextMenu(anchor, app) },
+            onFolderLongPressMenu = { anchor, folder -> showFolderContextMenu(anchor, folder) },
+            onMoveHomeItem = { fromIdx, toIdx -> repo.moveHomeItem(fromIdx, toIdx) },
+            onGroupHomeItems = { srcIdx, dstIdx -> repo.groupHomeItems(srcIdx, dstIdx) },
             onSwipeUpSearch = { openSearchDrawer() },
             onSwipeDownQuickSettings = { openQuickSettings() }
+        )
+
+        folderOverlay = FyrFolderOverlayView(
+            context = this,
+            repo = repo,
+            onLaunchApp = { app -> launchApp(app) },
+            onAppActionMenu = { anchor, app -> showAppContextMenu(anchor, app) },
+            onVisibilityChanged = { updateHomeBlur() }
         )
 
         searchOverlay = FyrSearchOverlayView(
@@ -96,33 +107,23 @@ class LauncherActivity : Activity() {
             onVisibilityChanged = { updateHomeBlur() }
         )
 
-        root.addView(
-            homeGridView,
+        val matchParent = {
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
             )
-        )
-        root.addView(
-            searchOverlay,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
-        )
-        root.addView(
-            quickSettingsSheet,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
-        )
+        }
+        root.addView(homeGridView, matchParent())
+        root.addView(folderOverlay, matchParent())
+        root.addView(searchOverlay, matchParent())
+        root.addView(quickSettingsSheet, matchParent())
 
         setContentView(root)
 
-        repo.start { allApps, dockApps ->
-            homeGridView.bindApps(allApps, dockApps)
+        repo.start { allApps, homeItems, dockApps ->
+            homeGridView.bindLayout(homeItems, dockApps)
             searchOverlay.bindApps(allApps)
+            folderOverlay.refreshIfOpen()
         }
 
         handleIncomingIntent(intent)
@@ -137,14 +138,15 @@ class LauncherActivity : Activity() {
     private fun handleIncomingIntent(intent: Intent?) {
         if (intent?.action == ACTION_OPEN_QUICK_SETTINGS) {
             if (searchOverlay.isOpen) searchOverlay.close()
+            if (folderOverlay.isOpen) folderOverlay.close()
             openQuickSettings()
             return
         }
-        // Pressing Home closes open drawers or returns to the first home page
         when {
             quickSettingsSheet.isOpen -> quickSettingsSheet.close()
             searchOverlay.isOpen -> searchOverlay.close()
-            else -> homeGridView.setCurrentPage(0)
+            folderOverlay.isOpen -> folderOverlay.close()
+            else -> homeGridView.setCurrentPage(0, animate = true)
         }
     }
 
@@ -184,23 +186,32 @@ class LauncherActivity : Activity() {
         when {
             quickSettingsSheet.isOpen -> quickSettingsSheet.close()
             searchOverlay.isOpen -> searchOverlay.close()
-            else -> homeGridView.setCurrentPage(0)
+            folderOverlay.isOpen -> folderOverlay.close()
+            else -> homeGridView.setCurrentPage(0, animate = true)
         }
+    }
+
+    private fun openFolder(folder: HomeItem.Folder) {
+        if (searchOverlay.isOpen) searchOverlay.close()
+        if (quickSettingsSheet.isOpen) quickSettingsSheet.close()
+        folderOverlay.open(folder)
     }
 
     private fun openSearchDrawer() {
         if (quickSettingsSheet.isOpen) quickSettingsSheet.close()
+        if (folderOverlay.isOpen) folderOverlay.close()
         searchOverlay.openAndFocus()
     }
 
     private fun openQuickSettings() {
         if (searchOverlay.isOpen) searchOverlay.close()
+        if (folderOverlay.isOpen) folderOverlay.close()
         quickSettingsSheet.open()
     }
 
     private fun updateHomeBlur() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val shouldBlur = searchOverlay.isOpen || quickSettingsSheet.isOpen
+            val shouldBlur = searchOverlay.isOpen || quickSettingsSheet.isOpen || folderOverlay.isOpen
             homeGridView.setRenderEffect(
                 if (shouldBlur) RenderEffect.createBlurEffect(28f, 28f, Shader.TileMode.CLAMP)
                 else null
@@ -217,17 +228,77 @@ class LauncherActivity : Activity() {
         }
     }
 
+    private fun showFolderContextMenu(anchor: View, folder: HomeItem.Folder) {
+        val popup = PopupMenu(this, anchor)
+        popup.menu.add(0, 1, 0, "Open Folder")
+        popup.menu.add(0, 2, 1, "Rename Folder")
+        popup.menu.add(0, 3, 2, "Ungroup Folder")
+
+        popup.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                1 -> {
+                    openFolder(folder)
+                    true
+                }
+                2 -> {
+                    showRenameFolderDialog(folder)
+                    true
+                }
+                3 -> {
+                    repo.ungroupFolder(folder.id)
+                    true
+                }
+                else -> false
+            }
+        }
+        popup.show()
+    }
+
+    private fun showRenameFolderDialog(folder: HomeItem.Folder) {
+        val input = EditText(this).apply {
+            setText(folder.name)
+            setSelection(folder.name.length)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Rename Folder")
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                repo.renameFolder(folder.id, input.text.toString())
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     private fun showAppContextMenu(anchor: View, app: AppEntry) {
         val popup = PopupMenu(this, anchor)
         val pinned = repo.isPinnedToDock(app)
         popup.menu.add(0, 1, 0, if (pinned) "Unpin from Dock" else "Pin to Dock")
-        popup.menu.add(0, 2, 1, "App Info")
-        if (!app.isSystemApp) {
-            popup.menu.add(0, 3, 2, "Uninstall")
+
+        val existingFolders = repo.homeItems.filterIsInstance<HomeItem.Folder>()
+        val isStandaloneOnHome = repo.homeItems.any {
+            it is HomeItem.App && it.entry.componentKey == app.componentKey
         }
-        popup.menu.add(0, 4, 3, "Fyr Quick Settings & Theme")
+        if (isStandaloneOnHome && existingFolders.isNotEmpty()) {
+            val sub = popup.menu.addSubMenu(0, 5, 1, "Add to Folder")
+            existingFolders.forEachIndexed { idx, folder ->
+                sub.add(1, 100 + idx, idx, folder.name)
+            }
+        }
+
+        popup.menu.add(0, 2, 2, "App Info")
+        if (!app.isSystemApp) {
+            popup.menu.add(0, 3, 3, "Uninstall")
+        }
+        popup.menu.add(0, 4, 4, "Fyr Quick Settings")
 
         popup.setOnMenuItemClickListener { item ->
+            if (item.groupId == 1 && item.itemId >= 100) {
+                val folder = existingFolders.getOrNull(item.itemId - 100)
+                if (folder != null) {
+                    repo.addAppToFolder(app.componentKey, folder.id)
+                }
+                return@setOnMenuItemClickListener true
+            }
             when (item.itemId) {
                 1 -> {
                     val nowPinned = repo.toggleDockPin(app)

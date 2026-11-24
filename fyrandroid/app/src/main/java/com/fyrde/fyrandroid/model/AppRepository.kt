@@ -49,10 +49,14 @@ class AppRepository(private val context: Context) {
         private set
 
     @Volatile
+    var homeItems: List<HomeItem> = emptyList()
+        private set
+
+    @Volatile
     var dockApps: List<AppEntry> = emptyList()
         private set
 
-    private var onAppsUpdated: ((List<AppEntry>, List<AppEntry>) -> Unit)? = null
+    private var onAppsUpdated: ((List<AppEntry>, List<HomeItem>, List<AppEntry>) -> Unit)? = null
     private var receiverRegistered = false
 
     private val packageReceiver = object : BroadcastReceiver() {
@@ -61,7 +65,7 @@ class AppRepository(private val context: Context) {
         }
     }
 
-    fun start(listener: (List<AppEntry>, List<AppEntry>) -> Unit) {
+    fun start(listener: (List<AppEntry>, List<HomeItem>, List<AppEntry>) -> Unit) {
         onAppsUpdated = listener
         if (!receiverRegistered) {
             val filter = IntentFilter().apply {
@@ -119,9 +123,14 @@ class AppRepository(private val context: Context) {
             entries.sortWith(compareBy { it.label.lowercase(Locale.getDefault()) })
             allApps = entries
             dockApps = resolveDockApps(entries)
+            homeItems = HomeLayoutCodec.reconcile(
+                prefs.getString("home_layout_v1", null),
+                allApps,
+                dockApps
+            )
 
             mainHandler.post {
-                onAppsUpdated?.invoke(allApps, dockApps)
+                onAppsUpdated?.invoke(allApps, homeItems, dockApps)
             }
         }
     }
@@ -175,9 +184,66 @@ class AppRepository(private val context: Context) {
         }
         prefs.edit().putString("dock_pins", current.joinToString("|")).apply()
         dockApps = resolveDockApps(allApps)
-        onAppsUpdated?.invoke(allApps, dockApps)
+        homeItems = HomeLayoutCodec.reconcile(
+            prefs.getString("home_layout_v1", null),
+            allApps,
+            dockApps
+        )
+        persistHomeLayout(homeItems)
+        onAppsUpdated?.invoke(allApps, homeItems, dockApps)
         return added
     }
+
+    private fun persistHomeLayout(items: List<HomeItem>) {
+        prefs.edit().putString("home_layout_v1", HomeLayoutCodec.serialize(items)).apply()
+    }
+
+    private fun commitHomeLayout(next: List<HomeItem>) {
+        homeItems = next
+        persistHomeLayout(next)
+        onAppsUpdated?.invoke(allApps, homeItems, dockApps)
+    }
+
+    fun moveHomeItem(fromIndex: Int, toIndex: Int) {
+        val next = HomeLayoutCodec.moveItem(homeItems, fromIndex, toIndex)
+        if (next != homeItems) commitHomeLayout(next)
+    }
+
+    fun groupHomeItems(sourceIndex: Int, targetIndex: Int) {
+        val next = HomeLayoutCodec.groupItems(homeItems, sourceIndex, targetIndex)
+        if (next != homeItems) commitHomeLayout(next)
+    }
+
+    fun addAppToFolder(appKey: String, folderId: String) {
+        val srcIdx = homeItems.indexOfFirst { it is HomeItem.App && it.entry.componentKey == appKey }
+        val dstIdx = homeItems.indexOfFirst { it is HomeItem.Folder && it.id == folderId }
+        if (srcIdx >= 0 && dstIdx >= 0 && srcIdx != dstIdx) {
+            groupHomeItems(srcIdx, dstIdx)
+        }
+    }
+
+    fun renameFolder(folderId: String, newName: String) {
+        val next = HomeLayoutCodec.renameFolder(homeItems, folderId, newName)
+        if (next != homeItems) commitHomeLayout(next)
+    }
+
+    fun removeAppFromFolder(folderId: String, appKey: String) {
+        val next = HomeLayoutCodec.removeAppFromFolder(homeItems, folderId, appKey)
+        if (next != homeItems) commitHomeLayout(next)
+    }
+
+    fun ungroupFolder(folderId: String) {
+        val next = HomeLayoutCodec.ungroupFolder(homeItems, folderId)
+        if (next != homeItems) commitHomeLayout(next)
+    }
+
+    fun moveAppInFolder(folderId: String, fromIdx: Int, toIdx: Int) {
+        val next = HomeLayoutCodec.moveAppInFolder(homeItems, folderId, fromIdx, toIdx)
+        if (next != homeItems) commitHomeLayout(next)
+    }
+
+    fun getFolderById(folderId: String): HomeItem.Folder? =
+        homeItems.firstOrNull { it is HomeItem.Folder && it.id == folderId } as? HomeItem.Folder
 
     fun recordLaunch(app: AppEntry) {
         val key = "launches_${app.componentKey}"
