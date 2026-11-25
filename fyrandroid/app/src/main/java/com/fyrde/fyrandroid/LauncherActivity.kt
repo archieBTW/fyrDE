@@ -2,10 +2,9 @@ package com.fyrde.fyrandroid
 
 import android.app.Activity
 import android.app.AlertDialog
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
+import android.content.pm.LauncherApps
 import android.graphics.RenderEffect
 import android.graphics.Shader
 import android.net.Uri
@@ -40,13 +39,6 @@ class LauncherActivity : Activity() {
     private lateinit var folderOverlay: FyrFolderOverlayView
     private lateinit var searchOverlay: FyrSearchOverlayView
     private lateinit var quickSettingsSheet: FyrQuickSettingsSheet
-
-    private var timeTickRegistered = false
-    private val timeTickReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            homeGridView.refreshClock()
-        }
-    }
 
     private val themeListener: () -> Unit = {
         runOnUiThread {
@@ -136,6 +128,10 @@ class LauncherActivity : Activity() {
     }
 
     private fun handleIncomingIntent(intent: Intent?) {
+        if (intent?.action == LauncherApps.ACTION_CONFIRM_PIN_SHORTCUT) {
+            handlePinShortcutIntent(intent)
+            return
+        }
         if (intent?.action == ACTION_OPEN_QUICK_SETTINGS) {
             if (searchOverlay.isOpen) searchOverlay.close()
             if (folderOverlay.isOpen) folderOverlay.close()
@@ -150,24 +146,40 @@ class LauncherActivity : Activity() {
         }
     }
 
-    override fun onResume() {
-        super.onResume()
-        homeGridView.refreshClock()
-        if (!timeTickRegistered) {
-            registerReceiver(timeTickReceiver, IntentFilter(Intent.ACTION_TIME_TICK))
-            timeTickRegistered = true
-        }
-    }
+    private fun handlePinShortcutIntent(intent: Intent) {
+        val launcherApps = getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps ?: return
+        val request = try {
+            launcherApps.getPinItemRequest(intent)
+        } catch (_: Exception) {
+            null
+        } ?: return
 
-    override fun onPause() {
-        if (timeTickRegistered) {
-            try {
-                unregisterReceiver(timeTickReceiver)
-            } catch (_: Exception) {
-            }
-            timeTickRegistered = false
+        if (!request.isValid ||
+            request.requestType != LauncherApps.PinItemRequest.REQUEST_TYPE_SHORTCUT
+        ) {
+            return
         }
-        super.onPause()
+
+        val info = request.shortcutInfo
+        val label = info?.shortLabel?.toString()?.trim()?.takeUnless { it.isEmpty() }
+            ?: info?.longLabel?.toString()?.trim()?.takeUnless { it.isEmpty() }
+            ?: "Shortcut"
+
+        AlertDialog.Builder(this)
+            .setTitle("Add to Home screen")
+            .setMessage("Add \"$label\" to your home screen?")
+            .setPositiveButton("Add") { _, _ ->
+                if (request.accept()) {
+                    if (info != null) {
+                        repo.onShortcutPinned(info)
+                    } else {
+                        repo.reloadAppsAsync()
+                    }
+                    Toast.makeText(this, "Added $label to Home screen", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     override fun onTrimMemory(level: Int) {
@@ -222,7 +234,13 @@ class LauncherActivity : Activity() {
     private fun launchApp(app: AppEntry) {
         try {
             repo.recordLaunch(app)
-            startActivity(app.toLaunchIntent())
+            if (app.isShortcut) {
+                if (!repo.launchShortcut(app)) {
+                    Toast.makeText(this, "Unable to launch ${app.label}", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                startActivity(app.toLaunchIntent())
+            }
         } catch (_: Exception) {
             Toast.makeText(this, "Unable to launch ${app.label}", Toast.LENGTH_SHORT).show()
         }
@@ -286,7 +304,9 @@ class LauncherActivity : Activity() {
         }
 
         popup.menu.add(0, 2, 2, "App Info")
-        if (!app.isSystemApp) {
+        if (app.isShortcut) {
+            popup.menu.add(0, 6, 3, "Remove Shortcut")
+        } else if (!app.isSystemApp) {
             popup.menu.add(0, 3, 3, "Uninstall")
         }
         popup.menu.add(0, 4, 4, "Fyr Quick Settings")
@@ -334,6 +354,11 @@ class LauncherActivity : Activity() {
                 }
                 4 -> {
                     openQuickSettings()
+                    true
+                }
+                6 -> {
+                    repo.removeShortcut(app)
+                    Toast.makeText(this, "Removed ${app.label}", Toast.LENGTH_SHORT).show()
                     true
                 }
                 else -> false

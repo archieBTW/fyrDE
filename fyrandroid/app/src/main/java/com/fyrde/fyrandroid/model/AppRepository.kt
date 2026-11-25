@@ -2,11 +2,13 @@ package com.fyrde.fyrandroid.model
 
 import android.content.BroadcastReceiver
 import android.content.ComponentCallbacks2
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ApplicationInfo
-import android.content.pm.PackageManager
+import android.content.pm.LauncherApps
+import android.content.pm.ShortcutInfo
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -15,34 +17,49 @@ import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
 import android.graphics.drawable.Drawable
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
+import android.os.UserHandle
+import android.os.UserManager
 import android.util.LruCache
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
 /**
- * Low-memory, CPU-friendly repository for installed apps, dock pins, and squircle icon bitmaps.
+ * Low-memory, CPU-friendly repository for installed apps, pinned shortcuts (e.g. Firefox web/PWA
+ * shortcuts), dock pins, and squircle icon bitmaps.
  *
- * - Uses a single background worker thread for PackageManager queries and icon rasterization.
- * - Caches pre-clipped squircle Bitmaps in a strict memory-bounded [LruCache].
- * - Responds to system [onTrimMemory] signals to shed cached bitmaps immediately under pressure.
+ * - Uses a background worker for PackageManager/LauncherApps queries and a 2-thread icon pool.
+ * - Pre-warms and caches pre-clipped squircle Bitmaps in a memory-bounded [LruCache].
+ * - Responds to critical [onTrimMemory] signals without evicting cached icons on normal app switches.
  */
 class AppRepository(private val context: Context) {
     private val prefs = context.getSharedPreferences("fyr_apps_prefs", Context.MODE_PRIVATE)
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val launcherApps =
+        context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps
+
     private val worker = Executors.newSingleThreadExecutor { r ->
         Thread(r, "fyr-app-loader").apply { priority = Thread.NORM_PRIORITY - 1 }
+    }
+    private val iconWorker = Executors.newFixedThreadPool(2) { r ->
+        Thread(r, "fyr-icon-loader").apply { priority = Thread.NORM_PRIORITY - 1 }
     }
 
     private val iconSizePx: Int =
         (56f * context.resources.displayMetrics.density).toInt().coerceIn(72, 168)
 
     private val iconCache: LruCache<String, Bitmap> = object : LruCache<String, Bitmap>(
-        ((Runtime.getRuntime().maxMemory() / 1024L) / 16L).toInt().coerceIn(2048, 12288)
+        ((Runtime.getRuntime().maxMemory() / 1024L) / 8L).toInt().coerceIn(4096, 32768)
     ) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount / 1024
     }
+
+    private val inFlightIconCallbacks = HashMap<String, MutableList<(Bitmap) -> Unit>>()
+    private val shortcutInfoMap = ConcurrentHashMap<String, ShortcutInfo>()
 
     @Volatile
     var allApps: List<AppEntry> = emptyList()
@@ -58,9 +75,48 @@ class AppRepository(private val context: Context) {
 
     private var onAppsUpdated: ((List<AppEntry>, List<HomeItem>, List<AppEntry>) -> Unit)? = null
     private var receiverRegistered = false
+    private var launcherCallbackRegistered = false
 
     private val packageReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context?, intent: Intent?) {
+            reloadAppsAsync()
+        }
+    }
+
+    private val launcherAppsCallback = object : LauncherApps.Callback() {
+        override fun onPackageRemoved(packageName: String, user: UserHandle) {
+            reloadAppsAsync()
+        }
+
+        override fun onPackageAdded(packageName: String, user: UserHandle) {
+            reloadAppsAsync()
+        }
+
+        override fun onPackageChanged(packageName: String, user: UserHandle) {
+            reloadAppsAsync()
+        }
+
+        override fun onPackagesAvailable(
+            packageNames: Array<out String>,
+            user: UserHandle,
+            replacing: Boolean
+        ) {
+            reloadAppsAsync()
+        }
+
+        override fun onPackagesUnavailable(
+            packageNames: Array<out String>,
+            user: UserHandle,
+            replacing: Boolean
+        ) {
+            reloadAppsAsync()
+        }
+
+        override fun onShortcutsChanged(
+            packageName: String,
+            shortcuts: MutableList<ShortcutInfo>,
+            user: UserHandle
+        ) {
             reloadAppsAsync()
         }
     }
@@ -77,6 +133,13 @@ class AppRepository(private val context: Context) {
             context.registerReceiver(packageReceiver, filter)
             receiverRegistered = true
         }
+        if (!launcherCallbackRegistered && launcherApps != null) {
+            try {
+                launcherApps.registerCallback(launcherAppsCallback, mainHandler)
+                launcherCallbackRegistered = true
+            } catch (_: Exception) {
+            }
+        }
         reloadAppsAsync()
     }
 
@@ -89,6 +152,22 @@ class AppRepository(private val context: Context) {
             }
             receiverRegistered = false
         }
+        if (launcherCallbackRegistered && launcherApps != null) {
+            try {
+                launcherApps.unregisterCallback(launcherAppsCallback)
+            } catch (_: Exception) {
+            }
+            launcherCallbackRegistered = false
+        }
+    }
+
+    private fun getHiddenShortcuts(): Set<String> {
+        val raw = prefs.getString("hidden_shortcuts", null) ?: return emptySet()
+        return raw.split("\n").filter { it.isNotEmpty() }.toSet()
+    }
+
+    private fun saveHiddenShortcuts(keys: Set<String>) {
+        prefs.edit().putString("hidden_shortcuts", keys.joinToString("\n")).apply()
     }
 
     fun reloadAppsAsync() {
@@ -99,7 +178,7 @@ class AppRepository(private val context: Context) {
             }
             val resolveInfos = pm.queryIntentActivities(queryIntent, 0)
             val selfPkg = context.packageName
-            val entries = ArrayList<AppEntry>(resolveInfos.size)
+            val entries = ArrayList<AppEntry>(resolveInfos.size + 16)
 
             for (ri in resolveInfos) {
                 val ai = ri.activityInfo ?: continue
@@ -120,18 +199,156 @@ class AppRepository(private val context: Context) {
                 )
             }
 
+            // Include pinned shortcuts (e.g. Firefox / Chrome / PWA home screen shortcuts)
+            val newShortcutsMap = HashMap<String, ShortcutInfo>()
+            val la = launcherApps
+            if (la != null && la.hasShortcutHostPermission()) {
+                val hiddenShortcuts = getHiddenShortcuts()
+                val userManager = context.getSystemService(Context.USER_SERVICE) as? UserManager
+                val profiles = userManager?.userProfiles ?: listOf(Process.myUserHandle())
+                val queryFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED or
+                        LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED_BY_ANY_LAUNCHER
+                } else {
+                    LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED
+                }
+                val query = LauncherApps.ShortcutQuery().setQueryFlags(queryFlags)
+                val seenShortcutKeys = HashSet<String>()
+                for (profile in profiles) {
+                    val shortcuts = try {
+                        la.getShortcuts(query, profile)
+                    } catch (_: Exception) {
+                        null
+                    } ?: continue
+                    for (info in shortcuts) {
+                        if (!info.isEnabled) continue
+                        val key = "shortcut:${info.`package`}/${info.id}"
+                        if (key in hiddenShortcuts || !seenShortcutKeys.add(key)) continue
+                        newShortcutsMap[key] = info
+                        val label = info.shortLabel?.toString()?.trim()?.takeUnless { it.isEmpty() }
+                            ?: info.longLabel?.toString()?.trim()?.takeUnless { it.isEmpty() }
+                            ?: info.`package`
+                        val count = prefs.getInt("launches_$key", 0)
+                        entries.add(
+                            AppEntry(
+                                label = label,
+                                packageName = info.`package`,
+                                activityName = info.activity?.className ?: "",
+                                isSystemApp = false,
+                                launchCount = count,
+                                shortcutId = info.id
+                            )
+                        )
+                    }
+                }
+            }
+            shortcutInfoMap.clear()
+            shortcutInfoMap.putAll(newShortcutsMap)
+
             entries.sortWith(compareBy { it.label.lowercase(Locale.getDefault()) })
-            allApps = entries
-            dockApps = resolveDockApps(entries)
-            homeItems = HomeLayoutCodec.reconcile(
+            val nextAllApps = entries
+            val nextDockApps = resolveDockApps(nextAllApps)
+            val nextHomeItems = HomeLayoutCodec.reconcile(
                 prefs.getString("home_layout_v1", null),
-                allApps,
-                dockApps
+                nextAllApps,
+                nextDockApps
             )
 
+            allApps = nextAllApps
+            dockApps = nextDockApps
+            homeItems = nextHomeItems
+
             mainHandler.post {
-                onAppsUpdated?.invoke(allApps, homeItems, dockApps)
+                onAppsUpdated?.invoke(nextAllApps, nextHomeItems, nextDockApps)
             }
+
+            prewarmIcons(nextDockApps, nextHomeItems)
+        }
+    }
+
+    private fun prewarmIcons(dock: List<AppEntry>, items: List<HomeItem>) {
+        val ordered = LinkedHashSet<AppEntry>(dock.size + items.size)
+        ordered.addAll(dock)
+        for (item in items) {
+            when (item) {
+                is HomeItem.App -> ordered.add(item.entry)
+                is HomeItem.Folder -> ordered.addAll(item.apps)
+            }
+        }
+        for (app in ordered) {
+            if (iconCache.get(app.componentKey) != null) continue
+            iconWorker.execute {
+                if (iconCache.get(app.componentKey) != null) return@execute
+                val bmp = rasterizeSquircleIcon(app)
+                if (bmp != null) {
+                    iconCache.put(app.componentKey, bmp)
+                }
+            }
+        }
+    }
+
+    fun onShortcutPinned(info: ShortcutInfo) {
+        val key = "shortcut:${info.`package`}/${info.id}"
+        val hidden = getHiddenShortcuts().toMutableSet()
+        if (hidden.remove(key)) {
+            saveHiddenShortcuts(hidden)
+        }
+        shortcutInfoMap[key] = info
+        iconCache.remove(key)
+        reloadAppsAsync()
+    }
+
+    fun removeShortcut(app: AppEntry) {
+        if (!app.isShortcut) return
+        val key = app.componentKey
+        val hidden = getHiddenShortcuts().toMutableSet()
+        hidden.add(key)
+        saveHiddenShortcuts(hidden)
+
+        // Unpin from dock if pinned there
+        if (isPinnedToDock(app)) {
+            val current = dockApps.map { it.componentKey }.toMutableList()
+            current.remove(key)
+            prefs.edit().putString("dock_pins", current.joinToString("|")).apply()
+        }
+
+        // Best-effort unpin from this launcher in the OS
+        val info = shortcutInfoMap.remove(key)
+        iconCache.remove(key)
+        val la = launcherApps
+        if (info != null && la != null && la.hasShortcutHostPermission()) {
+            worker.execute {
+                try {
+                    val query = LauncherApps.ShortcutQuery()
+                        .setPackage(info.`package`)
+                        .setQueryFlags(LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED)
+                    val remaining = la.getShortcuts(query, info.userHandle)
+                        ?.map { it.id }
+                        ?.filter { it != info.id }
+                        ?: emptyList()
+                    la.pinShortcuts(info.`package`, remaining, info.userHandle)
+                } catch (_: Exception) {
+                }
+            }
+        }
+        reloadAppsAsync()
+    }
+
+    fun launchShortcut(app: AppEntry): Boolean {
+        val la = launcherApps ?: return false
+        val info = shortcutInfoMap[app.componentKey]
+        return try {
+            if (info != null) {
+                la.startShortcut(info, null, null)
+                true
+            } else if (app.shortcutId != null) {
+                la.startShortcut(app.packageName, app.shortcutId, null, null, Process.myUserHandle())
+                true
+            } else {
+                false
+            }
+        } catch (_: Exception) {
+            false
         }
     }
 
@@ -144,7 +361,8 @@ class AppRepository(private val context: Context) {
             if (pinned.isNotEmpty()) return pinned.take(4)
         }
 
-        // Default bottom dock: Phone, Messages, Browser, Settings/Camera
+        // Default bottom dock: Phone, Messages, Browser, Settings/Camera (prefer real apps over shortcuts)
+        val nonShortcuts = apps.filter { !it.isShortcut }.ifEmpty { apps }
         val keywords = listOf(
             listOf("phone", "dialer", "call"),
             listOf("messages", "messaging", "sms", "chat"),
@@ -153,7 +371,7 @@ class AppRepository(private val context: Context) {
         )
         val chosen = mutableListOf<AppEntry>()
         for (group in keywords) {
-            val match = apps.firstOrNull { app ->
+            val match = nonShortcuts.firstOrNull { app ->
                 app !in chosen && group.any { kw ->
                     app.label.lowercase(Locale.getDefault()).contains(kw) ||
                         app.packageName.lowercase(Locale.getDefault()).contains(kw)
@@ -161,7 +379,7 @@ class AppRepository(private val context: Context) {
             }
             if (match != null) chosen.add(match)
         }
-        for (fallback in apps) {
+        for (fallback in nonShortcuts) {
             if (chosen.size >= 4) break
             if (fallback !in chosen) chosen.add(fallback)
         }
@@ -254,21 +472,38 @@ class AppRepository(private val context: Context) {
     fun getCachedIcon(app: AppEntry): Bitmap? = iconCache.get(app.componentKey)
 
     fun loadIconAsync(app: AppEntry, onLoaded: (Bitmap) -> Unit) {
-        val cached = iconCache.get(app.componentKey)
+        val key = app.componentKey
+        val cached = iconCache.get(key)
         if (cached != null) {
             onLoaded(cached)
             return
         }
-        worker.execute {
-            val again = iconCache.get(app.componentKey)
-            if (again != null) {
-                mainHandler.post { onLoaded(again) }
-                return@execute
+        val shouldStart: Boolean
+        synchronized(inFlightIconCallbacks) {
+            val existing = inFlightIconCallbacks[key]
+            if (existing != null) {
+                existing.add(onLoaded)
+                shouldStart = false
+            } else {
+                inFlightIconCallbacks[key] = mutableListOf(onLoaded)
+                shouldStart = true
             }
-            val bmp = rasterizeSquircleIcon(app)
+        }
+        if (!shouldStart) return
+
+        iconWorker.execute {
+            val bmp = iconCache.get(key) ?: rasterizeSquircleIcon(app)?.also {
+                iconCache.put(key, it)
+            }
+            val callbacks = synchronized(inFlightIconCallbacks) {
+                inFlightIconCallbacks.remove(key)
+            } ?: return@execute
             if (bmp != null) {
-                iconCache.put(app.componentKey, bmp)
-                mainHandler.post { onLoaded(bmp) }
+                mainHandler.post {
+                    for (cb in callbacks) {
+                        cb(bmp)
+                    }
+                }
             }
         }
     }
@@ -276,9 +511,20 @@ class AppRepository(private val context: Context) {
     private fun rasterizeSquircleIcon(app: AppEntry): Bitmap? {
         return try {
             val pm = context.packageManager
-            val drawable: Drawable = pm.getActivityIcon(
-                android.content.ComponentName(app.packageName, app.activityName)
-            )
+            val drawable: Drawable = if (app.isShortcut) {
+                val info = shortcutInfoMap[app.componentKey]
+                val densityDpi = context.resources.displayMetrics.densityDpi
+                (if (info != null) {
+                    launcherApps?.getShortcutIconDrawable(info, densityDpi)
+                        ?: launcherApps?.getShortcutBadgedIconDrawable(info, densityDpi)
+                } else {
+                    null
+                }) ?: pm.getApplicationIcon(app.packageName)
+            } else {
+                pm.getActivityIcon(
+                    ComponentName(app.packageName, app.activityName)
+                )
+            }
             val size = iconSizePx
             val raw = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
             val rawCanvas = Canvas(raw)
@@ -304,12 +550,12 @@ class AppRepository(private val context: Context) {
     }
 
     fun trimMemory(level: Int) {
-        when {
-            level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE ||
-                level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL -> {
-                iconCache.evictAll()
+        when (level) {
+            ComponentCallbacks2.TRIM_MEMORY_COMPLETE,
+            ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL -> {
+                iconCache.trimToSize(iconCache.maxSize() / 4)
             }
-            level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -> {
+            ComponentCallbacks2.TRIM_MEMORY_MODERATE -> {
                 iconCache.trimToSize(iconCache.maxSize() / 2)
             }
         }

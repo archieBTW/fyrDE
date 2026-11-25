@@ -16,6 +16,7 @@ import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.VelocityTracker
 import android.view.View
+import android.view.ViewGroup
 import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.GridLayout
@@ -25,9 +26,6 @@ import com.fyrde.fyrandroid.model.AppEntry
 import com.fyrde.fyrandroid.model.AppRepository
 import com.fyrde.fyrandroid.model.HomeItem
 import com.fyrde.fyrandroid.theme.FyrThemeManager
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.max
@@ -35,8 +33,7 @@ import kotlin.math.min
 
 /**
  * Fyr Home Screen Layout with FyrDE glass aesthetic:
- * - Top Fyr header (clock, date, subtle Wi-Fi/Bluetooth Quick Settings trigger)
- * - Smooth horizontal slide-animated 4x5 paged icon grid
+ * - Smooth horizontal slide-animated 4x5 paged icon grid with persistent per-page views
  * - Long-press & drag to reorder icons across cells/pages, or drop onto another icon/folder to group
  * - Stationary long-press opens the app/folder context menu
  * - Page indicator dots + translucent frosted-glass 4-icon bottom Dock (`28dp` corner radius)
@@ -65,13 +62,10 @@ class FyrHomeGridView(
 
     private var allHomeItems: List<HomeItem> = emptyList()
     private var pages: List<List<HomeItem>> = emptyList()
+    private val pageGrids = ArrayList<GridLayout>()
     private var currentPage = 0
 
-    private val headerTimeView: TextView
-    private val headerDateView: TextView
     private val pagerViewport: FrameLayout
-    private var activePageGrid: GridLayout
-    private var adjacentPageGrid: GridLayout
     private val dropIndicatorView: View
     private val pageDotsContainer: LinearLayout
     private val dockContainer: LinearLayout
@@ -117,68 +111,11 @@ class FyrHomeGridView(
             setPadding(dp(18f), dp(42f), dp(18f), dp(20f))
         }
 
-        // Top Fyr Header (Clock + Date + Quick Settings status pill)
-        val headerRow = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(8f), dp(4f), dp(8f), dp(12f))
-        }
-
-        val clockCol = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-        headerTimeView = TextView(context).apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 28f)
-            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-            setTextColor(Color.WHITE)
-            setShadowLayer(8f, 0f, 2f, 0x66000000)
-        }
-        headerDateView = TextView(context).apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            setTextColor(0xCCFFFFFF.toInt())
-            setShadowLayer(6f, 0f, 1f, 0x55000000)
-        }
-        clockCol.addView(headerTimeView)
-        clockCol.addView(headerDateView)
-
-        val qsTrigger = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(12f), dp(8f), dp(12f), dp(8f))
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(50f).toFloat()
-                setColor(0x55181620)
-                setStroke(max(1, dp(1f)), 0x26FFFFFF)
-            }
-            setOnClickListener { onSwipeDownQuickSettings() }
-        }
-        qsTrigger.addView(
-            FyrIconView(context, FyrIcon.WIFI, Color.WHITE),
-            LinearLayout.LayoutParams(dp(15f), dp(15f)).apply { rightMargin = dp(8f) }
-        )
-        qsTrigger.addView(
-            FyrIconView(context, FyrIcon.BLUETOOTH, 0xCCFFFFFF.toInt()),
-            LinearLayout.LayoutParams(dp(15f), dp(15f))
-        )
-
-        headerRow.addView(
-            clockCol,
-            LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
-        )
-        headerRow.addView(qsTrigger)
-        rootColumn.addView(
-            headerRow,
-            LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
-        )
-
-        // Slide-animated dual-grid Pager Viewport
+        // Slide-animated multi-page Pager Viewport (keeps all page grids alive so icons never reload on swipe)
         pagerViewport = FrameLayout(context).apply {
             clipChildren = true
             clipToPadding = true
         }
-        activePageGrid = createPageGrid()
-        adjacentPageGrid = createPageGrid().apply { visibility = View.GONE }
         dropIndicatorView = View(context).apply {
             visibility = View.GONE
         }
@@ -186,14 +123,6 @@ class FyrHomeGridView(
         pagerViewport.addView(
             dropIndicatorView,
             LayoutParams(dp(70f), dp(70f))
-        )
-        pagerViewport.addView(
-            activePageGrid,
-            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
-        )
-        pagerViewport.addView(
-            adjacentPageGrid,
-            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
         )
         rootColumn.addView(
             pagerViewport,
@@ -225,7 +154,6 @@ class FyrHomeGridView(
             LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
         )
 
-        refreshClock()
         applyTheme()
     }
 
@@ -234,10 +162,13 @@ class FyrHomeGridView(
         rowCount = rows
     }
 
-    fun refreshClock() {
-        val now = Date()
-        headerTimeView.text = SimpleDateFormat("h:mm", Locale.getDefault()).format(now)
-        headerDateView.text = SimpleDateFormat("EEEE, MMMM d", Locale.getDefault()).format(now)
+    private fun invalidateViewTree(view: View) {
+        view.invalidate()
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) {
+                invalidateViewTree(view.getChildAt(i))
+            }
+        }
     }
 
     fun applyTheme() {
@@ -248,7 +179,9 @@ class FyrHomeGridView(
             setStroke(max(1, dp(1f)), FyrThemeManager.accentWithAlpha(0.35f))
         }
         updatePageDots()
-        populateGrid(activePageGrid, currentPage)
+        for (grid in pageGrids) {
+            invalidateViewTree(grid)
+        }
         invalidate()
     }
 
@@ -263,62 +196,87 @@ class FyrHomeGridView(
         }
         pages = paged
         currentPage = currentPage.coerceIn(0, pages.size - 1)
-        activePageGrid.animate().cancel()
-        adjacentPageGrid.animate().cancel()
-        activePageGrid.translationX = 0f
-        adjacentPageGrid.visibility = View.GONE
         isPageAnimating = false
-        populateGrid(activePageGrid, currentPage)
+        swipeTargetPage = -1
+
+        for (grid in pageGrids) {
+            grid.animate().cancel()
+            pagerViewport.removeView(grid)
+        }
+        pageGrids.clear()
+
+        for (p in pages.indices) {
+            val grid = createPageGrid()
+            populateGrid(grid, p)
+            grid.translationX = 0f
+            grid.visibility = if (p == currentPage) View.VISIBLE else View.GONE
+            pageGrids.add(grid)
+            pagerViewport.addView(
+                grid,
+                LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+            )
+        }
+
         updatePageDots()
         renderDock(dockApps)
     }
 
     fun setCurrentPage(pageIndex: Int, animate: Boolean = true) {
-        if (pages.isEmpty()) return
+        if (pages.isEmpty() || pageGrids.isEmpty()) return
         val clamped = pageIndex.coerceIn(0, pages.size - 1)
-        if (clamped == currentPage && activePageGrid.childCount > 0) return
+        if (clamped == currentPage) return
+
+        val activeGrid = pageGrids.getOrNull(currentPage) ?: return
+        val targetGrid = pageGrids.getOrNull(clamped) ?: return
 
         val vpWidth = pagerViewport.width.toFloat()
         if (!animate || vpWidth <= 0f) {
+            activeGrid.animate().cancel()
+            targetGrid.animate().cancel()
+            activeGrid.visibility = View.GONE
+            activeGrid.translationX = 0f
+            targetGrid.visibility = View.VISIBLE
+            targetGrid.translationX = 0f
             currentPage = clamped
-            activePageGrid.translationX = 0f
-            adjacentPageGrid.visibility = View.GONE
-            populateGrid(activePageGrid, currentPage)
+            isPageAnimating = false
             updatePageDots()
             return
         }
 
         val direction = if (clamped > currentPage) 1 else -1
         isPageAnimating = true
-        populateGrid(adjacentPageGrid, clamped)
-        adjacentPageGrid.visibility = View.VISIBLE
-        adjacentPageGrid.translationX = direction * vpWidth
-        activePageGrid.translationX = 0f
+        activeGrid.animate().cancel()
+        targetGrid.animate().cancel()
+        targetGrid.visibility = View.VISIBLE
+        targetGrid.translationX = direction * vpWidth
+        activeGrid.translationX = 0f
 
         val interp = DecelerateInterpolator(1.8f)
-        activePageGrid.animate()
+        activeGrid.animate()
             .translationX(-direction * vpWidth)
             .setDuration(220L)
             .setInterpolator(interp)
             .start()
-        adjacentPageGrid.animate()
+        targetGrid.animate()
             .translationX(0f)
             .setDuration(220L)
             .setInterpolator(interp)
             .withEndAction {
-                commitSwappedPage(clamped)
+                commitSwappedPage(oldPage = currentPage, newPage = clamped)
             }
             .start()
     }
 
-    private fun commitSwappedPage(newPage: Int) {
+    private fun commitSwappedPage(oldPage: Int, newPage: Int) {
+        pageGrids.getOrNull(oldPage)?.apply {
+            visibility = View.GONE
+            translationX = 0f
+        }
         currentPage = newPage
-        val oldActive = activePageGrid
-        activePageGrid = adjacentPageGrid
-        adjacentPageGrid = oldActive
-        activePageGrid.translationX = 0f
-        adjacentPageGrid.visibility = View.GONE
-        adjacentPageGrid.translationX = 0f
+        pageGrids.getOrNull(newPage)?.apply {
+            visibility = View.VISIBLE
+            translationX = 0f
+        }
         isPageAnimating = false
         updatePageDots()
     }
@@ -734,6 +692,7 @@ class FyrHomeGridView(
     private fun updateHorizontalDrag(dx: Float) {
         val vpWidth = pagerViewport.width.toFloat()
         if (vpWidth <= 0f) return
+        val activeGrid = pageGrids.getOrNull(currentPage) ?: return
 
         val desiredTarget = when {
             dx < 0 && currentPage < pages.lastIndex -> currentPage + 1
@@ -744,22 +703,30 @@ class FyrHomeGridView(
         if (desiredTarget == -1) {
             // Soft rubber-band resistance at first/last page boundary
             if (swipeTargetPage != -1) {
-                adjacentPageGrid.visibility = View.GONE
+                pageGrids.getOrNull(swipeTargetPage)?.apply {
+                    visibility = View.GONE
+                    translationX = 0f
+                }
                 swipeTargetPage = -1
             }
-            activePageGrid.translationX = dx * 0.25f
+            activeGrid.translationX = dx * 0.25f
             return
         }
 
         if (desiredTarget != swipeTargetPage) {
+            if (swipeTargetPage != -1) {
+                pageGrids.getOrNull(swipeTargetPage)?.apply {
+                    visibility = View.GONE
+                    translationX = 0f
+                }
+            }
             swipeTargetPage = desiredTarget
-            populateGrid(adjacentPageGrid, desiredTarget)
-            adjacentPageGrid.visibility = View.VISIBLE
+            pageGrids.getOrNull(desiredTarget)?.visibility = View.VISIBLE
         }
 
         val dir = if (desiredTarget > currentPage) 1 else -1
-        activePageGrid.translationX = dx
-        adjacentPageGrid.translationX = dir * vpWidth + dx
+        activeGrid.translationX = dx
+        pageGrids.getOrNull(desiredTarget)?.translationX = dir * vpWidth + dx
     }
 
     private fun finishHorizontalDrag(dx: Float, velocityX: Float) {
@@ -768,8 +735,10 @@ class FyrHomeGridView(
         swipeTargetPage = -1
 
         if (vpWidth <= 0f) return
+        val activeGrid = pageGrids.getOrNull(currentPage) ?: return
+        val targetGrid = pageGrids.getOrNull(target)
 
-        val shouldSwitch = target != -1 && (
+        val shouldSwitch = target != -1 && targetGrid != null && (
             abs(dx) > vpWidth * 0.22f ||
                 (target > currentPage && velocityX < -dp(420f)) ||
                 (target < currentPage && velocityX > dp(420f))
@@ -778,33 +747,34 @@ class FyrHomeGridView(
         val interp = DecelerateInterpolator(1.8f)
         if (shouldSwitch) {
             val dir = if (target > currentPage) 1 else -1
+            val oldPage = currentPage
             isPageAnimating = true
-            activePageGrid.animate()
+            activeGrid.animate()
                 .translationX(-dir * vpWidth)
                 .setDuration(210L)
                 .setInterpolator(interp)
                 .start()
-            adjacentPageGrid.animate()
+            targetGrid!!.animate()
                 .translationX(0f)
                 .setDuration(210L)
                 .setInterpolator(interp)
-                .withEndAction { commitSwappedPage(target) }
+                .withEndAction { commitSwappedPage(oldPage = oldPage, newPage = target) }
                 .start()
         } else {
             val dir = if (target > currentPage) 1 else -1
-            activePageGrid.animate()
+            activeGrid.animate()
                 .translationX(0f)
                 .setDuration(180L)
                 .setInterpolator(interp)
                 .start()
-            if (target != -1) {
-                adjacentPageGrid.animate()
+            if (targetGrid != null) {
+                targetGrid.animate()
                     .translationX(dir * vpWidth)
                     .setDuration(180L)
                     .setInterpolator(interp)
                     .withEndAction {
-                        adjacentPageGrid.visibility = View.GONE
-                        adjacentPageGrid.translationX = 0f
+                        targetGrid.visibility = View.GONE
+                        targetGrid.translationX = 0f
                     }
                     .start()
             }

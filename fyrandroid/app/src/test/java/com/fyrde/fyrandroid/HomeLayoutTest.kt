@@ -71,4 +71,27 @@ class HomeLayoutTest {
         assertEquals(listOf(appA, appB), (restored[1] as HomeItem.Folder).apps)
         assertEquals("Delta", restored[2].label)
     }
+
+    @Test
+    fun pinnedShortcutsSerializeAndReconcileAlongsideApps() {
+        val fxShortcut = AppEntry(
+            label = "MDN Web Docs",
+            packageName = "org.mozilla.firefox",
+            activityName = "",
+            shortcutId = "https://developer.mozilla.org"
+        )
+        assertTrue(fxShortcut.isShortcut)
+        assertEquals("shortcut:org.mozilla.firefox/https://developer.mozilla.org", fxShortcut.componentKey)
+
+        val layout = listOf(
+            HomeItem.App(fxShortcut),
+            HomeItem.Folder("f1", "Web", listOf(appA, fxShortcut))
+        )
+        val raw = HomeLayoutCodec.serialize(listOf(HomeItem.App(fxShortcut), HomeItem.App(appA)))
+        val restored = HomeLayoutCodec.reconcile(raw, listOf(appA, fxShortcut), emptyList())
+        assertEquals(2, restored.size)
+        assertEquals("MDN Web Docs", restored[0].label)
+        assertEquals("Alpha", restored[1].label)
+        assertEquals(2, layout.size)
+    }
 }
